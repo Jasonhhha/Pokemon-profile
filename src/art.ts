@@ -184,25 +184,34 @@ export function makeWorld(region: RegionId = 'twinleaf'): WorldArt {
     rock(624, 476); rock(686, 362, 24); lamp(564, 408);
     rect(136, 394, 74, 8, '#7b6c53'); rect(136, 376, 74, 14, '#c3a475'); rect(142, 376, 4, 40, '#5f6955'); rect(200, 376, 4, 40, '#5f6955'); solid(136, 376, 74, 40);
   } else {
-    for (const [x, y, w, h] of [[64, 60, 768, 120], [64, 152, 320, 104], [544, 152, 288, 104]]) {
-      rect(x + 8, y + h, w - 16, 8, '#93aaa9'); rect(x, y, w, h, '#738e95');
-      for (let yy = y + 12; yy < y + h; yy += 22) for (let xx = x + 8; xx < x + w - 20; xx += 48) {
-        rect(xx, yy, 36, 16, '#8ca5aa'); rect(xx + 2, yy, 32, 3, '#acc0bd'); rect(xx + 36, yy + 6, 4, 14, '#5e7c87');
-      }
-      rect(x, y, w, 8, '#eff6ec'); rect(x + 8, y + 8, w - 16, 6, '#c7dcd5');
-      for (let xx = x + 12; xx < x + w; xx += 56) rect(xx, y + 12, 10, 8, '#deece4');
-      solid(x, y, w, h);
+    // Mt. Coronet summit: a high alpine plateau above the cloud line.
+    rect(0, 0, 896, 608, '#b9d2d6');
+    rect(0, 0, 896, 210, '#86b4c0');
+    for (let i = 0; i < 18; i++) {
+      const cx = (i * 97) % 896; const cy = 78 + (i % 4) * 28;
+      rect(cx, cy, 150, 22, '#dce9e7'); rect(cx + 22, cy - 10, 92, 14, '#e8f1ec');
     }
-    path(96, 324, 704, 64, true); path(432, 260, 64, 348, true); path(240, 284, 96, 72, true); path(560, 384, 80, 96, true);
-    cave(268, 222, 80); cave(588, 170, 96);
-    for (let y = 182; y < 312; y += 12) { rect(424, y, 80, 8, '#d6dfd5'); rect(424, y + 8, 80, 4, '#789397'); rect(420, y, 4, 12, '#92a9aa'); rect(504, y, 4, 12, '#92a9aa'); }
-    solid(424, 182, 84, 132, 0);
-    rect(550, 384, 116, 78, '#d1ded4');
-    for (const [x, y] of [[548, 398], [646, 398]]) { rect(x, y, 16, 42, '#789595'); rect(x - 4, y - 4, 24, 8, '#dce7dc'); rect(x + 4, y + 10, 4, 28, '#b5cac4'); }
-    rect(572, 414, 48, 8, '#aec4be'); rect(582, 408, 28, 6, '#f2f4e6');
-    for (const [x, y] of [[66, 250], [118, 420], [184, 468], [308, 434], [736, 308], [750, 446], [672, 478]]) tree(x, y, true);
-    rock(190, 280, 30); rock(358, 370, 42); rock(650, 300, 48); rock(522, 496, 34);
-    lamp(380, 304); lamp(692, 394);
+    // Distant peaks frame the summit platform.
+    for (const [x, y, w, h] of [[24, 122, 190, 116], [170, 96, 230, 142], [368, 66, 260, 172], [596, 108, 250, 132]] as const) {
+      rect(x, y + h - 12, w, 12, '#78949d'); rect(x + 18, y + 18, w - 36, h - 20, '#91adb1');
+      rect(x + w / 2 - 24, y, 48, 18, '#f6f7ed'); rect(x + w / 2 - 54, y + 18, 108, 12, '#e6f0e9');
+    }
+    // Snow rim and broad stone summit.
+    path(104, 264, 688, 278, true); path(404, 168, 88, 116, true);
+    rect(148, 286, 600, 224, '#8ba4a8'); rect(164, 302, 568, 192, '#b8c9c7');
+    for (let yy = 318; yy < 486; yy += 28) for (let xx = 178; xx < 720; xx += 52) {
+      rect(xx, yy, 34, 3, '#91abad'); rect(xx + 8, yy + 8, 20, 2, '#dce5dc');
+    }
+    rect(120, 276, 656, 14, '#f1f5eb'); rect(142, 290, 612, 8, '#d4e4dc');
+    // Peak shrine and signal beacon.
+    cave(408, 184, 80);
+    rect(430, 112, 44, 64, '#5d777c'); rect(434, 108, 36, 8, '#eef5e9'); rect(438, 122, 28, 42, '#c5d8d2');
+    rect(444, 132, 16, 24, '#507d84'); rect(447, 136, 10, 16, '#b8e0df');
+    rect(392, 168, 80, 8, '#dbe9df'); rect(400, 176, 64, 6, '#9eb8b8'); solid(424, 112, 56, 72, 1);
+    // Wind worn ridges and summit markers.
+    for (const [x, y] of [[188, 334], [648, 342], [238, 432], [594, 444], [344, 372], [514, 398]]) rock(x, y, 34);
+    lamp(250, 300); lamp(642, 300);
+    solid(430, 112, 56, 72, 1);
   }
   for (let x = -20; x < 896; x += 54) tree(x, -26);
   for (let x = -42; x < 896; x += 60) tree(x, 20);

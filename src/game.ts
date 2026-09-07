@@ -49,6 +49,7 @@ export function createGame(options: GameOptions) {
     private actors: Phaser.GameObjects.Image[] = [];
     private snowflakes: Phaser.GameObjects.Rectangle[] = [];
     private ripples: Phaser.GameObjects.Rectangle[] = [];
+    private grassBlades: Phaser.GameObjects.Rectangle[] = [];
     private walkTween?: Phaser.Tweens.Tween;
     private direction = 'down';
     private step = 0;
@@ -113,12 +114,21 @@ export function createGame(options: GameOptions) {
     private hasMapFocus() { return options.parent.contains(document.activeElement); }
     private buildRegion(id: RegionId, entry?: 'west' | 'east') {
       this.tweens.killAll(); this.walkTween = undefined; this.path = []; this.onArrival = undefined; this.moving = false;
-      this.children.removeAll(true); this.actors = []; this.glows = []; this.snowflakes = []; this.ripples = [];
+      this.children.removeAll(true); this.actors = []; this.glows = []; this.snowflakes = []; this.ripples = []; this.grassBlades = [];
       this.region = id; this.tile = entry === 'west' ? { x: 1, y: id === 'verity' ? 14 : 11 } : entry === 'east' ? { x: 26, y: id === 'verity' ? 14 : 11 } : { x: 14, y: id === 'verity' ? 14 : 11 };
       const world = makeWorld(id); this.grid = world.grid; this.pathfinder.setGrid(this.grid);
       const textureKey = 'map-' + id;
       if (!this.textures.exists(textureKey)) this.textures.addCanvas(textureKey, world.canvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
       this.add.image(0, 0, textureKey).setOrigin(0);
+      // Small foreground blades sit above the painted map so wind motion remains visible.
+      const grassSeed = id === 'twinleaf' ? 7 : id === 'verity' ? 13 : 23;
+      for (let i = 0; i < 20; i++) {
+        const gx = 72 + ((i * 137 + grassSeed * 19) % 748);
+        const gy = 180 + ((i * 71 + grassSeed * 11) % 330);
+        if (this.grid[Math.floor(gy / TILE)]?.[Math.floor(gx / TILE)] !== 0) continue;
+        const blade = this.add.rectangle(gx, gy, 3, 15, id === 'coronet' ? 0xb7d7cf : 0x4f8b5f, .85).setOrigin(.5, 1).setDepth(4);
+        blade.setData('baseX', gx); blade.setData('baseY', gy); this.grassBlades.push(blade);
+      }
       for (const area of world.water) for (let i = 0; i < 8; i++) {
         const x = area.x + (i * 53 % area.w), y = area.y + (i * 29 % area.h);
         if (this.grid[Math.floor(y / TILE)]?.[Math.floor(x / TILE)] === 1 && !(id === 'verity' && x > 400 && x < 540 && y > 185 && y < 307)) {
@@ -224,7 +234,8 @@ export function createGame(options: GameOptions) {
     update(time: number) {
       if (!reducedMotion) {
         this.actors.forEach((actor, i) => actor.setY(actor.getData('restY') - (Math.floor(time / (500 + i * 70)) % 2) * 2));
-        this.ripples.forEach((ripple, i) => ripple.setAlpha(.2 + (Math.sin(time / 900 + i) + 1) * .22));
+        this.ripples.forEach((ripple, i) => { const wave = (Math.sin(time / 520 + i * .8) + 1) / 2; ripple.setAlpha(.22 + wave * .55).setScale(0.7 + wave * .8, 1); ripple.x += Math.sin(time / 900 + i) * .015; });
+        this.grassBlades.forEach((blade, i) => { const sway = Math.sin(time / 520 + i * .7) * .16; blade.setRotation(sway).setScale(1 + Math.abs(sway) * .8, 1); });
         this.snowflakes.forEach((flake, i) => flake.setPosition(Math.floor((i * 73 + time / 110) % WORLD_WIDTH), Math.floor((i * 47 + time / 45) % WORLD_HEIGHT)));
       }
       if (this.paused || this.moving || !this.keys) return;
