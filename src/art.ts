@@ -220,3 +220,9 @@ export function makeWorld(region: RegionId = 'twinleaf'): WorldArt {
   solid(0, 0, 896, 80); solid(0, 0, 48, 608); solid(848, 0, 48, 608); solid(0, 592, 896, 16);
   return { canvas, grid, water, lamps };
 }
+
+export function drawYixuan(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
+  const rows = ['....pppp....', '..pppppppp..', '.ppwwwwwwpp.', '.pwwwwwwwwp.', '.pwwsssswwp.', '..ssssssss..', '..sshhhss...', '.ksskksskk..', '..kkkkkk....', '..kkkkkk....', '..kkkkkk....', '.kk....kk...', '.kk....kk...'];
+  const palette: Record<string, string> = { p: '#6e4b6f', w: '#fff1df', s: '#f3c4a4', h: '#3e2e40', k: '#6f8fb8' };
+  rows.forEach((row, ry) => [...row].forEach((cell, rx) => { if (palette[cell]) { ctx.fillStyle = palette[cell]; ctx.fillRect(x + rx * scale, y + ry * scale, scale, scale); } }));
+}

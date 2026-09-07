@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import EasyStar from 'easystarjs';
-import { drawTrainer, makeWorld, TILE, WORLD_HEIGHT, WORLD_WIDTH } from './art';
+import { drawTrainer, drawYixuan, makeWorld, TILE, WORLD_HEIGHT, WORLD_WIDTH } from './art';
 import { isPokemon, pokemonData, pokemonIds, regions, type Destination, type PokemonId, type RegionId, type Spot } from './world';
 export type { Destination } from './world';
 
@@ -19,6 +19,7 @@ interface GameOptions {
   onReady: (controls: GameControls) => void;
   onInteract: (destination: Destination) => void;
   onWalk: () => void;
+  onNpc: (id: 'yixuan') => void;
   onRegion: (region: RegionId) => void;
 }
 const labelNames = { about: '训练家小屋', projects: '作品研究所', contact: '湖畔邮箱' };
@@ -57,6 +58,7 @@ export function createGame(options: GameOptions) {
     constructor() { super('Town'); }
     preload() {
       for (const id of pokemonIds) this.load.image(id, pokemonData[id].asset);
+      this.load.image('sylveon', `${import.meta.env.BASE_URL}assets/sylveon.png`);
     }
     create() {
       // Keep the loaded PNG texture intact. Runtime canvas copies can fail on some
@@ -67,6 +69,9 @@ export function createGame(options: GameOptions) {
         drawTrainer(canvas.getContext('2d')!, 4, 2, 2, direction, step === 1 ? 1 : step === 2 ? -1 : 0);
         this.textures.addCanvas('trainer-' + direction + '-' + step, canvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
       }
+      const npcCanvas = document.createElement('canvas'); npcCanvas.width = 48; npcCanvas.height = 52;
+      drawYixuan(npcCanvas.getContext('2d')!, 4, 2, 4);
+      this.textures.addCanvas('yixuan', npcCanvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
       this.pathfinder.setAcceptableTiles([0]); this.pathfinder.enableSync();
       this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,E,SPACE', false) as Record<string, Phaser.Input.Keyboard.Key>;
       this.input.keyboard!.on('keydown-E', () => { if (this.hasMapFocus()) this.interact(); });
@@ -139,6 +144,15 @@ export function createGame(options: GameOptions) {
         if (isPokemon(spot.id)) this.addPokemon(spot);
       }
       if (id === 'twinleaf') {
+        const npcX = 14 * TILE + 16, npcY = 8 * TILE + 16;
+        this.add.ellipse(npcX, npcY + 6, 30, 8, 0x345c57, .25).setDepth(7);
+        const sylveon = this.add.image(npcX + 2, npcY - 26, 'sylveon').setOrigin(.5, .94).setDisplaySize(66, 66).setDepth(8);
+        sylveon.setData('restY', npcY - 26); sylveon.setInteractive({ useHandCursor: true }); this.actors.push(sylveon);
+        sylveon.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
+        const yixuan = this.add.image(npcX, npcY, 'yixuan').setOrigin(.5, .9).setDisplaySize(48, 52).setDepth(10).setInteractive({ useHandCursor: true });
+        yixuan.on('pointerover', () => yixuan.setTint(0xfff3bb)); yixuan.on('pointerout', () => yixuan.clearTint());
+        yixuan.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
+        this.signNpc('yixuan', npcX, npcY - 58);
         this.sign('about', 268, 120);
         for (const [spot, x, y, w, h] of [['about', 268, 215, 188, 144]] as const) {
           this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true }).setDepth(4).on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel(spot); });
@@ -169,6 +183,11 @@ export function createGame(options: GameOptions) {
       this.grid[gateY][0] = 0; this.grid[gateY][1] = 0; this.grid[gateY][26] = 0; this.grid[gateY][27] = 0;
       this.fitCamera(); this.applyNight(); options.onRegion(id);
       if (!reducedMotion) this.cameras.main.fadeIn(260, 239, 242, 224);
+    }
+    private signNpc(_id: 'yixuan', x: number, y: number) {
+      const label = this.add.text(x, y, '韩怡萱 · 新手村', { fontFamily: '-apple-system, "PingFang SC", sans-serif', fontSize: '13px', color: '#654a67', backgroundColor: '#fffbea', padding: { x: 10, y: 6 } }).setResolution(3).setOrigin(.5).setDepth(16).setInteractive({ useHandCursor: true });
+      label.on('pointerover', () => label.setColor('#b64e54')); label.on('pointerout', () => label.setColor('#654a67'));
+      label.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
     }
     private addPokemon(spot: Spot) {
       const x = spot.x * TILE + 16, y = spot.y * TILE + 16;
