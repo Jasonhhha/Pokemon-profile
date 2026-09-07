@@ -111,10 +111,10 @@ export function createGame(options: GameOptions) {
       }
     }
     private hasMapFocus() { return options.parent.contains(document.activeElement); }
-    private buildRegion(id: RegionId) {
+    private buildRegion(id: RegionId, entry?: 'west' | 'east') {
       this.tweens.killAll(); this.walkTween = undefined; this.path = []; this.onArrival = undefined; this.moving = false;
       this.children.removeAll(true); this.actors = []; this.glows = []; this.snowflakes = []; this.ripples = [];
-      this.region = id; this.tile = { x: 14, y: id === 'verity' ? 14 : 11 };
+      this.region = id; this.tile = entry === 'west' ? { x: 1, y: id === 'verity' ? 14 : 11 } : entry === 'east' ? { x: 26, y: id === 'verity' ? 14 : 11 } : { x: 14, y: id === 'verity' ? 14 : 11 };
       const world = makeWorld(id); this.grid = world.grid; this.pathfinder.setGrid(this.grid);
       const textureKey = 'map-' + id;
       if (!this.textures.exists(textureKey)) this.textures.addCanvas(textureKey, world.canvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
@@ -129,10 +129,16 @@ export function createGame(options: GameOptions) {
         if (isPokemon(spot.id)) this.addPokemon(spot);
       }
       if (id === 'twinleaf') {
-        this.sign('about', 268, 120); this.sign('projects', 656, 120); this.sign('contact', 548, 456);
-        for (const [spot, x, y, w, h] of [['about', 268, 215, 188, 144], ['projects', 656, 215, 208, 144], ['contact', 524, 396, 48, 48]] as const) {
+        this.sign('about', 268, 120);
+        for (const [spot, x, y, w, h] of [['about', 268, 215, 188, 144]] as const) {
           this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true }).setDepth(4).on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel(spot); });
         }
+      } else if (id === 'verity') {
+        this.sign('projects', 704, 406);
+        this.add.zone(704, 416, 150, 74).setInteractive({ useHandCursor: true }).setDepth(4).on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel('projects'); });
+      } else {
+        this.sign('contact', 672, 342);
+        this.add.zone(610, 360, 170, 110).setInteractive({ useHandCursor: true }).setDepth(4).on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel('contact'); });
       }
       this.waypoints = this.add.graphics().setDepth(5);
       this.marker = this.add.rectangle(0, 0, 22, 14).setStrokeStyle(2, 0xffffff, .8).setVisible(false).setDepth(6);
@@ -149,6 +155,8 @@ export function createGame(options: GameOptions) {
       if (id === 'coronet') for (let i = 0; i < 32; i++) {
         this.snowflakes.push(this.add.rectangle(i * 73 % WORLD_WIDTH, i * 47 % WORLD_HEIGHT, 2, 2, 0xffffff, .8).setDepth(33));
       }
+      const gateY = id === 'verity' ? 14 : 11;
+      this.grid[gateY][0] = 0; this.grid[gateY][1] = 0; this.grid[gateY][26] = 0; this.grid[gateY][27] = 0;
       this.fitCamera(); this.applyNight(); options.onRegion(id);
       if (!reducedMotion) this.cameras.main.fadeIn(260, 239, 242, 224);
     }
@@ -183,8 +191,9 @@ export function createGame(options: GameOptions) {
     private travel(id: Destination) {
       if (this.paused) return;
       options.parent.focus({ preventScroll: true });
-      if (!isPokemon(id) && this.region !== 'twinleaf') this.buildRegion('twinleaf');
-      const point = regions[this.region].spots.find(spot => spot.id === id);
+      const targetRegion = regions[this.region].spots.some(spot => spot.id === id) ? this.region : (Object.keys(regions) as RegionId[]).find(region => regions[region].spots.some(spot => spot.id === id)) ?? this.region;
+      if (targetRegion !== this.region) this.buildRegion(targetRegion, targetRegion === 'twinleaf' ? 'east' : targetRegion === 'verity' ? (this.region === 'twinleaf' ? 'west' : 'east') : 'west');
+      const point = regions[targetRegion].spots.find(spot => spot.id === id);
       if (point) this.walkTo(point.x, point.y, () => options.onInteract(id));
     }
     private walkTo(x: number, y: number, callback?: () => void) {
@@ -239,6 +248,11 @@ export function createGame(options: GameOptions) {
         },
         onComplete: () => {
           this.moving = false; this.player.setTexture('trainer-' + this.direction + '-0');
+          const gateY = this.region === 'verity' ? 14 : 11;
+          if (this.tile.y === gateY && this.tile.x === 27 && this.region === 'twinleaf') { this.buildRegion('verity', 'west'); return; }
+          if (this.tile.y === gateY && this.tile.x === 0 && this.region === 'verity') { this.buildRegion('twinleaf', 'east'); return; }
+          if (this.tile.y === gateY && this.tile.x === 27 && this.region === 'verity') { this.buildRegion('coronet', 'west'); return; }
+          if (this.tile.y === gateY && this.tile.x === 0 && this.region === 'coronet') { this.buildRegion('verity', 'east'); return; }
           if (!this.path.length) { this.marker.setVisible(false); this.waypoints.clear(); const fn = this.onArrival; this.onArrival = undefined; fn?.(); }
         },
       });
