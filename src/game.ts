@@ -22,7 +22,7 @@ interface GameOptions {
   onNpc: (id: 'yixuan') => void;
   onRegion: (region: RegionId) => void;
 }
-const labelNames = { about: '训练家小屋', projects: '作品研究所', contact: '湖畔邮箱' };
+const labelNames = { about: '训练家小屋', projects: '湖畔观测站', contact: '山顶信号站' };
 export function createGame(options: GameOptions) {
   const density = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -131,7 +131,7 @@ export function createGame(options: GameOptions) {
         const gx = 72 + ((i * 137 + grassSeed * 19) % 748);
         const gy = 180 + ((i * 71 + grassSeed * 11) % 330);
         if (this.grid[Math.floor(gy / TILE)]?.[Math.floor(gx / TILE)] !== 0) continue;
-        const blade = this.add.rectangle(gx, gy, 3, 15, id === 'coronet' ? 0xb7d7cf : 0x4f8b5f, .85).setOrigin(.5, 1).setDepth(4);
+        const blade = this.add.rectangle(gx, gy, 10, 2, id === 'coronet' ? 0xb7d7cf : 0x6a9e67, .6).setOrigin(.5, 1).setDepth(4);
         blade.setData('baseX', gx); blade.setData('baseY', gy); this.grassBlades.push(blade);
       }
       for (const area of world.water) for (let i = 0; i < 8; i++) {
@@ -254,7 +254,7 @@ export function createGame(options: GameOptions) {
       if (!reducedMotion) {
         this.actors.forEach((actor, i) => actor.setY(actor.getData('restY') - (Math.floor(time / (500 + i * 70)) % 2) * 2));
         this.ripples.forEach((ripple, i) => { const wave = (Math.sin(time / 520 + i * .8) + 1) / 2; ripple.setAlpha(.22 + wave * .55).setScale(0.7 + wave * .8, 1); ripple.x += Math.sin(time / 900 + i) * .015; });
-        this.grassBlades.forEach((blade, i) => { const sway = Math.sin(time / 520 + i * .7) * .16; blade.setRotation(sway).setScale(1 + Math.abs(sway) * .8, 1); });
+        this.grassBlades.forEach((blade, i) => { const sway = Math.sin(time / 820 + i * .7) * .08; blade.setRotation(sway).setScale(1 + Math.abs(sway) * .35, 1).setAlpha(.42 + (Math.sin(time / 600 + i) + 1) * .1); });
         this.snowflakes.forEach((flake, i) => flake.setPosition(Math.floor((i * 73 + time / 110) % WORLD_WIDTH), Math.floor((i * 47 + time / 45) % WORLD_HEIGHT)));
       }
       if (this.paused || this.moving || !this.keys) return;
