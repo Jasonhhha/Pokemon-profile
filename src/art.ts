@@ -222,7 +222,10 @@ export function makeWorld(region: RegionId = 'twinleaf'): WorldArt {
 }
 
 export function drawYixuan(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
-  const rows = ['....pppp....', '..pppppppp..', '.ppwwwwwwpp.', '.pwwwwwwwwp.', '.pwwsssswwp.', '..ssssssss..', '..sshhhss...', '.ksskksskk..', '..kkkkkk....', '..kkkkkk....', '..kkkkkk....', '.kk....kk...', '.kk....kk...'];
-  const palette: Record<string, string> = { p: '#6e4b6f', w: '#fff1df', s: '#f3c4a4', h: '#3e2e40', k: '#6f8fb8' };
+  // Soft pink feminine trainer silhouette: long hair, warm face, blouse and skirt.
+  const rows = [
+    '...pppppp...', '..pppppppp..', '.pppppppppp.', '.ppwwwwwwpp.', '.pwwsssswwp.', '.pwwshsswwp.', '..ssssssss..', '..sshhhss...', '...ssssss...', '..mmmmmmmm..', '.mmmmmmmmmm.', '.mm..mm..mm.', '.mm..mm..mm.', '..m..mm..m..', '..m..mm..m..', '.mm..mm..mm.',
+  ];
+  const palette: Record<string, string> = { p: '#d98bb7', w: '#fff1e8', s: '#f3c4a4', h: '#5a3b4e', m: '#f09ab7' };
   rows.forEach((row, ry) => [...row].forEach((cell, rx) => { if (palette[cell]) { ctx.fillStyle = palette[cell]; ctx.fillRect(x + rx * scale, y + ry * scale, scale, scale); } }));
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, Check, ChevronDown, ChevronRight, Compass, Copy, ExternalLink, Flag, Heart, House, Leaf, Mail, MapPin, Maximize, Moon, MountainSnow, Pause, Pencil, Play, RotateCcw, Save, Send, Snowflake, Sparkles, Sun, Volume2, VolumeX, Waves, X } from 'lucide-react';
 import { createGame, type GameControls } from './game';
-import { drawTrainer } from './art';
+import { drawTrainer, drawYixuan } from './art';
 import { pokemonData, regionIds, regions, type Destination, type PokemonId, type RegionId, isPokemon } from './world';
 
 type Profile = { name: string; title: string; bio: string; location: string; email: string; github: string };
@@ -25,12 +25,12 @@ function useSaved<T,>(key: string, initial: T, validate: (value: unknown) => val
   return [value, setValue] as const;
 }
 
-function TrainerAvatar({ className = '', size = 4 }: { className?: string; size?: number }) {
+function TrainerAvatar({ className = '', size = 4, yixuan = false }: { className?: string; size?: number; yixuan?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const ctx = ref.current?.getContext('2d');
-    if (ctx) { ctx.clearRect(0, 0, 16 * size, 20 * size); drawTrainer(ctx, 0, 0, size); }
-  }, [size]);
+    if (ctx) { ctx.clearRect(0, 0, 16 * size, 20 * size); if (yixuan) drawYixuan(ctx, 0, 0, size); else drawTrainer(ctx, 0, 0, size); }
+  }, [size, yixuan]);
   return <canvas className={`trainer-sprite ${className}`} ref={ref} width={16 * size} height={20 * size} aria-label="戴红色帽子的像素训练家" role="img" />;
 }
 
@@ -250,7 +250,7 @@ export default function App() {
       <div className="backpack-summary"><Backpack size={34} strokeWidth={1.3} /><div><span className="pixel">{visited.length} / 4</span><p>枚小镇纪念徽章</p></div><span className="completion-label">{visited.length === 4 ? '小镇探索完成' : '冒险仍在继续'}</span></div><div className="badge-list">{badges.map(badge => <div key={badge.id} className={`badge-item ${visited.includes(badge.id) ? 'unlocked' : ''}`}><div className="badge-icon"><badge.icon size={25} strokeWidth={1.5} /></div><div><h3>{badge.name}</h3><p>{badge.description}</p></div>{visited.includes(badge.id) ? <Check size={17} /> : <span className="pixel">???</span>}</div>)}</div>
     </Dialog>}
     {modal === 'yixuan' && <Dialog title="韩怡萱" eyebrow="NEW TRAINER IN TWINLEAF TOWN" onClose={close}>
-      <div className="npc-card"><div className="npc-card-art"><TrainerAvatar size={3} /><img src={`${import.meta.env.BASE_URL}assets/sylveon.png`} alt="仙子伊布" /></div><p className="dialog-intro">在双叶镇的第一条小路上，遇见了韩怡萱和她的仙子伊布。她们正在等你一起开始神奥地区的冒险。</p><div className="npc-card-meta"><span className="pixel">HELLO, NEW FRIEND.</span><span>新手村相遇 · 仙子伊布同行</span></div></div>
+      <div className="npc-card"><div className="npc-card-art"><TrainerAvatar size={3} yixuan /><img src={`${import.meta.env.BASE_URL}assets/sylveon.png`} alt="仙子伊布" /></div><p className="dialog-intro">在双叶镇的第一条小路上，遇见了韩怡萱和她的仙子伊布。她们正在等你一起开始神奥地区的冒险。</p><div className="npc-card-meta"><span className="pixel">HELLO, NEW FRIEND.</span><span>新手村相遇 · 仙子伊布同行</span></div></div>
     </Dialog>}
     {selectedPokemon && <Dialog title={selectedPokemon.name} eyebrow={`POKÉDEX / NO. ${selectedPokemon.number}`} onClose={close}>
       <div className="pokemon-detail" style={{ '--pokemon-color': selectedPokemon.color } as React.CSSProperties}><span className="pokemon-number pixel">#{selectedPokemon.number}</span><img src={selectedPokemon.asset} alt={selectedPokemon.name} /><div><span className="pixel">{selectedPokemon.english}</span><span className="pokemon-type">{selectedPokemon.type}</span></div></div><p className="pokemon-habitat"><MapPin size={14} />{selectedPokemon.habitat}</p><h3 className="pokemon-personality">{selectedPokemon.personality}</h3><p className="pokemon-description">{selectedPokemon.description}</p><div className="pokemon-skills">{selectedPokemon.skills.map((skill, index) => <span key={skill}><small className="pixel">0{index + 1}</small>{skill}</span>)}</div><button className="primary-button full-width" disabled={partner === modal} onClick={() => { setPartner(modal as PokemonId); showToast(`${selectedPokemon.name}成为了你的同行伙伴`); }}>{partner === modal ? <Check size={16} /> : <Heart size={16} />}{partner === modal ? '正在一起冒险' : '选择为同行伙伴'}</button>

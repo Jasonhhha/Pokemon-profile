@@ -69,7 +69,7 @@ export function createGame(options: GameOptions) {
         drawTrainer(canvas.getContext('2d')!, 4, 2, 2, direction, step === 1 ? 1 : step === 2 ? -1 : 0);
         this.textures.addCanvas('trainer-' + direction + '-' + step, canvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
       }
-      const npcCanvas = document.createElement('canvas'); npcCanvas.width = 48; npcCanvas.height = 52;
+      const npcCanvas = document.createElement('canvas'); npcCanvas.width = 64; npcCanvas.height = 64;
       drawYixuan(npcCanvas.getContext('2d')!, 4, 2, 4);
       this.textures.addCanvas('yixuan', npcCanvas)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
       this.pathfinder.setAcceptableTiles([0]); this.pathfinder.enableSync();
@@ -149,7 +149,7 @@ export function createGame(options: GameOptions) {
         const sylveon = this.add.image(npcX + 2, npcY - 26, 'sylveon').setOrigin(.5, .94).setDisplaySize(66, 66).setDepth(8);
         sylveon.setData('restY', npcY - 26); sylveon.setInteractive({ useHandCursor: true }); this.actors.push(sylveon);
         sylveon.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
-        const yixuan = this.add.image(npcX, npcY, 'yixuan').setOrigin(.5, .9).setDisplaySize(48, 52).setDepth(10).setInteractive({ useHandCursor: true });
+        const yixuan = this.add.image(npcX, npcY, 'yixuan').setOrigin(.5, .9).setDisplaySize(56, 60).setDepth(10).setInteractive({ useHandCursor: true });
         yixuan.on('pointerover', () => yixuan.setTint(0xfff3bb)); yixuan.on('pointerout', () => yixuan.clearTint());
         yixuan.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
         this.signNpc('yixuan', npcX, npcY - 58);
