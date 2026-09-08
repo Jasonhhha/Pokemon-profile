@@ -185,7 +185,7 @@ export function createGame(options: GameOptions) {
       if (!reducedMotion) this.cameras.main.fadeIn(260, 239, 242, 224);
     }
     private signNpc(_id: 'yixuan', x: number, y: number) {
-      const label = this.add.text(x, y, '韩怡萱 · 新手村', { fontFamily: '-apple-system, "PingFang SC", sans-serif', fontSize: '13px', color: '#654a67', backgroundColor: '#fffbea', padding: { x: 10, y: 6 } }).setResolution(3).setOrigin(.5).setDepth(16).setInteractive({ useHandCursor: true });
+      const label = this.add.text(x, y, '韩怡萱', { fontFamily: '-apple-system, "PingFang SC", sans-serif', fontSize: '13px', color: '#654a67', backgroundColor: '#fffbea', padding: { x: 10, y: 6 } }).setResolution(3).setOrigin(.5).setDepth(16).setInteractive({ useHandCursor: true });
       label.on('pointerover', () => label.setColor('#b64e54')); label.on('pointerout', () => label.setColor('#654a67'));
       label.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
     }
