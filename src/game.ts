@@ -237,7 +237,7 @@ export function createGame(options: GameOptions) {
       this.tweens.add({ targets, x: `+=${next.x * TILE + 16 - this.yixuan.x}`, y: `+=${next.y * TILE + 16 - this.yixuan.y}`, duration: 190, onComplete: () => {
         if (this.yixuanPartner) this.yixuanPartner.setPosition(next.x * TILE + 18, next.y * TILE - 10);
         if (this.yixuanLabel) this.yixuanLabel.setPosition(next.x * TILE + 16, next.y * TILE - 42);
-        this.yixuanMoving = false; this.moveYixuanStep();
+        this.yixuanMoving = false; this.updateHint(); this.moveYixuanStep();
       } });
     }
     private addPokemon(spot: Spot) {
