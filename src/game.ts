@@ -211,8 +211,10 @@ export function createGame(options: GameOptions) {
     }
     private wanderYixuan() {
       if (!this.yixuan || this.yixuanMoving || this.paused || this.region !== 'twinleaf') return;
-      const candidates = [[13, 8], [15, 8], [13, 9], [15, 9], [14, 7], [14, 9], [12, 8], [16, 8]];
-      const open = candidates.filter(([x, y]) => this.grid[y]?.[x] === 0 && !(x === this.tile.x && y === this.tile.y));
+      const open: number[][] = [];
+      for (let y = 1; y < 18; y++) for (let x = 1; x < 27; x++) {
+        if (this.grid[y]?.[x] === 0 && !(x === this.tile.x && y === this.tile.y) && !(x === this.yixuanTile.x && y === this.yixuanTile.y)) open.push([x, y]);
+      }
       const target = open[Math.floor(Math.random() * open.length)];
       if (!target) return;
       this.pathfinder.findPath(this.yixuanTile.x, this.yixuanTile.y, target[0], target[1], path => {
