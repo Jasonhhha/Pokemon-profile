@@ -20,9 +20,14 @@ interface GameOptions {
   onInteract: (destination: Destination) => void;
   onWalk: () => void;
   onNpc: (id: 'yixuan') => void;
+  onHint: (hint: string) => void;
   onRegion: (region: RegionId) => void;
 }
 const labelNames = { about: '训练家小屋', projects: '湖畔观测站', contact: '山顶信号站' };
+const pokemonHintNames: Record<PokemonId, string> = {
+  gible: '圆陆鲨', riolu: '利欧路', piplup: '波加曼', shinx: '小猫怪', starly: '姆克儿',
+  buizel: '泳圈鼬', drifloon: '飘飘球', snover: '雪笠怪',
+};
 export function createGame(options: GameOptions) {
   const density = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -145,7 +150,8 @@ export function createGame(options: GameOptions) {
       for (const area of world.water) for (let i = 0; i < 8; i++) {
         const x = area.x + (i * 53 % area.w), y = area.y + (i * 29 % area.h);
         if (this.grid[Math.floor(y / TILE)]?.[Math.floor(x / TILE)] === 1 && !(id === 'verity' && x > 400 && x < 540 && y > 185 && y < 307)) {
-          this.ripples.push(this.add.rectangle(x, y, 10, 2, 0xd0ece0).setAlpha(.5).setDepth(2));
+          const ripple = this.add.rectangle(x, y, 10, 2, 0xd0ece0).setAlpha(.5).setDepth(2);
+          ripple.setData('baseX', x); ripple.setData('baseY', y); this.ripples.push(ripple);
         }
       }
       for (const spot of regions[id].spots) {
@@ -192,7 +198,7 @@ export function createGame(options: GameOptions) {
       }
       const gateY = id === 'verity' ? 14 : 11;
       this.grid[gateY][0] = 0; this.grid[gateY][1] = 0; this.grid[gateY][26] = 0; this.grid[gateY][27] = 0;
-      this.fitCamera(); this.applyNight(); options.onRegion(id);
+      this.fitCamera(); this.applyNight(); options.onRegion(id); this.updateHint();
       if (!reducedMotion) this.cameras.main.fadeIn(260, 239, 242, 224);
     }
     private signNpc(_id: 'yixuan', x: number, y: number) {
@@ -213,7 +219,7 @@ export function createGame(options: GameOptions) {
       if (!this.yixuan || this.yixuanMoving || this.paused || this.region !== 'twinleaf') return;
       const open: number[][] = [];
       for (let y = 1; y < 18; y++) for (let x = 1; x < 27; x++) {
-        if (this.grid[y]?.[x] === 0 && !(x === this.tile.x && y === this.tile.y) && !(x === this.yixuanTile.x && y === this.yixuanTile.y)) open.push([x, y]);
+        if (this.grid[y]?.[x] === 0 && x <= 24 && !(y === 11 && x >= 22) && !(x === this.tile.x && y === this.tile.y) && !(x === this.yixuanTile.x && y === this.yixuanTile.y)) open.push([x, y]);
       }
       const target = open[Math.floor(Math.random() * open.length)];
       if (!target) return;
@@ -242,6 +248,25 @@ export function createGame(options: GameOptions) {
       pet.on('pointerover', () => pet.setTint(0xfff3bb));
       pet.on('pointerout', () => pet.clearTint());
       pet.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel(spot.id); });
+    }
+    private updateHint() {
+      if (this.region === 'twinleaf' && Math.abs(this.yixuanTile.x - this.tile.x) + Math.abs(this.yixuanTile.y - this.tile.y) <= 1) {
+        options.onHint('A 互动 · 韩怡萱'); return;
+      }
+      const near = regions[this.region].spots
+        .map(spot => ({ ...spot, distance: Math.abs(spot.x - this.tile.x) + Math.abs(spot.y - this.tile.y) }))
+        .filter(spot => spot.distance <= 1).sort((a, b) => a.distance - b.distance)[0];
+      if (near) {
+        options.onHint(`A 互动 · ${isPokemon(near.id) ? pokemonHintNames[near.id] : labelNames[near.id]}`); return;
+      }
+      const gateY = this.region === 'verity' ? 14 : 11;
+      if (this.tile.y === gateY && this.tile.x >= 25) {
+        options.onHint(this.region === 'twinleaf' ? '继续向东 · 进入心齐湖' : this.region === 'verity' ? '继续向东 · 前往天冠山' : '山顶尽头'); return;
+      }
+      if (this.tile.y === gateY && this.tile.x <= 2) {
+        options.onHint(this.region === 'twinleaf' ? '小镇西侧 · 起点' : this.region === 'verity' ? '继续向西 · 返回双叶镇' : '继续向西 · 返回心齐湖'); return;
+      }
+      options.onHint(this.region === 'twinleaf' ? '探索双叶镇 · 找到你的训练家小屋' : this.region === 'verity' ? '沿湖岸前进 · 找到湖畔观测站' : '登上山顶 · 找到信号站');
     }
     private sign(id: 'about' | 'projects' | 'contact', x: number, y: number) {
       const label = this.add.text(x, y, labelNames[id] + ' ↗', { fontFamily: '-apple-system, "PingFang SC", sans-serif', fontSize: '14px', color: '#34554f', backgroundColor: '#fffbea', padding: { x: 12, y: 7 } }).setResolution(3).setOrigin(.5).setDepth(16).setInteractive({ useHandCursor: true });
@@ -272,6 +297,7 @@ export function createGame(options: GameOptions) {
     }
     private walkTo(x: number, y: number, callback?: () => void) {
       if (this.paused || x < 0 || y < 0 || x >= 28 || y >= 19 || this.grid[y][x] !== 0) return;
+      if (this.region === 'twinleaf' && x === this.yixuanTile.x && y === this.yixuanTile.y) return;
       // A new destination replaces the remaining route, including while a tile-step finishes.
       this.pathfinder.findPath(this.tile.x, this.tile.y, x, y, path => {
         if (!path) return;
@@ -295,11 +321,12 @@ export function createGame(options: GameOptions) {
         .map(spot => ({ ...spot, distance: Math.abs(spot.x - this.tile.x) + Math.abs(spot.y - this.tile.y) }))
         .filter(spot => spot.distance <= 1).sort((a, b) => a.distance - b.distance)[0];
       if (near) options.onInteract(near.id); else options.onWalk();
+      this.updateHint();
     }
     update(time: number) {
       if (!reducedMotion) {
         this.actors.forEach((actor, i) => actor.setY(actor.getData('restY') - (Math.floor(time / (500 + i * 70)) % 2) * 2));
-        this.ripples.forEach((ripple, i) => { const wave = (Math.sin(time / 520 + i * .8) + 1) / 2; ripple.setAlpha(.22 + wave * .55).setScale(0.7 + wave * .8, 1); ripple.x += Math.sin(time / 900 + i) * .015; });
+        this.ripples.forEach((ripple, i) => { const wave = (Math.sin(time / 520 + i * .8) + 1) / 2; const baseX = ripple.getData('baseX') as number; const baseY = ripple.getData('baseY') as number; ripple.setPosition(baseX + Math.sin(time / 900 + i) * 2, baseY).setAlpha(.22 + wave * .55).setScale(0.7 + wave * .8, 1); });
         this.grassBlades.forEach((blade, i) => { const sway = Math.sin(time / 820 + i * .7) * .08; blade.setRotation(sway).setScale(1 + Math.abs(sway) * .35, 1).setAlpha(.42 + (Math.sin(time / 600 + i) + 1) * .1); });
         this.snowflakes.forEach((flake, i) => flake.setPosition(Math.floor((i * 73 + time / 110) % WORLD_WIDTH), Math.floor((i * 47 + time / 45) % WORLD_HEIGHT)));
       }
@@ -311,7 +338,7 @@ export function createGame(options: GameOptions) {
         else if (this.keys.RIGHT.isDown || this.keys.D.isDown) this.move('right');
       }
       const next = this.path.shift(); if (!next) return;
-      this.moving = true; this.direction = next.y < this.tile.y ? 'up' : 'down'; this.step = (this.step + 1) % 2;
+      this.moving = true; if (next.y < this.tile.y) this.direction = 'up'; else if (next.y > this.tile.y) this.direction = 'down'; this.step = (this.step + 1) % 2;
       this.player.setTexture('trainer-' + this.direction + '-' + (this.step + 1)); this.player.setFlipX(next.x < this.tile.x);
       const previousX = this.tile.x * TILE + 16, previousY = this.tile.y * TILE + 16; this.tile = next;
       this.tweens.add({ targets: this.companion, x: previousX, y: previousY + 8, duration: 155 });
@@ -329,7 +356,7 @@ export function createGame(options: GameOptions) {
           if (this.tile.y === gateY && this.tile.x === 0 && this.region === 'verity') { this.buildRegion('twinleaf', 'east'); return; }
           if (this.tile.y === gateY && this.tile.x === 27 && this.region === 'verity') { this.buildRegion('coronet', 'west'); return; }
           if (this.tile.y === gateY && this.tile.x === 0 && this.region === 'coronet') { this.buildRegion('verity', 'east'); return; }
-          if (!this.path.length) { this.marker.setVisible(false); this.waypoints.clear(); const fn = this.onArrival; this.onArrival = undefined; fn?.(); }
+          if (!this.path.length) { this.marker.setVisible(false); this.waypoints.clear(); const fn = this.onArrival; this.onArrival = undefined; this.updateHint(); fn?.(); }
         },
       });
     }

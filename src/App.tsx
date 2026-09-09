@@ -136,6 +136,7 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [ready, setReady] = useState(false);
   const [dialogue, setDialogue] = useState(0);
+  const [mapHint, setMapHint] = useState('探索双叶镇 · 找到你的训练家小屋');
   const [draft, setDraft] = useState(profile);
   const [contactMessage, setContactMessage] = useState('');
   const [formError, setFormError] = useState('');
@@ -169,6 +170,7 @@ export default function App() {
       onInteract: destination => openRef.current(destination),
       onNpc: id => openRef.current(id),
       onWalk: () => setDialogue(value => (value + 1) % 3),
+      onHint: hint => setMapHint(hint),
       onRegion: id => { setRegion(id); setDialogue(0); setMapMenu(false); },
     });
     return () => { controls.current = null; game.destroy(true); };
@@ -224,6 +226,7 @@ export default function App() {
             <div className="map-corner-label"><i /><span className="pixel">{regions[region].english}</span></div>
             <div className="map-tools"><IconButton label="缩放地图" onClick={() => controls.current?.zoom()}><Maximize size={16} /></IconButton></div>
           <div className="map-travel"><button className="map-travel-toggle" aria-expanded={mapMenu} onClick={() => setMapMenu(value => !value)}><Compass size={15} /><span>目的地</span><ChevronDown size={13} /></button>{mapMenu && <div className="travel-menu">{[['about', '我的小屋'], ['projects', '湖畔观测站'], ['contact', '山顶信号站']] .map(([id, label]) => <button key={id} onClick={() => { controls.current?.travel(id as Destination); setMapMenu(false); }}>{label}<ArrowRight size={13} /></button>)}</div>}</div>
+            <div className="map-hint" aria-live="polite"><span className="map-hint-key pixel">A</span><span>{mapHint}</span></div>
           </div>
           <div className="dialogue-box"><div className="dialogue-avatar"><TrainerAvatar size={2} /></div><div className="dialogue-copy"><span>{profile.name}<span className="dialogue-role">神奥训练家</span></span><p>{dialogues[dialogue]}</p></div><IconButton label="下一句对话" onClick={() => setDialogue(value => (value + 1) % dialogues.length)}><ChevronRight size={20} /></IconButton></div>
           <div className="world-status"><div className="world-location"><span className="pixel">{regions[region].number}</span><span>神奥地区</span><ChevronRight size={11} /><strong>{regions[region].name}</strong></div><div className="world-exploration"><span>探索进度</span><div className="exploration-segments">{badges.map(badge => <i key={badge.id} className={visited.includes(badge.id) ? 'filled' : ''} />)}</div><span className="pixel">{visited.length}/4</span></div></div>

@@ -17,7 +17,7 @@ export type Destination = 'about' | 'projects' | 'contact' | PokemonId;
 export type Spot = { id: Destination; x: number; y: number };
 export const regions: Record<RegionId, { name: string; english: string; subtitle: string; number: string; dialogue: string[]; spots: Spot[] }> = {
   twinleaf: { name: '双叶镇', english: 'TWINLEAF TOWN', subtitle: '冒险开始的地方 · 训练家资料', number: '01', dialogue: ['欢迎来到双叶镇。这里是你的训练家资料与旅程起点。', '走到东侧出口，就能沿着路线前往心齐湖。', '圆陆鲨和利欧路已经在等你了。'], spots: [{ id: 'about', x: 8, y: 9 }, { id: 'gible', x: 11, y: 11 }, { id: 'riolu', x: 18, y: 12 }, { id: 'shinx', x: 6, y: 14 }, { id: 'starly', x: 21, y: 14 }] },
-  verity: { name: '心齐湖', english: 'LAKE VERITY', subtitle: '风与湖水的约定 · 湖畔观测站', number: '02', dialogue: ['湖畔观测站记录着你的量化研究与机器学习项目。', '从西侧出口回到双叶镇，向东还能继续前往天冠山。', '波加曼和泳圈鼬正在湖边等你发现新的线索。'], spots: [{ id: 'projects', x: 22, y: 14 }, { id: 'piplup', x: 15, y: 13 }, { id: 'buizel', x: 20, y: 14 }, { id: 'drifloon', x: 5, y: 9 }, { id: 'starly', x: 22, y: 8 }] },
-  coronet: { name: '天冠山', english: 'MT. CORONET', subtitle: '时间与空间的回声 · 联系方式', number: '03', dialogue: ['山顶的信号站连接着你的联系方式与下一段合作。', '从西侧出口可以回到心齐湖，神奥路线是一条完整的旅程。', '利欧路正在遗迹前修行，抬头望去，山顶还藏在云中。'], spots: [{ id: 'contact', x: 21, y: 12 }, { id: 'gible', x: 9, y: 9 }, { id: 'riolu', x: 18, y: 11 }, { id: 'snover', x: 22, y: 14 }] },
+  verity: { name: '心齐湖', english: 'LAKE VERITY', subtitle: '风与湖水的约定 · 湖畔观测站', number: '02', dialogue: ['湖畔观测站记录着你的量化研究与机器学习项目。', '从西侧出口回到双叶镇，向东还能继续前往天冠山。', '波加曼、泳圈鼬和飘飘球正在湖边等你发现新的线索。'], spots: [{ id: 'projects', x: 22, y: 14 }, { id: 'piplup', x: 15, y: 13 }, { id: 'buizel', x: 20, y: 14 }, { id: 'drifloon', x: 5, y: 9 }] },
+  coronet: { name: '天冠山', english: 'MT. CORONET', subtitle: '时间与空间的回声 · 联系方式', number: '03', dialogue: ['山顶的信号站连接着你的联系方式与下一段合作。', '从西侧出口可以回到心齐湖，神奥路线是一条完整的旅程。', '雪笠怪在遗迹前守望，抬头望去，山顶还藏在云中。'], spots: [{ id: 'contact', x: 21, y: 12 }, { id: 'snover', x: 22, y: 14 }] },
 };
 export const regionIds = Object.keys(regions) as RegionId[];
