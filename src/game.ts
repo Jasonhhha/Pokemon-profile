@@ -51,6 +51,13 @@ export function createGame(options: GameOptions) {
     private snowflakes: Phaser.GameObjects.Rectangle[] = [];
     private ripples: Phaser.GameObjects.Rectangle[] = [];
     private grassBlades: Phaser.GameObjects.Rectangle[] = [];
+    private yixuan?: Phaser.GameObjects.Image;
+    private yixuanPartner?: Phaser.GameObjects.Image;
+    private yixuanLabel?: Phaser.GameObjects.Text;
+    private yixuanTile = { x: 14, y: 8 };
+    private yixuanPath: { x: number; y: number }[] = [];
+    private yixuanMoving = false;
+    private yixuanTimer?: Phaser.Time.TimerEvent;
     private walkTween?: Phaser.Tweens.Tween;
     private direction = 'down';
     private step = 0;
@@ -119,6 +126,7 @@ export function createGame(options: GameOptions) {
     private hasMapFocus() { return options.parent.contains(document.activeElement); }
     private buildRegion(id: RegionId, entry?: 'west' | 'east') {
       this.tweens.killAll(); this.walkTween = undefined; this.path = []; this.onArrival = undefined; this.moving = false;
+      this.yixuanTimer?.remove(false); this.yixuanTimer = undefined; this.yixuanPath = []; this.yixuanMoving = false; this.yixuan = undefined; this.yixuanPartner = undefined; this.yixuanLabel = undefined;
       this.children.removeAll(true); this.actors = []; this.glows = []; this.snowflakes = []; this.ripples = []; this.grassBlades = [];
       this.region = id; this.tile = entry === 'west' ? { x: 1, y: id === 'verity' ? 14 : 11 } : entry === 'east' ? { x: 26, y: id === 'verity' ? 14 : 11 } : { x: 14, y: id === 'verity' ? 14 : 11 };
       const world = makeWorld(id); this.grid = world.grid; this.pathfinder.setGrid(this.grid);
@@ -147,11 +155,13 @@ export function createGame(options: GameOptions) {
         const npcX = 14 * TILE + 16, npcY = 8 * TILE + 16;
         this.add.ellipse(npcX, npcY + 6, 30, 8, 0x345c57, .25).setDepth(7);
         const sylveon = this.add.image(npcX + 2, npcY - 26, 'sylveon').setOrigin(.5, .94).setDisplaySize(66, 66).setDepth(8);
-        sylveon.setData('restY', npcY - 26); sylveon.setInteractive({ useHandCursor: true }); this.actors.push(sylveon);
+        sylveon.setInteractive({ useHandCursor: true }); this.yixuanPartner = sylveon;
         sylveon.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
         const yixuan = this.add.image(npcX, npcY, 'yixuan').setOrigin(.5, .9).setDisplaySize(60, 72).setDepth(10).setInteractive({ useHandCursor: true });
+        this.yixuan = yixuan; this.yixuanTile = { x: 14, y: 8 };
         yixuan.on('pointerover', () => yixuan.setTint(0xfff3bb)); yixuan.on('pointerout', () => yixuan.clearTint());
         yixuan.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
+        this.yixuanTimer = this.time.addEvent({ delay: 2600, loop: true, callback: () => this.wanderYixuan() });
         this.signNpc('yixuan', npcX, npcY - 58);
         this.sign('about', 268, 120);
         for (const [spot, x, y, w, h] of [['about', 268, 215, 188, 144]] as const) {
@@ -164,6 +174,7 @@ export function createGame(options: GameOptions) {
         this.sign('contact', 672, 342);
         this.add.zone(610, 360, 170, 110).setInteractive({ useHandCursor: true }).setDepth(4).on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); this.travel('contact'); });
       }
+      this.addExitMarker(id);
       this.waypoints = this.add.graphics().setDepth(5);
       this.marker = this.add.rectangle(0, 0, 22, 14).setStrokeStyle(2, 0xffffff, .8).setVisible(false).setDepth(6);
       const px = this.tile.x * TILE + 16, py = this.tile.y * TILE + 16;
@@ -186,8 +197,40 @@ export function createGame(options: GameOptions) {
     }
     private signNpc(_id: 'yixuan', x: number, y: number) {
       const label = this.add.text(x, y, '韩怡萱', { fontFamily: '-apple-system, "PingFang SC", sans-serif', fontSize: '13px', color: '#654a67', backgroundColor: '#fffbea', padding: { x: 10, y: 6 } }).setResolution(3).setOrigin(.5).setDepth(16).setInteractive({ useHandCursor: true });
+      this.yixuanLabel = label;
       label.on('pointerover', () => label.setColor('#b64e54')); label.on('pointerout', () => label.setColor('#654a67'));
       label.on('pointerdown', (_p: unknown, _x: number, _y: number, event: Phaser.Types.Input.EventData) => { event.stopPropagation(); options.onNpc('yixuan'); });
+    }
+    private addExitMarker(id: RegionId) {
+      const y = (id === 'verity' ? 14 : 11) * TILE + 16;
+      const exits = id === 'twinleaf' ? [{ x: 820, text: '→ 心齐湖' }] : id === 'verity' ? [{ x: 74, text: '← 双叶镇' }, { x: 822, text: '天冠山 →' }] : [{ x: 74, text: '← 心齐湖' }];
+      exits.forEach(exit => {
+        this.add.text(exit.x, y - 30, exit.text, { fontFamily: 'Silkscreen', fontSize: '9px', color: '#fff9df', backgroundColor: '#3d6257', padding: { x: 8, y: 5 } }).setOrigin(.5).setDepth(17).setAlpha(.92);
+        this.add.triangle(exit.x, y + 6, exit.x - 8, y - 5, exit.x + 8, y - 5, exit.x, y + 8, 0xf6d982, .95).setDepth(17);
+      });
+    }
+    private wanderYixuan() {
+      if (!this.yixuan || this.yixuanMoving || this.paused || this.region !== 'twinleaf') return;
+      const candidates = [[13, 8], [15, 8], [13, 9], [15, 9], [14, 7], [14, 9], [12, 8], [16, 8]];
+      const open = candidates.filter(([x, y]) => this.grid[y]?.[x] === 0 && !(x === this.tile.x && y === this.tile.y));
+      const target = open[Math.floor(Math.random() * open.length)];
+      if (!target) return;
+      this.pathfinder.findPath(this.yixuanTile.x, this.yixuanTile.y, target[0], target[1], path => {
+        if (!path || path.length < 2 || !this.yixuan) return;
+        this.yixuanPath = path.slice(1); this.moveYixuanStep();
+      });
+      this.pathfinder.calculate();
+    }
+    private moveYixuanStep() {
+      const next = this.yixuanPath.shift();
+      if (!next || !this.yixuan) { this.yixuanMoving = false; return; }
+      this.yixuanMoving = true; this.yixuanTile = next;
+      const targets = [this.yixuan, this.yixuanPartner, this.yixuanLabel].filter(Boolean);
+      this.tweens.add({ targets, x: `+=${next.x * TILE + 16 - this.yixuan.x}`, y: `+=${next.y * TILE + 16 - this.yixuan.y}`, duration: 190, onComplete: () => {
+        if (this.yixuanPartner) this.yixuanPartner.setPosition(next.x * TILE + 18, next.y * TILE - 10);
+        if (this.yixuanLabel) this.yixuanLabel.setPosition(next.x * TILE + 16, next.y * TILE - 42);
+        this.yixuanMoving = false; this.moveYixuanStep();
+      } });
     }
     private addPokemon(spot: Spot) {
       const x = spot.x * TILE + 16, y = spot.y * TILE + 16;
@@ -245,6 +288,7 @@ export function createGame(options: GameOptions) {
     }
     private interact() {
       if (this.paused || this.moving) return;
+      if (this.region === 'twinleaf' && Math.abs(this.yixuanTile.x - this.tile.x) + Math.abs(this.yixuanTile.y - this.tile.y) <= 1) { options.onNpc('yixuan'); return; }
       const near = regions[this.region].spots
         .map(spot => ({ ...spot, distance: Math.abs(spot.x - this.tile.x) + Math.abs(spot.y - this.tile.y) }))
         .filter(spot => spot.distance <= 1).sort((a, b) => a.distance - b.distance)[0];

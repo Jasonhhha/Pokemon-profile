@@ -163,18 +163,21 @@ export function makeWorld(region: RegionId = 'twinleaf'): WorldArt {
     rect(380, 128, 168, 144, '#a5c488'); rect(384, 132, 160, 136, '#bcd69a'); path(432, 126, 64, 148);
     rect(430, 184, 70, 60, '#5c8279'); rect(426, 192, 78, 44, '#d4dec9'); rect(434, 182, 62, 64, '#d4dec9');
     rect(438, 190, 54, 48, '#69a7b0'); rect(444, 196, 42, 36, '#418b9b'); rect(458, 198, 12, 24, '#dcebdd'); rect(454, 192, 20, 6, '#f9f8e5'); solid(426, 182, 78, 64);
-    building(176, 144, 184); building(552, 144, 208, true);
+    // Twinleaf is the starter village: one home, a central plaza and open route.
+    building(176, 144, 184);
+    flowers(560, 170, 4, 3); flowers(616, 242, 2, 2);
     fence(176, 304, 48); fence(320, 304, 56); fence(552, 304, 56); fence(704, 304, 64);
     flowers(154, 250, 1, 3); flowers(374, 258, 2); flowers(526, 260, 1, 3); flowers(780, 254, 2);
     flowers(370, 164, 2, 3); flowers(514, 164, 2, 3); tallGrass(144, 416, 160, 96); flowers(332, 426, 3, 3);
     lake(716, 416, 112, 104);
-    rect(520, 388, 8, 44, '#61775d'); rect(504, 374, 40, 28, '#993f4d'); rect(508, 374, 32, 20, '#e16e71'); rect(508, 370, 32, 4, '#f8a79b'); rect(512, 380, 24, 4, '#743c45'); solid(502, 372, 44, 46);
     for (let x = 562; x < 670; x += 28) { rect(x, 466, 22, 24, '#b2bda3'); rect(x + 2, 468, 18, 4, '#e2e6c9'); }
     for (const [x, y] of [[108, 196], [78, 406], [314, 476], [592, 474], [762, 120], [62, 128]]) tree(x, y);
     lamp(404, 294); lamp(718, 340);
   } else if (region === 'verity') {
     path(96, 416, 704, 64); path(128, 128, 64, 352); path(704, 128, 64, 352); path(416, 448, 64, 160);
     lake(224, 128, 448, 256);
+    // A compact field station belongs beside the lake, not in Twinleaf Town.
+    building(606, 320, 190, true);
     rect(408, 204, 120, 98, '#337e87'); rect(416, 200, 104, 84, '#c5d5a4'); rect(428, 194, 80, 80, '#80a87a'); cave(434, 208, 64);
     rect(462, 354, 68, 78, '#5c6554'); rect(466, 352, 60, 76, '#c3a777');
     for (let yy = 354; yy < 428; yy += 10) { rect(466, yy, 60, 2, '#876e54'); rect(470, yy + 2, 52, 2, '#e1c596'); }
