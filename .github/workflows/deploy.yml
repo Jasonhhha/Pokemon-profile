@@ -18,17 +18,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify Pages publishing source
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: site } = await github.rest.repos.getPages({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            if (site.build_type !== 'workflow') {
-              core.setFailed('Pages is publishing a branch instead of the Vite build. Set Settings → Pages → Build and deployment → Source to GitHub Actions, then rerun this workflow.');
-            }
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup Node
@@ -42,6 +31,8 @@ jobs:
         run: npm run build
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
