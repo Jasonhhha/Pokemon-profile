@@ -38,8 +38,6 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Restore Vite source entry
-        run: git checkout -- index.html
       - name: Build
         run: npm run build
       - name: Configure Pages
