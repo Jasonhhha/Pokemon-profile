@@ -27,11 +27,13 @@ function useSaved<T,>(key: string, initial: T, validate: (value: unknown) => val
 
 function TrainerAvatar({ className = '', size = 4, yixuan = false }: { className?: string; size?: number; yixuan?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const width = (yixuan ? 20 : 16) * size;
+  const height = (yixuan ? 24 : 20) * size;
   useEffect(() => {
     const ctx = ref.current?.getContext('2d');
-    if (ctx) { ctx.clearRect(0, 0, 16 * size, 20 * size); if (yixuan) drawYixuan(ctx, 0, 0, size); else drawTrainer(ctx, 0, 0, size); }
-  }, [size, yixuan]);
-  return <canvas className={`trainer-sprite ${className}`} ref={ref} width={16 * size} height={20 * size} aria-label="戴红色帽子的像素训练家" role="img" />;
+    if (ctx) { ctx.clearRect(0, 0, width, height); if (yixuan) drawYixuan(ctx, 0, 0, size); else drawTrainer(ctx, 0, 0, size); }
+  }, [height, width, size, yixuan]);
+  return <canvas className={`trainer-sprite ${className}`} ref={ref} width={width} height={height} aria-label={yixuan ? '粉色像素女训练家' : '戴红色帽子的像素训练家'} role="img" />;
 }
 
 function IconButton({ label, children, onClick, className = '', pressed }: { label: string; children: ReactNode; onClick: () => void; className?: string; pressed?: boolean }) {

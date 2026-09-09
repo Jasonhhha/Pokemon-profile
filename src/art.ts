@@ -222,10 +222,44 @@ export function makeWorld(region: RegionId = 'twinleaf'): WorldArt {
 }
 
 export function drawYixuan(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number) {
-  // Soft pink feminine trainer silhouette: long hair, warm face, blouse and skirt.
-  const rows = [
-    '...pppppp...', '..pppppppp..', '.pppppppppp.', '.ppwwwwwwpp.', '.pwwsssswwp.', '.pwwshsswwp.', '..ssssssss..', '..sshhhss...', '...ssssss...', '..mmmmmmmm..', '.mmmmmmmmmm.', '.mm..mm..mm.', '.mm..mm..mm.', '..m..mm..m..', '..m..mm..m..', '.mm..mm..mm.',
-  ];
-  const palette: Record<string, string> = { p: '#d98bb7', w: '#fff1e8', s: '#f3c4a4', h: '#5a3b4e', m: '#f09ab7' };
-  rows.forEach((row, ry) => [...row].forEach((cell, rx) => { if (palette[cell]) { ctx.fillStyle = palette[cell]; ctx.fillRect(x + rx * scale, y + ry * scale, scale, scale); } }));
+  // A readable 20x24 front-facing feminine trainer with distinct hair, face,
+  // bow, blouse, skirt, arms and shoes.
+  ctx.imageSmoothingEnabled = false;
+  const px = (left: number, top: number, width: number, height: number, color: string) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(x + left * scale, y + top * scale, width * scale, height * scale);
+  };
+  const outline = '#4b3448';
+  const hairDark = '#b9578d';
+  const hair = '#dc82b2';
+  const hairLight = '#f2afd0';
+  const skin = '#f3b99f';
+  const skinLight = '#ffd9bd';
+  const dress = '#f095ba';
+  const dressLight = '#ffc0d7';
+  const cream = '#fff1e7';
+  const shoe = '#704b6e';
+  const eye = '#513447';
+
+  // Back hair and long side locks.
+  px(6, 0, 8, 1, outline); px(4, 1, 12, 1, outline); px(2, 2, 16, 2, outline);
+  px(1, 4, 18, 7, outline); px(0, 6, 3, 11, outline); px(17, 6, 3, 11, outline);
+  px(6, 1, 8, 1, hair); px(4, 2, 12, 4, hair); px(3, 4, 14, 5, hair);
+  px(1, 6, 2, 10, hairDark); px(17, 6, 2, 11, hairDark);
+  px(4, 2, 4, 1, hairLight); px(12, 2, 4, 1, hairLight);
+  px(2, 9, 1, 5, hair); px(17, 10, 1, 5, hair);
+
+  // Pink bow and face.
+  px(1, 2, 3, 3, dress); px(2, 3, 2, 2, dressLight); px(16, 2, 3, 3, dress); px(16, 3, 2, 2, dressLight); px(9, 3, 2, 2, dress);
+  px(5, 5, 10, 8, outline); px(6, 6, 8, 6, skin); px(7, 6, 6, 1, skinLight);
+  px(6, 5, 3, 2, hairDark); px(11, 5, 3, 2, hairDark);
+  px(7, 8, 1, 1, eye); px(12, 8, 1, 1, eye); px(6, 9, 2, 1, '#df8195'); px(12, 9, 2, 1, '#df8195'); px(9, 10, 2, 1, '#bd6680');
+
+  // Blouse, arms, skirt and shoes.
+  px(9, 12, 2, 1, skin); px(6, 11, 8, 5, outline); px(7, 12, 6, 4, cream);
+  px(7, 12, 6, 1, dressLight); px(4, 12, 3, 5, outline); px(13, 12, 3, 5, outline);
+  px(5, 13, 2, 3, dress); px(13, 13, 2, 3, dress); px(5, 16, 2, 1, skin); px(13, 16, 2, 1, skin);
+  px(5, 15, 10, 6, outline); px(6, 16, 8, 4, dress); px(5, 18, 10, 2, dressLight); px(7, 15, 6, 1, hairLight);
+  px(7, 20, 3, 3, outline); px(11, 20, 3, 3, outline); px(8, 20, 1, 2, skin); px(12, 20, 1, 2, skin);
+  px(6, 23, 4, 1, shoe); px(11, 23, 4, 1, shoe); px(15, 14, 3, 5, outline); px(16, 15, 1, 3, dress);
 }
