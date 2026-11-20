@@ -1,265 +1,526 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, Check, ChevronDown, ChevronRight, Compass, Copy, ExternalLink, Flag, Heart, House, Leaf, Mail, MapPin, Maximize, Moon, MountainSnow, Pause, Pencil, Play, RotateCcw, Save, Send, Snowflake, Sparkles, Sun, Volume2, VolumeX, Waves, X } from 'lucide-react';
-import { createGame, type GameControls } from './game';
-import { drawTrainer, drawYixuan } from './art';
-import { pokemonData, regionIds, regions, type Destination, type PokemonId, type RegionId, isPokemon } from './world';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, BookMarked, BookOpen, Check, Compass, Crosshair, DoorOpen, Flag, Github, Heart, House, Mail, Map, MapPin, Maximize, Minimize, Moon, Orbit, Plus, Radio, Sun, Volume2, VolumeX, Zap } from 'lucide-react';
+import { createField, fieldAreas, type Direction, type EncounterKind, type FieldArea, type FieldEvent } from './field';
+import { BattleOverlay, type BattleEncounter, type BattleResult } from './battle';
+import { CreatureSprite } from './creature-art';
+import { creatures, givePotion, healTeam, maxHp, potionHp, type CreatureId } from './creatures';
+import { addSeen, areas, chooseEncounter, entrance, loadAdventure, saveKey } from './adventure';
+import { areaIcons, HpBar, Pokedex, RouteAtlas, TeamPanel } from './adventure-menu';
+import { rooms } from './field-rooms';
+import { cityDistrict } from './field-city-layout';
+import { FieldDialogue } from './field-dialogue';
+import { FieldEncounterTransition } from './field-encounter-transition';
+import { About, Contact, Panel, ProfileForm, Research, loadProfile, type Profile } from './portfolio';
+import { useSound } from './sound';
 
-type Profile = { name: string; title: string; bio: string; location: string; email: string; github: string };
-type ModalType = Destination | 'yixuan' | 'edit' | 'backpack' | null;
-const defaults: Profile = {
-  name: '王禹浩', title: '金融风险管理硕士 · 量化研究', bio: 'UCL 金融风险管理硕士，专注量化研究与机器学习。用 Python / R 构建模型，也在探索 RAG 与金融 Agent。', location: '中国', email: '2239429402@qq.com', github: '',
+type PanelId = 'about' | 'projects' | 'contact' | 'edit' | 'map' | 'pack' | 'dex';
+type Encounter = BattleEncounter & { area: FieldArea; firstPractice?: boolean };
+type Dialogue = { speaker: string; lines: string[]; index: number; choice?: { label: string; accept: () => void } };
+
+const places = [
+  { id: 'about', name: '关于我', place: '潮汐环城 · 潮汐档案屋', copy: '学习经历、量化研究方向与技术栈。', icon: House },
+  { id: 'projects', name: '研究档案', place: '雾杉小径 · 雾杉观测室', copy: '基本面因子研究与集成 EWRLS 项目。', icon: BookOpen },
+  { id: 'contact', name: '联系我', place: '风语高地 · 风语天文台', copy: '聊聊研究、机器学习和合作。', icon: Radio },
+] as const;
+
+const directions = {
+  up: { name: '向上移动', icon: ArrowUp },
+  left: { name: '向左移动', icon: ArrowLeft },
+  down: { name: '向下移动', icon: ArrowDown },
+  right: { name: '向右移动', icon: ArrowRight },
 };
-const legacyDefaults: Profile = {
-  name: '小屿', title: '设计师、创造者、终身玩家', bio: '在数字世界里，建造一些有趣的东西。\n保持好奇，也保持一点点孩子气。', location: '中国 · 杭州', email: '', github: '',
-};
-function readStored<T,>(key: string, fallback: T, validate: (value: unknown) => value is T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    const value: unknown = raw ? JSON.parse(raw) : fallback;
-    return validate(value) ? value : fallback;
-  } catch { return fallback; }
-}
-function useSaved<T,>(key: string, initial: T, validate: (value: unknown) => value is T) {
-  const [value, setValue] = useState<T>(() => readStored(key, initial, validate));
-  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Browsing still works when storage is unavailable. */ } }, [key, value]);
-  return [value, setValue] as const;
-}
 
-function TrainerAvatar({ className = '', size = 4, yixuan = false }: { className?: string; size?: number; yixuan?: boolean }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const width = (yixuan ? 20 : 16) * size;
-  const height = (yixuan ? 24 : 20) * size;
-  useEffect(() => {
-    const ctx = ref.current?.getContext('2d');
-    if (ctx) { ctx.clearRect(0, 0, width, height); if (yixuan) drawYixuan(ctx, 0, 0, size); else drawTrainer(ctx, 0, 0, size); }
-  }, [height, width, size, yixuan]);
-  return <canvas className={`trainer-sprite ${className}`} ref={ref} width={width} height={height} aria-label={yixuan ? '粉色像素女训练家' : '戴红色帽子的像素训练家'} role="img" />;
-}
-
-function IconButton({ label, children, onClick, className = '', pressed }: { label: string; children: ReactNode; onClick: () => void; className?: string; pressed?: boolean }) {
-  return <button className={`icon-button ${className}`} onClick={onClick} title={label} aria-label={label} aria-pressed={pressed}>{children}</button>;
-}
-
-function Dialog({ title, eyebrow, children, onClose, wide = false }: { title: string; eyebrow: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const bodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const first = ref.current?.querySelector<HTMLElement>('button, input, a[href], textarea');
-    first?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
-      if (event.key === 'Tab') {
-        const focusable = Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, textarea, a[href], select') ?? []).filter(el => el.getClientRects().length > 0);
-        const firstItem = focusable[0]; const lastItem = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === firstItem) { event.preventDefault(); lastItem?.focus(); }
-        else if (!event.shiftKey && document.activeElement === lastItem) { event.preventDefault(); firstItem?.focus(); }
-      }
-    };
-    document.addEventListener('keydown', keydown);
-    return () => { document.body.style.overflow = bodyOverflow; document.removeEventListener('keydown', keydown); previous?.focus(); };
-  }, [onClose]);
-  return <div className="dialog-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div ref={ref} className={`dialog ${wide ? 'dialog-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="dialog-title">
-      <header className="dialog-heading"><div><div className="eyebrow">{eyebrow}</div><h2 id="dialog-title">{title}</h2></div><IconButton label="关闭" onClick={onClose}><X size={21} /></IconButton></header>
-      {children}
-    </div>
-  </div>;
-}
-
-function useMusic() {
-  const [playing, setPlaying] = useState(false);
-  const audio = useRef<AudioContext | null>(null);
-  useEffect(() => {
-    if (!playing) return;
-    const context = new AudioContext(); audio.current = context;
-    void context.resume();
-    const master = context.createGain(); master.gain.value = 0.035; master.connect(context.destination);
-    const melody = [659, 0, 523, 587, 659, 784, 659, 0, 587, 0, 494, 523, 587, 659, 523, 0, 440, 523, 659, 784, 698, 659, 587, 0, 523, 587, 659, 523, 392, 440, 494, 587];
-    let beat = 0;
-    const note = () => {
-      const freq = melody[beat % melody.length];
-      if (freq) {
-        const oscillator = context.createOscillator(); const envelope = context.createGain();
-        oscillator.type = 'square'; oscillator.frequency.value = freq;
-        envelope.gain.setValueAtTime(0, context.currentTime); envelope.gain.linearRampToValueAtTime(0.65, context.currentTime + 0.014); envelope.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.21);
-        oscillator.connect(envelope); envelope.connect(master); oscillator.start(); oscillator.stop(context.currentTime + 0.23);
-        oscillator.onended = () => { oscillator.disconnect(); envelope.disconnect(); };
-      }
-      beat++;
-    };
-    note(); const timer = window.setInterval(note, 240);
-    const handleVisibility = () => { if (document.hidden) void context.suspend(); else void context.resume(); };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', handleVisibility); void context.close(); audio.current = null; };
-  }, [playing]);
-  return [playing, () => setPlaying(v => !v)] as const;
-}
-
-const regionIcons = { twinleaf: House, verity: Waves, coronet: MountainSnow };
-const badges = [
-  { id: 'about', name: '初次见面', description: '到访训练家的小屋', icon: House },
-  { id: 'projects', name: '湖畔记录员', description: '探访湖畔观测站', icon: Sparkles },
-  { id: 'contact', name: '远方来信', description: '打开小镇邮箱', icon: Mail },
-  { id: 'friend', name: '宝可梦之友', description: '认识一位宝可梦伙伴', icon: Heart },
-];
-
-function Projects() {
-  const [active, setActive] = useState('notes');
-  const projects = [
-    { id: 'notes', num: '01', name: '基本面因子研究', caption: '复现券商研报，使用 OpenFE 与遗传规划挖掘合成因子。', tag: 'XINHUA AM · QUANT', icon: Pencil, label: 'OPENFE + GP', metric: 'IC · RankIC · ALPHA', note: '清洗全市场财务数据，完成因子筛选与回测。' },
-    { id: 'focus', num: '02', name: '集成 EWRLS', caption: '带领四人小组研究双重下降现象，并用集成学习加速模型。', tag: 'UCL · MACHINE LEARNING', icon: Leaf, label: 'EWRLS ENSEMBLE', metric: 'DOUBLE DESCENT', note: 'Python 建模，分配子模型至计算机集群。' },
-  ];
-  return <>
-    <p className="dialog-intro">量化研究、机器学习与数据建模项目。<span className="demo-label">PROJECT LOG</span></p>
-    <div className="project-tabs" role="tablist" aria-label="简历项目">{projects.map(project => <button key={project.id} role="tab" aria-selected={active === project.id} onClick={() => setActive(project.id)} className={active === project.id ? 'active' : ''}><span>{project.num}</span>{project.name}<ArrowUpRight size={15} /></button>)}</div>
-    {projects.filter(p => p.id === active).map(project => <div key={project.id} className="project-detail">
-      <div className="project-preview" data-project={project.id}>
-        <div className="research-preview"><span className="pixel">{project.label}</span><strong>{project.metric}</strong><p>{project.note}</p><div className="research-bars"><i /><i /><i /><i /><i /></div></div>
-      </div>
-      <div className="project-caption"><div><span className="eyebrow">{project.tag}</span><h3>{project.name}</h3><p>{project.caption}</p></div><project.icon size={26} strokeWidth={1.5} /></div>
-    </div>)}
-  </>;
+function loadNight() {
+  try { return localStorage.getItem('yu-world-night') === 'true'; }
+  catch { return false; }
 }
 
 export default function App() {
-  const [profile, setProfile] = useSaved<Profile>('yu-world-profile', defaults, (value): value is Profile =>
-    typeof value === 'object' && value !== null && Object.keys(defaults).every(key => typeof (value as Record<string, unknown>)[key] === 'string'));
-  const [visited, setVisited] = useSaved<string[]>('yu-world-badges', [], (value): value is string[] =>
-    Array.isArray(value) && new Set(value).size === value.length && value.every(id => badges.some(badge => badge.id === id)));
-  const [partner, setPartner] = useSaved<PokemonId>('yu-world-partner', 'gible', isPokemon);
-  const [night, setNight] = useSaved('yu-world-night', false, (value): value is boolean => typeof value === 'boolean');
-  const [region, setRegion] = useState<RegionId>('twinleaf');
-  const [modal, setModal] = useState<ModalType>(null);
-  const [playing, toggleMusic] = useMusic();
-  const [toast, setToast] = useState('');
+  const [save, setSave] = useState(loadAdventure);
+  const [canSave, setCanSave] = useState(true);
+  const [profile, setProfile] = useState(loadProfile);
+  const [panel, setPanel] = useState<PanelId | null>(null);
+  const [encounter, setEncounter] = useState<Encounter | null>(null);
+  const [enteringBattle, setEnteringBattle] = useState(false);
+  const [dialogue, setDialogue] = useState<Dialogue | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overview, setOverview] = useState(false);
+  const [night, setNight] = useState(loadNight);
+  const [running, setRunning] = useState(false);
+  const [arrival, setArrival] = useState<{ key: string; name: string; english: string } | null>(null);
+  const [dexEntry, setDexEntry] = useState<CreatureId>();
+  const [hint, setHint] = useState('');
   const [ready, setReady] = useState(false);
-  const [dialogue, setDialogue] = useState(0);
-  const [mapHint, setMapHint] = useState('探索双叶镇 · 找到你的训练家小屋');
-  const [draft, setDraft] = useState(profile);
-  const [contactMessage, setContactMessage] = useState('');
-  const [formError, setFormError] = useState('');
-  const [mapMenu, setMapMenu] = useState(false);
-  const gameContainer = useRef<HTMLDivElement>(null);
-  const controls = useRef<GameControls | null>(null);
-  const modalRef = useRef(modal); modalRef.current = modal;
-  const showToast = useCallback((message: string) => setToast(message), []);
-  const open = useCallback((destination: ModalType) => {
-    setModal(destination);
-    if (destination && destination !== 'edit' && destination !== 'backpack') {
-      const badge = isPokemon(destination) ? 'friend' : destination;
-      setVisited(current => current.includes(badge) ? current : [...current, badge]);
-    }
-  }, [setVisited]);
-  const close = useCallback(() => setModal(null), []);
-  const openRef = useRef(open); openRef.current = open;
-  useEffect(() => {
-    if (profile.name === legacyDefaults.name && profile.title === legacyDefaults.title && profile.bio === legacyDefaults.bio && profile.email === legacyDefaults.email) setProfile(defaults);
-  }, [profile, setProfile]);
-  useEffect(() => {
-    if (!gameContainer.current) return;
-    const game = createGame({ parent: gameContainer.current,
-      onReady: api => {
-        controls.current = api;
-        setReady(true);
-        api.setPaused(Boolean(modalRef.current));
-        // Keep the map keyboard-ready as soon as the scene is available.
-        requestAnimationFrame(() => { if (!modalRef.current) gameContainer.current?.focus({ preventScroll: true }); });
-      },
-      onInteract: destination => openRef.current(destination),
-      onNpc: id => openRef.current(id),
-      onWalk: () => setDialogue(value => (value + 1) % 3),
-      onHint: hint => setMapHint(hint),
-      onRegion: id => { setRegion(id); setDialogue(0); setMapMenu(false); },
-    });
-    return () => { controls.current = null; game.destroy(true); };
-  }, []);
-  useEffect(() => { controls.current?.setPaused(Boolean(modal)); }, [modal, ready]);
-  useEffect(() => { controls.current?.setNight(night); }, [night, ready]);
-  useEffect(() => { controls.current?.setPartner(partner); }, [partner, ready]);
-  useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(''), 2800); return () => clearTimeout(timer); } }, [toast]);
-  const dialogues = regions[region].dialogue;
-  const selectedPokemon = modal && isPokemon(modal) ? pokemonData[modal] : null;
-  const edit = () => { setDraft(profile); setFormError(''); open('edit'); };
-  const saveProfile = (event: FormEvent) => {
-    event.preventDefault();
-    if (!draft.name.trim() || !draft.title.trim()) { setFormError('请填写昵称和身份。'); return; }
-    if (draft.github && !/^https:\/\/(www\.)?github\.com\/[\w.-]+\/?$/.test(draft.github)) { setFormError('请输入完整的 GitHub 个人主页地址。'); return; }
-    setProfile({ ...draft, name: draft.name.trim(), title: draft.title.trim() }); close(); showToast('训练家资料已保存');
-  };
-  const copyEmail = async () => { try { await navigator.clipboard.writeText(profile.email); showToast('邮箱地址已复制'); } catch { showToast('复制失败，请手动选择邮箱地址'); } };
-  const mailto = `mailto:${profile.email}?subject=${encodeURIComponent(`来自像素小镇的一封信`)}&body=${encodeURIComponent(contactMessage)}`;
+  const canvas = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLElement>(null);
+  const dialogueButton = useRef<HTMLButtonElement>(null);
+  const controller = useRef<ReturnType<typeof createField> | null>(null);
+  const directionPointer = useRef<number | null>(null);
+  const current = useRef(save);
+  current.current = save;
+  const activeEncounter = useRef(encounter);
+  activeEncounter.current = encounter;
+  const visitedScene = useRef(save.location.room ?? save.location.area);
+  const nightNow = useRef(night);
+  nightNow.current = night;
+  const locked = useRef(false);
+  const area = encounter?.area ?? save.location.area;
+  const room = !encounter && save.location.room ? rooms[save.location.room] : undefined;
+  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : room ? 'interior' : area);
+  const scene = room ?? fieldAreas[area];
+  const AreaIcon = room ? House : areaIcons[area];
+  const areaNumber = String(areas.indexOf(area) + 1).padStart(2, '0');
+  const progress = save.battle;
+  const lead = progress.team.find(member => member.id === progress.lead) ?? progress.team[0];
+  const leadInfo = creatures[lead.id];
+  const paused = Boolean(panel || encounter || dialogue);
+  const focusField = useCallback(() => requestAnimationFrame(() => canvas.current?.focus({ preventScroll: true })), []);
 
-  return <div className={`app ${night ? 'is-night' : ''}`}>
-    <header className="topbar">
-      <a className="brand" href="#" onClick={event => { event.preventDefault(); close(); }} aria-label="返回小镇"><span className="pokeball-mark" /><span>TRAINER'S LOG<span className="brand-edition">PERSONAL EDITION</span></span></a>
-      <nav className="main-nav" aria-label="主导航"><button className={!modal ? 'active' : ''} onClick={close}><Compass size={16} />小镇</button><button className={modal === 'about' ? 'active' : ''} onClick={() => open('about')}><span className="nav-trainer"><TrainerAvatar size={1} /></span>训练家</button><button className={modal === 'backpack' ? 'active' : ''} onClick={() => open('backpack')}><Backpack size={16} />冒险背包<span className="nav-count">{visited.length}</span></button></nav>
-      <div className="topbar-end"><span className="online-status"><i />冒险进行中</span><span className="top-divider" /><IconButton label={playing ? '关闭背景音乐' : '播放背景音乐'} pressed={playing} onClick={toggleMusic}>{playing ? <Volume2 size={18} /> : <VolumeX size={18} />}</IconButton><IconButton label={night ? '切换到白天' : '切换到夜晚'} pressed={night} onClick={() => setNight(value => !value)}>{night ? <Moon size={18} /> : <Sun size={18} />}</IconButton></div>
+  const showDialogue = useCallback((speaker: string, lines: string[], choice?: Dialogue['choice']) => {
+    locked.current = true;
+    controller.current?.setPaused(true);
+    setDialogue({ speaker, lines, choice, index: 0 });
+  }, []);
+  const say = useCallback((speaker: string, ...lines: string[]) => showDialogue(speaker, lines), [showDialogue]);
+
+  function nextLine() {
+    if (!dialogue) return;
+    sound.play('interact');
+    if (dialogue.index + 1 < dialogue.lines.length) setDialogue({ ...dialogue, index: dialogue.index + 1 });
+    else {
+      setDialogue(null);
+      if (dialogue.choice) dialogue.choice.accept();
+      else focusField();
+    }
+  }
+
+  const startEncounter = useCallback((next: Encounter) => {
+    locked.current = true;
+    controller.current?.setPaused(true);
+    setSave(previous => addSeen(previous, next.creature));
+    setEnteringBattle(!matchMedia('(prefers-reduced-motion: reduce)').matches);
+    setEncounter(next);
+  }, []);
+
+  const offerBattle = useCallback((speaker: string, line: string, label: string, next: Encounter) => {
+    showDialogue(speaker, [line], {
+      label,
+      accept: () => { sound.play('encounter'); startEncounter(next); },
+    });
+  }, [showDialogue, sound.play, startEncounter]);
+
+  const openFromField = useCallback((event: FieldEvent) => {
+    if (locked.current) return;
+    if (event === 'guide') {
+      setSave(previous => ({ ...previous, greeted: true }));
+      const captureTip = current.current.battle.lead === 'piplup'
+        ? '遇到姆克儿，可以先让波加曼用拍击削弱它，再投出精灵球。'
+        : '先用威力较低的招式削弱野生宝可梦，再投出精灵球。';
+      say('韩怡萱', '仙子伊布和我在这儿等你。外环绿廊的高草里能遇到姆克儿和小猫怪，穿过东站的桥就是雾杉小径。',
+        `${captureTip}伙伴累了，就到环城大道的补给站休息。`);
+    } else if (event === 'healer') {
+      setSave(previous => ({ ...previous, battle: healTeam(previous.battle) }));
+      say('补给员', '宝可梦的体力和招式 PP 已恢复，伤药和精灵球也补上了。一路顺风！');
+    } else if (event === 'spar') {
+      offerBattle('林间陪练', '我和利欧路在这儿练习招式。要不要打一场？第一次赢下切磋后，我会帮你的队伍休整。', '开始切磋',
+        { creature: 'riolu', level: 4, trainer: '林间陪练', area: 'grove', firstPractice: !current.current.sparWon });
+    } else if (event === 'trial') {
+      if (current.current.battle.trialWon) {
+        say('高地守望员', '你通过了风语高地的试炼。风塔已经点亮，随时欢迎你再回来。');
+      } else if (current.current.battle.team.length < 2) {
+        say('高地守望员', '来参加试炼吗？先在草丛里捕捉一只宝可梦，带两位伙伴来见我。');
+      } else {
+        offerBattle('高地守望员', '圆陆鲨是龙和地面双属性，特别怕冰。准备好了，就来挑战我们吧。', '开始试炼',
+          { creature: 'gible', level: 6, trial: true, area: 'summit' });
+      }
+    } else {
+      locked.current = true;
+      controller.current?.setPaused(true);
+      setPanel(event);
+    }
+  }, [offerBattle, say]);
+
+  const encounterIn = useCallback((nextArea: FieldArea, kind: EncounterKind) => {
+    if (locked.current) return;
+    const adventure = current.current;
+    const progress = adventure.battle;
+    if (progress.team.every(member => member.hp === 0)) {
+      say('体力不足', '伙伴们需要休息。回潮汐环城的补给站恢复体力。');
+      return;
+    }
+    const firstPartner = progress.team.length === 1 && adventure.seen.length === 1 ? progress.lead : undefined;
+    sound.play('encounter');
+    startEncounter(chooseEncounter(nextArea, firstPartner, nightNow.current, kind));
+  }, [say, sound.play, startEncounter]);
+
+  useEffect(() => {
+    if (!canvas.current) return;
+    const field = createField({
+      parent: canvas.current, initial: current.current.location, guideMet: current.current.greeted,
+      onReady: () => setReady(true),
+      onOverview: setOverview,
+      onLocation: location => {
+        const key = location.room ?? location.area;
+        if (visitedScene.current !== key) {
+          visitedScene.current = key;
+          const destination = location.room ? rooms[location.room] : fieldAreas[location.area];
+          setArrival({ key, name: destination.name, english: destination.english });
+        }
+        setSave(previous => ({
+          ...previous, location, visited: previous.visited.includes(location.area) ? previous.visited : [...previous.visited, location.area],
+        }));
+      },
+      onHint: setHint,
+      onEvent: openFromField,
+      onEncounter: encounterIn,
+      onSound: (cue, surface) => { if (cue !== 'encounter') sound.play(cue, surface); },
+    });
+    controller.current = field;
+    field.setCompanion(current.current.battle.lead);
+    field.setBeaconLit(current.current.battle.trialWon);
+    field.setNight(nightNow.current);
+    const frame = requestAnimationFrame(() => {
+      if (!locked.current && document.activeElement === document.body && matchMedia('(pointer: fine)').matches) {
+        canvas.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => { cancelAnimationFrame(frame); field.destroy(); controller.current = null; };
+  }, [encounterIn, openFromField, sound.play]);
+
+  useEffect(() => {
+    locked.current = paused;
+    if (paused) directionPointer.current = null;
+    controller.current?.setPaused(paused);
+  }, [paused]);
+
+  useEffect(() => { controller.current?.setCompanion(lead.id); }, [lead.id]);
+  useEffect(() => { controller.current?.setBeaconLit(progress.trialWon); }, [progress.trialWon]);
+  useEffect(() => { controller.current?.setRunning(running); }, [running]);
+  useEffect(() => { controller.current?.setCovered(Boolean(encounter) && !enteringBattle); }, [encounter, enteringBattle]);
+
+  useEffect(() => {
+    if (!arrival) return;
+    const timer = window.setTimeout(() => setArrival(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [arrival]);
+
+  useEffect(() => {
+    controller.current?.setNight(night);
+    try { localStorage.setItem('yu-world-night', String(night)); }
+    catch { /* The display changes even when storage is unavailable. */ }
+  }, [night]);
+
+  useEffect(() => {
+    try { localStorage.setItem(saveKey, JSON.stringify(save)); }
+    catch { setCanSave(false); }
+  }, [save]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const before = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    function expandedKeys(event: KeyboardEvent) {
+      const container = frame.current;
+      if (!container || event.defaultPrevented || document.querySelector('dialog[open]')) return;
+      if (event.key === 'Escape') {
+        setExpanded(false);
+        if (!locked.current) focusField();
+      } else if (event.key === 'Tab') {
+        const controls = Array.from(container.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]'))
+          .filter(control => control.getClientRects().length > 0 && !control.closest('[inert]'));
+        if (!controls.length) return;
+        const index = controls.findIndex(control => control === document.activeElement);
+        const next = index < 0 ? (event.shiftKey ? controls.length - 1 : 0)
+          : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+        event.preventDefault();
+        controls[next].focus();
+      }
+    }
+    window.addEventListener('keydown', expandedKeys);
+    return () => { document.body.style.overflow = before; window.removeEventListener('keydown', expandedKeys); };
+  }, [expanded, focusField]);
+
+  function openPanel(next: PanelId) {
+    locked.current = true;
+    controller.current?.setPaused(true);
+    setPanel(next);
+  }
+
+  function openDex(id?: CreatureId) {
+    setDexEntry(id);
+    openPanel('dex');
+  }
+
+  function closePanel() {
+    setPanel(null);
+    if (encounter || dialogue) {
+      requestAnimationFrame(() => {
+        const target = encounter ? canvas.current?.parentElement?.querySelector<HTMLElement>('.battle-overlay') : dialogueButton.current;
+        target?.focus({ preventScroll: true });
+      });
+    } else {
+      focusField();
+    }
+  }
+
+  function playField() {
+    controller.current?.interact();
+    if (!locked.current) focusField();
+  }
+
+  function leaveRoom() {
+    controller.current?.leaveRoom();
+    focusField();
+  }
+
+  function toggleRunning() {
+    setRunning(value => !value);
+    if (!paused) focusField();
+  }
+
+  function releaseDirection(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (directionPointer.current !== event.pointerId) return;
+    directionPointer.current = null;
+    controller.current?.hold(null);
+  }
+
+  function onFieldShortcut(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (paused || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    const key = event.key.toLowerCase();
+    if (key === 'm' || key === 'q' || key === 'j') {
+      event.preventDefault();
+      if (key === 'j') openDex();
+      else openPanel(key === 'm' ? 'map' : 'pack');
+    }
+  }
+
+  function finishBattle(result: BattleResult) {
+    setEncounter(null);
+    if (result.outcome === 'win' || result.outcome === 'caught') sound.play('win');
+    if (result.outcome === 'lost') {
+      controller.current?.setPaused(false);
+      controller.current?.travel('harbor');
+      say('补给员', '你和伙伴们回到了潮汐环城。体力和补给都已恢复，随时可以再出发。');
+    } else if (encounter?.trial && result.outcome === 'win') {
+      say('高地守望员', '风塔亮起来了！港口的伙伴会看见你的信号。你已经完成了群岛试炼。');
+    } else if (encounter?.trainer && result.outcome === 'win') {
+      say(encounter.trainer, encounter.firstPractice ? '队伍已经休整好了。这两颗精灵球也带上，留给接下来的旅程。' : '这场又学到了新东西。路过这里时，还可以来找我切磋。');
+    } else {
+      focusField();
+    }
+  }
+
+  const saveBattle = useCallback((result: BattleResult) => {
+    const previous = current.current;
+    const sparWon = result.outcome === 'win' && Boolean(activeEncounter.current?.trainer);
+    const firstSpar = sparWon && !previous.sparWon;
+    const battle = result.outcome === 'lost' || firstSpar ? healTeam(result.progress) : result.progress;
+    const next = {
+      ...previous,
+      location: result.outcome === 'lost' ? entrance : previous.location,
+      sparWon: previous.sparWon || sparWon,
+      battle: firstSpar ? { ...battle, charms: Math.min(Number.MAX_SAFE_INTEGER, battle.charms + 2) } : battle,
+    };
+    current.current = next;
+    setSave(next);
+    try { localStorage.setItem(saveKey, JSON.stringify(next)); }
+    catch { setCanSave(false); }
+  }, []);
+
+  function fastTravel(next: FieldArea) {
+    setPanel(null);
+    controller.current?.setPaused(false);
+    controller.current?.travel(next);
+    focusField();
+  }
+
+  function giveMedicine(id: CreatureId) {
+    setSave(previous => {
+      const battle = givePotion(previous.battle, id);
+      return battle === previous.battle ? previous : { ...previous, battle };
+    });
+    sound.play('interact');
+  }
+
+  function storeProfile(next: Profile) {
+    setProfile(next);
+    try { localStorage.setItem('yu-world-profile', JSON.stringify(next)); }
+    catch { setCanSave(false); }
+    setPanel('about');
+  }
+
+  function closeDialogue() {
+    setDialogue(null);
+    focusField();
+  }
+
+  const tasks = [
+    { id: 'guide', label: '与韩怡萱交谈', description: '环城大道 · 起点东侧', done: save.greeted },
+    { id: 'catch', label: '捕捉一只宝可梦', description: '外环绿廊 · 高草花园', done: progress.team.length > 1 },
+    { id: 'trial', label: '完成风语高地试炼', description: '带至少两位伙伴登顶', done: progress.trialWon },
+  ];
+  const activeTask = tasks.find(task => !task.done)?.id;
+  const panelTitles: Record<PanelId, { title: string; label: string }> = {
+    about: { title: profile.name, label: 'ABOUT ME' },
+    projects: { title: '研究档案', label: 'RESEARCH ARCHIVE' },
+    contact: { title: '联系我', label: 'SIGNAL STATION' },
+    edit: { title: '编辑个人资料', label: 'PROFILE' },
+    map: { title: '群岛航线', label: 'ISLAND MAP' },
+    pack: { title: '伙伴与补给', label: 'BACKPACK' },
+    dex: { title: '群岛图鉴', label: 'FIELD POKÉDEX' },
+  };
+
+  return <div className="app">
+    <header className="topbar" inert={expanded}>
+      <div className="wrap topbar-inner">
+        <a href="#top" className="wordmark"><span className="brand-symbol"><Compass size={22} strokeWidth={2.4} /></span><span className="pixel">TIDEBOUND<span className="brand-period">.</span></span></a>
+        <nav aria-label="主导航">
+          <a className="nav-link nav-current" href="#expedition" onClick={() => { if (!paused) focusField(); }}><Compass size={16} />环城探索</a>
+          <button className="nav-link" type="button" onClick={() => openPanel('projects')}><BookOpen size={16} />研究档案</button>
+          <button className="nav-link" type="button" onClick={() => openPanel('about')}><House size={16} />关于我</button>
+        </nav>
+        <div className="top-actions">
+          <button type="button" className="icon-button" aria-label={sound.enabled ? '关闭声音' : '开启声音'} title={sound.enabled ? '关闭声音' : '开启声音'} aria-pressed={sound.enabled} onClick={sound.toggle}>{sound.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}</button>
+          <a className="icon-button github-nav" aria-label="在 GitHub 查看仓库" title="GitHub 仓库" href="https://github.com/Jasonhhha/Pokemon-profile" target="_blank" rel="noreferrer"><Github size={18} /></a>
+        </div>
+      </div>
     </header>
 
-    <main>
-      <div className="world-heading"><div><div className="eyebrow"><span className="tiny-cross">+</span> A LITTLE WORLD, A LOT OF ME</div><h1>YU'S WORLD<span className="title-dot">.</span><span className="title-spark">✦</span></h1></div><div className="world-heading-note"><span>生活是一场开放世界的冒险。</span><span className="pixel">MAKE GOOD THINGS. STAY CURIOUS.</span></div></div>
+    <main className="wrap" id="top">
+      <section className="hero" aria-labelledby="site-title" inert={expanded}>
+        <div className="hero-title">
+          <div className="hero-kicker"><span className="live-dot" />{profile.name}的城市手记</div>
+          <h1 id="site-title"><strong>潮汐环城</strong><span className="hero-english pixel">TIDEPORT RING</span></h1>
+        </div>
+        <p className="hero-copy">带上宝可梦走进潮汐环城。<br className="desktop-break" />沿途可以翻看我的量化研究和项目笔记。</p>
+      </section>
 
-      <div className="world-layout">
-        <aside className="profile-sidebar">
-          <div className="sidebar-heading"><span className="eyebrow">TRAINER PROFILE</span><IconButton label="编辑个人资料" onClick={edit}><Pencil size={14} /></IconButton></div>
-          <div className="portrait-scene"><div className="portrait-grid" /><div className="portrait-sun" /><div className="portrait-grass grass-one" /><div className="portrait-grass grass-two" /><TrainerAvatar size={4} /><img className="portrait-partner" src={pokemonData[partner].asset} alt={pokemonData[partner].name} /><div className="portrait-ground" /><span className="trainer-number pixel">NO. {pokemonData[partner].number}</span><span className="portrait-level pixel">LV. 24</span></div>
-          <div className="profile-intro"><span className="mini-label">PLAYER 01</span><h2>嗨，我是{profile.name}<span className="greeting-dot">.</span></h2><p className="profile-role">{profile.title}</p><p className="profile-bio">{profile.bio}</p><div className="location"><MapPin size={13} />{profile.location || '世界的某个角落'}<span className="small-diamond" /><span>保持探索中</span></div></div>
-          <div className="skill-tags"><span><i className="red" />QUANT RESEARCH</span><span><i className="green" />MACHINE LEARNING</span><span><i className="yellow" />PYTHON + R</span></div>
-          <div className="party-section"><div className="section-label"><span>我的冒险搭档</span><span className="pixel">SINNOH PARTY</span></div><div className="party-list">{(['gible', 'riolu', 'piplup'] as const).map((id, index) => <button key={id} onClick={() => open(id)} aria-label={`查看${pokemonData[id].name}`} className={`party-member ${partner === id ? 'partner-active' : ''}`}><img src={pokemonData[id].asset} alt="" /><span>{pokemonData[id].name}</span><div className="pokemon-hp"><i style={{ width: `${100 - index * 8}%` }} /></div>{partner === id && <span className="partner-dot" />}</button>)}</div></div>
-          <button className="contact-button" onClick={() => controls.current?.travel('contact')}><Mail size={16} /><span>来打个招呼</span><ArrowUpRight size={17} /></button>
-          <span className="sidebar-footer"><span className="pixel">SAVE FILE 001</span><span><span className="save-dot" />已自动存档</span></span>
-        </aside>
+      <div id="expedition" className="expedition">
+        <section ref={frame} className={`game-frame${expanded ? ' game-expanded' : ''}`} data-island={area} data-city={area === 'harbor' && !room || undefined} aria-label="潮汐群岛游戏"
+          role={expanded ? 'dialog' : undefined} aria-modal={expanded || undefined}>
+          <header className="game-bar">
+            <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
+            <div className="game-tools">
+              {room ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />离开室内</button> :
+              <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
+                {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
+              </button>}
+              {area === 'harbor' && !room && <button type="button" className="icon-button overview-button" aria-label={overview ? '返回街道' : '俯瞰环城'}
+                aria-pressed={overview} title={overview ? '返回街道' : '俯瞰环城'} disabled={!ready || paused}
+                onClick={() => { controller.current?.setOverview(!overview); focusField(); }}><Orbit size={17} /></button>}
+              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}><Map size={17} /></button>
+              <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
+            </div>
+          </header>
 
-        <section className="world-area" aria-label="互动神奥地图" data-region={region}>
-          <div className="region-navigation" role="group" aria-label="神奥地区">
-            {regionIds.map(id => {
-              const RegionIcon = regionIcons[id];
-              return <button key={id} className="region-tab" aria-pressed={region === id} disabled={!ready} onClick={() => controls.current?.changeRegion(id)}><RegionIcon size={17} /><span>{regions[id].name}<small className="pixel">{regions[id].english}</small></span><span className="region-number pixel">{regions[id].number}</span></button>;
-            })}
+          <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
+            data-room={save.location.room} data-overview={overview || undefined}>
+            <div className="game-canvas" ref={canvas} role="application" data-night={night && !room} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
+              aria-label="游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开航线，Q 打开队伍，J 打开图鉴。" />
+            {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
+            {ready && !encounter && !dialogue && <div className="map-coordinate" aria-hidden="true"><Crosshair size={14} />
+              {area === 'harbor' && !room && <span className="map-district">{cityDistrict(save.location.x, save.location.y)}</span>}
+              <span className="pixel">{areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
+            </div>}
+            {arrival && !encounter && !dialogue && <div className="area-arrival" key={arrival.key} role="status"><span className="pixel">{arrival.english}</span><strong>{arrival.name}</strong></div>}
+            {dialogue && <FieldDialogue key={dialogue.index} speaker={dialogue.speaker} line={dialogue.lines[dialogue.index]}
+              action={dialogue.index + 1 < dialogue.lines.length ? '继续' : dialogue.choice?.label ?? '结束'}
+              actionRef={dialogueButton} advance={nextLine} decline={dialogue.choice ? closeDialogue : undefined} />}
+            {encounter && <FieldEncounterTransition kind={encounter.trial ? 'trial' : encounter.trainer ? 'trainer' : 'wild'}
+              night={night} onCovered={() => setEnteringBattle(false)}>
+              <BattleOverlay encounter={encounter} progress={progress} night={night} onResolve={saveBattle} onFinish={finishBattle} onCue={sound.play} />
+            </FieldEncounterTransition>}
           </div>
-          <div className="map-toolbar"><div className="map-title"><MapPin size={16} /><strong>{regions[region].name}</strong><span className="map-title-divider">/</span><span>{regions[region].subtitle}</span></div><div className="map-weather">{region === 'coronet' ? <Snowflake size={15} /> : night ? <Moon size={14} /> : <Sun size={15} />}<span>{region === 'coronet' ? '飘雪 · −4°C' : night ? '晴夜 · 12°C' : region === 'verity' ? '微风 · 16°C' : '晴朗 · 18°C'}</span><span className="pixel">{night ? '21:08' : '08:12'}</span></div></div>
-          <div className="map-shell">
-            <div className="game-canvas" ref={gameContainer} role="application" tabIndex={0} aria-label="宝可梦像素小镇，方向键或 WASD 移动，点击地图寻路，E 或空格互动" />
-            {!ready && <div className="map-loading"><span className="pokeball-mark" /><span className="pixel">LOADING YOUR WORLD...</span></div>}
-            <div className="map-corner-label"><i /><span className="pixel">{regions[region].english}</span></div>
-            <div className="map-tools"><IconButton label="缩放地图" onClick={() => controls.current?.zoom()}><Maximize size={16} /></IconButton></div>
-          <div className="map-travel"><button className="map-travel-toggle" aria-expanded={mapMenu} onClick={() => setMapMenu(value => !value)}><Compass size={15} /><span>目的地</span><ChevronDown size={13} /></button>{mapMenu && <div className="travel-menu">{[['about', '我的小屋'], ['projects', '湖畔观测站'], ['contact', '山顶信号站']] .map(([id, label]) => <button key={id} onClick={() => { controls.current?.travel(id as Destination); setMapMenu(false); }}>{label}<ArrowRight size={13} /></button>)}</div>}</div>
-            <div className="map-hint" aria-live="polite"><span className="map-hint-key pixel">A</span><span>{mapHint}</span></div>
+
+          <div className="game-controls">
+            <div className="control-keys" role="group" aria-label="键盘操作">
+              <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><small>移动</small></span>
+              <span><kbd>E</kbd><small>互动</small></span>
+            </div>
+            <div className="game-hint" aria-live="polite"><MapPin size={15} />{encounter ? '正在战斗' : hint || fieldAreas[area].description}</div>
+            <button className="interact-button" type="button" disabled={!ready || paused} onClick={playField}><span className="pixel">E</span>互动</button>
           </div>
-          <div className="dialogue-box"><div className="dialogue-avatar"><TrainerAvatar size={2} /></div><div className="dialogue-copy"><span>{profile.name}<span className="dialogue-role">神奥训练家</span></span><p>{dialogues[dialogue]}</p></div><IconButton label="下一句对话" onClick={() => setDialogue(value => (value + 1) % dialogues.length)}><ChevronRight size={20} /></IconButton></div>
-          <div className="world-status"><div className="world-location"><span className="pixel">{regions[region].number}</span><span>神奥地区</span><ChevronRight size={11} /><strong>{regions[region].name}</strong></div><div className="world-exploration"><span>探索进度</span><div className="exploration-segments">{badges.map(badge => <i key={badge.id} className={visited.includes(badge.id) ? 'filled' : ''} />)}</div><span className="pixel">{visited.length}/4</span></div></div>
-          <div className="mobile-controls" aria-label="移动控制"><div className="dpad"><IconButton label="向上移动" onClick={() => controls.current?.move('up')} className="dpad-up"><ArrowUp size={20} /></IconButton><IconButton label="向左移动" onClick={() => controls.current?.move('left')} className="dpad-left"><ArrowLeft size={20} /></IconButton><span /><IconButton label="向右移动" onClick={() => controls.current?.move('right')} className="dpad-right"><ArrowRight size={20} /></IconButton><IconButton label="向下移动" onClick={() => controls.current?.move('down')} className="dpad-down"><ArrowDown size={20} /></IconButton></div><button className="action-control" onClick={() => controls.current?.interact()} aria-label="与附近的人物或建筑互动">A</button></div>
+
+          {!encounter && <div className="touch-controls" role="group" aria-label="触屏操作">
+            <div className="dpad">
+              {(Object.keys(directions) as Direction[]).map(direction => {
+                const { name, icon: Icon } = directions[direction];
+                return <button type="button" key={direction} className={`dpad-${direction}`} aria-label={name} disabled={!ready || paused}
+                  onPointerDown={event => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    directionPointer.current = event.pointerId;
+                    controller.current?.hold(direction);
+                  }}
+                  onPointerUp={releaseDirection}
+                  onPointerCancel={releaseDirection}
+                  onLostPointerCapture={releaseDirection}
+                  onClick={event => { if (event.detail === 0) controller.current?.move(direction); }}>
+                  <Icon size={20} />
+                </button>;
+              })}
+              <span className="dpad-core" />
+            </div>
+            <div className="touch-actions">
+              <button type="button" className="touch-run" aria-label="跑步" aria-pressed={running} disabled={!ready || paused} onClick={toggleRunning}><Zap size={21} /></button>
+              <button type="button" className="touch-action" aria-label="与附近目标互动" disabled={!ready || paused} onClick={playField}>A</button>
+            </div>
+          </div>}
+          <div className="field-dock" role="group" aria-label="冒险菜单">
+            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}><Map size={16} /><span>航线</span><kbd aria-hidden="true">M</kbd></button>
+            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
+            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
+            <button type="button" className="field-dock-run" disabled={!ready || paused} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
+          </div>
         </section>
+
+        <aside className="side-stack" aria-label="冒险进度" inert={expanded}>
+          <section className="side-card journal">
+            <div className="side-card-header"><span className="side-mark"><Flag size={16} /></span><h2>航行任务</h2><span className="journey-count pixel">{tasks.filter(task => task.done).length}/3</span></div>
+            <ol className="task-list">
+              {tasks.map(task => <li key={task.id} data-current={task.id === activeTask} data-done={task.done}>
+                <span className="task-check">{task.done ? <Check size={13} strokeWidth={3} /> : task.id === activeTask ? <span /> : null}</span>
+                <div><strong>{task.label}</strong><small>{task.description}</small></div>
+              </li>)}
+            </ol>
+          </section>
+
+          <section className="side-card companion">
+            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
+            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue)} onClick={() => openDex(lead.id)}>
+              <span className="lead-element">{leadInfo.element}</span><CreatureSprite id={lead.id} /><span className="lead-code pixel">{leadInfo.english}</span>
+            </button>
+            <div className="lead-status"><strong>{leadInfo.name}</strong><span className="pixel">LV. {lead.level}</span></div>
+            <div className="lead-health"><span className="pixel">HP</span><HpBar value={lead.hp} total={maxHp(lead)} /><span>{lead.hp}/{maxHp(lead)}</span></div>
+            <div className="field-supplies"><span title={`回复 ${potionHp} 点体力`}><Plus size={15} />伤药 <b>{progress.medicine}</b></span><span title="捕捉野生宝可梦"><Compass size={15} />精灵球 <b>{progress.charms}</b></span></div>
+          </section>
+          <div className="save-status"><span className={canSave ? 'live-dot' : 'save-offline'} />{canSave ? '进度保存在当前浏览器' : '当前浏览器无法保存进度'}</div>
+        </aside>
       </div>
 
-      <section className="destinations" aria-label="小镇目的地"><div className="destination-intro"><Flag size={17} /><div><span>每一站，都有新发现</span><span className="pixel">THE ADVENTURE IS YOURS.</span></div></div>{[{ id: 'about', number: '01', name: '我的小屋', detail: '关于我和我的故事', icon: House }, { id: 'projects', number: '02', name: '湖畔观测站', detail: '记录研究与实验的现场', icon: Sparkles }, { id: 'contact', number: '03', name: '山顶信号站', detail: '让新的故事从这里开始', icon: Mail }].map(place => <button key={place.id} className={`destination destination-${place.id}`} onClick={() => controls.current?.travel(place.id as Destination)} disabled={!ready}><span className="destination-icon"><place.icon size={22} strokeWidth={1.5} /></span><span className="destination-text"><span><small className="pixel">{place.number}</small>{place.name}{visited.includes(place.id) && <Check size={12} />}</span><span>{place.detail}</span></span><ArrowUpRight size={17} /></button>)}</section>
-      <footer className="page-footer"><span>用热爱建造，用好奇心探索。<Heart size={11} /></span><span className="pixel">© 2026 YU'S WORLD <span>·</span> CONTINUE THE ADVENTURE <ArrowUpRight size={12} /></span></footer>
+      <section className="landmarks" aria-labelledby="landmarks-title" inert={expanded}>
+        <div className="landmarks-heading"><div><span className="pixel">FIELD NOTES</span><h2 id="landmarks-title">岛上的三个坐标</h2></div><p>也可以直接翻看我的资料与项目。</p></div>
+        <div className="place-list">
+          {places.map(({ id, name, place, copy, icon: Icon }) => <button type="button" key={id} data-place={id} className="place-card" onClick={() => openPanel(id)}>
+            <span className="place-icon"><Icon size={23} strokeWidth={1.8} /></span>
+            <span className="place-content"><small>{place}</small><strong>{name}</strong><span>{copy}</span></span>
+            <ArrowUpRight className="place-arrow" size={18} />
+          </button>)}
+        </div>
+      </section>
+      <footer className="footer" inert={expanded}><span className="pixel">TIDEBOUND.</span><span>© 2026 {profile.name}</span><button type="button" onClick={() => openPanel('contact')}><Mail size={15} />联系我</button></footer>
     </main>
 
-    {modal === 'about' && <Dialog title={`很高兴认识你，我是${profile.name}。`} eyebrow="01 / THE TRAINER'S HOME" onClose={close}>
-      <div className="about-portrait"><TrainerAvatar size={5} /><img src={pokemonData[partner].asset} alt={pokemonData[partner].name} /><span className="pixel">SINNOH ROUTE 201.<br />KEEP EXPLORING.</span></div>
-      <div className="about-body"><p className="about-title">{profile.title}</p><p className="preline">{profile.bio}</p><div className="about-location"><MapPin size={15} />{profile.location || '世界的某个角落'}</div><div className="about-skills"><div><span className="pixel">01</span><h3>教育背景</h3><p>伦敦大学学院金融风险管理硕士。</p></div><div><span className="pixel">02</span><h3>量化研究</h3><p>新华资产管理量化实习，完成因子研究与回测。</p></div><div><span className="pixel">03</span><h3>技术栈</h3><p>Python、R、PyTorch，以及 RAG 与金融 Agent。</p></div></div><button className="secondary-button" onClick={edit}><Pencil size={15} />编辑训练家资料</button></div>
-    </Dialog>}
-    {modal === 'projects' && <Dialog title="湖畔观测站" eyebrow="02 / LAKE VERITY FIELD STATION" onClose={close} wide><Projects /></Dialog>}
-    {modal === 'contact' && <Dialog title="给小镇寄一封信" eyebrow="03 / YOU'VE GOT A FRIEND" onClose={close}>
-      <div className="mail-illustration"><Mail size={54} strokeWidth={1} /><span className="pixel">HELLO, NEW FRIEND.</span></div><p className="dialog-intro">关于有趣的想法、合作，或者只是说声你好。</p>
-      {profile.email ? <><div className="email-row"><Mail size={16} /><a href={`mailto:${profile.email}`}>{profile.email}</a><IconButton label="复制邮箱" onClick={copyEmail}><Copy size={15} /></IconButton></div><label className="field-label" htmlFor="contact-message">想对我说的话</label><textarea id="contact-message" className="message-input" value={contactMessage} onChange={e => setContactMessage(e.target.value)} placeholder="嗨，我在你的像素小镇里逛了逛……" maxLength={2000} /><a className="primary-button full-width" href={mailto}><Send size={15} />打开邮件草稿<ExternalLink size={14} /></a></> : <div className="contact-empty"><p>小镇的邮箱地址还没有设置。</p><button className="primary-button" onClick={edit}><Pencil size={15} />设置联系方式</button></div>}
-      {profile.github && <a className="github-link" href={profile.github} target="_blank" rel="noreferrer">GITHUB<span>{profile.github.split('/').filter(Boolean).pop()}</span><ArrowUpRight size={15} /></a>}
-    </Dialog>}
-    {modal === 'edit' && <Dialog title="训练家资料" eyebrow="EDIT YOUR SAVE FILE" onClose={close}>
-      <form onSubmit={saveProfile} className="profile-form"><div className="form-pair"><label>昵称<input value={draft.name} maxLength={12} required onChange={e => setDraft({ ...draft, name: e.target.value })} /></label><label>所在地<input value={draft.location} maxLength={30} onChange={e => setDraft({ ...draft, location: e.target.value })} /></label></div><label>身份<input value={draft.title} required maxLength={45} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label><label>关于我<textarea value={draft.bio} maxLength={180} rows={3} onChange={e => setDraft({ ...draft, bio: e.target.value })} /></label><label>邮箱<input type="email" value={draft.email} maxLength={120} placeholder="hello@example.com" onChange={e => setDraft({ ...draft, email: e.target.value })} /></label><label>GitHub<input type="url" value={draft.github} maxLength={100} placeholder="https://github.com/username" onChange={e => setDraft({ ...draft, github: e.target.value })} /></label>{formError && <p role="alert" className="form-error">{formError}</p>}<div className="form-actions"><span><Save size={12} />保存在当前浏览器</span><button className="primary-button" type="submit"><Check size={16} />保存资料</button></div></form>
-    </Dialog>}
-    {modal === 'backpack' && <Dialog title="我的冒险背包" eyebrow="LITTLE MOMENTS, BIG MEMORIES" onClose={close}>
-      <div className="backpack-summary"><Backpack size={34} strokeWidth={1.3} /><div><span className="pixel">{visited.length} / 4</span><p>枚小镇纪念徽章</p></div><span className="completion-label">{visited.length === 4 ? '小镇探索完成' : '冒险仍在继续'}</span></div><div className="badge-list">{badges.map(badge => <div key={badge.id} className={`badge-item ${visited.includes(badge.id) ? 'unlocked' : ''}`}><div className="badge-icon"><badge.icon size={25} strokeWidth={1.5} /></div><div><h3>{badge.name}</h3><p>{badge.description}</p></div>{visited.includes(badge.id) ? <Check size={17} /> : <span className="pixel">???</span>}</div>)}</div>
-    </Dialog>}
-    {modal === 'yixuan' && <Dialog title="韩怡萱" eyebrow="YU'S GIRLFRIEND · SINNOH ADVENTURE" onClose={close}>
-      <div className="npc-card"><div className="npc-card-art"><TrainerAvatar size={3} yixuan /><img src={`${import.meta.env.BASE_URL}assets/sylveon.png`} alt="仙子伊布" /></div><p className="dialog-intro">这是我的女朋友韩怡萱。她和仙子伊布一起住在双叶镇，等着和你一起开始神奥地区的冒险。</p><div className="npc-card-meta"><span className="pixel">MY FAVORITE TRAINER.</span><span>韩怡萱 · 仙子伊布同行</span></div></div>
-    </Dialog>}
-    {selectedPokemon && <Dialog title={selectedPokemon.name} eyebrow={`POKÉDEX / NO. ${selectedPokemon.number}`} onClose={close}>
-      <div className="pokemon-detail" style={{ '--pokemon-color': selectedPokemon.color } as React.CSSProperties}><span className="pokemon-number pixel">#{selectedPokemon.number}</span><img src={selectedPokemon.asset} alt={selectedPokemon.name} /><div><span className="pixel">{selectedPokemon.english}</span><span className="pokemon-type">{selectedPokemon.type}</span></div></div><p className="pokemon-habitat"><MapPin size={14} />{selectedPokemon.habitat}</p><h3 className="pokemon-personality">{selectedPokemon.personality}</h3><p className="pokemon-description">{selectedPokemon.description}</p><div className="pokemon-skills">{selectedPokemon.skills.map((skill, index) => <span key={skill}><small className="pixel">0{index + 1}</small>{skill}</span>)}</div><button className="primary-button full-width" disabled={partner === modal} onClick={() => { setPartner(modal as PokemonId); showToast(`${selectedPokemon.name}成为了你的同行伙伴`); }}>{partner === modal ? <Check size={16} /> : <Heart size={16} />}{partner === modal ? '正在一起冒险' : '选择为同行伙伴'}</button>
-    </Dialog>}
-    {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
+    {panel && <Panel title={panelTitles[panel].title} label={panelTitles[panel].label} close={closePanel}>
+      {panel === 'about' && <About profile={profile} edit={() => setPanel('edit')} />}
+      {panel === 'projects' && <Research />}
+      {panel === 'contact' && <Contact profile={profile} edit={() => setPanel('edit')} />}
+      {panel === 'edit' && <ProfileForm profile={profile} save={storeProfile} />}
+      {panel === 'map' && <RouteAtlas save={save} travel={fastTravel} />}
+      {panel === 'dex' && <Pokedex save={save} entry={dexEntry} />}
+      {panel === 'pack' && <TeamPanel progress={progress} heal={giveMedicine} inspect={openDex}
+        setLead={id => setSave(previous => ({ ...previous, battle: { ...previous.battle, lead: id } }))} />}
+    </Panel>}
   </div>;
 }
