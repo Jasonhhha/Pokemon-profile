@@ -460,6 +460,10 @@ function beacon(area: FieldArea) {
   const body = commercial ? plaster : masonry[1];
   const stripe = commercial ? red : blue;
   const patina = commercial ? darkWood : slate;
+  if (commercial) {
+    piece(group, octagon, masonry[1], [0, -.48, 0], [.97, .88, .97], [0, Math.PI / 8, 0]);
+    piece(group, octagon, stone, [0, -.055, 0], [1.01, .088, 1.01], [0, Math.PI / 8, 0]);
+  }
   piece(group, octagon, sandstone, [0, .12, 0], [.77, .24, .77], [0, Math.PI / 8, 0]);
   piece(group, octagon, stone, [0, .256, 0], [.70, .12, .70], [0, Math.PI / 8, 0]);
   piece(group, upright, body, [0, .30 + shaft / 2, 0], [.64, shaft, .64], [0, Math.PI / 8, 0]);

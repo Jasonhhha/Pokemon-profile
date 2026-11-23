@@ -407,7 +407,9 @@ export default function App() {
               </button>}
               {area === 'harbor' && !room && <button type="button" className="icon-button overview-button" aria-label={overview ? '返回街道' : '俯瞰环城'}
                 aria-pressed={overview} title={overview ? '返回街道' : '俯瞰环城'} disabled={!ready || paused}
-                onClick={() => { controller.current?.setOverview(!overview); focusField(); }}><Orbit size={17} /></button>}
+                onClick={() => { controller.current?.setOverview(!overview); focusField(); }}>
+                <Orbit size={17} /><span>{overview ? '返回街道' : '俯瞰环城'}</span>
+              </button>}
               <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}><Map size={17} /></button>
               <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
             </div>

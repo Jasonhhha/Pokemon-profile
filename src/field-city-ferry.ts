@@ -1,15 +1,17 @@
 import {
   BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry, DoubleSide, Float32BufferAttribute, Group, Mesh,
-  MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, ShaderMaterial, SphereGeometry, SRGBColorSpace,
+  MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, ShaderMaterial, SphereGeometry, SRGBColorSpace, TorusGeometry,
 } from 'three';
 import { batchStaticMeshes } from './field-mesh-batch';
 import { ringRadius } from './field-ring-space';
 import { harborHeight } from './field-city-layout';
 
 const seaLevel = -.58;
+const outerWaterline = ringRadius(harborHeight + 1.35);
 const box = new BoxGeometry(1, 1, 1);
 const tube = new CylinderGeometry(1, 1, 1, 12);
 const knob = new SphereGeometry(1, 12, 7);
+const rescueRing = new TorusGeometry(.125, .027, 6, 20);
 const ivory = new MeshStandardMaterial({ color: 0xe2d1aa, roughness: .64 });
 const stone = new MeshStandardMaterial({ color: 0xc8ad86, roughness: .69 });
 const enamel = new MeshStandardMaterial({ color: 0x45757b, roughness: .54, metalness: .2 });
@@ -69,9 +71,23 @@ function plate() {
   return new MeshBasicMaterial({ map, toneMapped: false });
 }
 
-export function buildCityFerry(polar = false) {
+function harborCourse(seconds: number) {
+  const phase = seconds / 18.7 - .75;
+  const angle = phase + Math.sin(phase * 2 + .6) * .089 + Math.sin(phase * 3 - .37) * .032;
+  const radius = ringRadius(harborHeight + 3) + .45 + Math.sin(angle * 2 - .8) * .27 + Math.sin(angle * 5) * .074;
+  const rate = .54 * Math.cos(angle * 2 - .8) + .37 * Math.cos(angle * 5);
+  const sine = Math.sin(angle), cosine = Math.cos(angle);
+  const dx = radius * cosine + rate * sine, dz = -radius * sine + rate * cosine;
+  return {
+    x: sine * radius, z: cosine * radius, heading: Math.atan2(dx, dz),
+    speed: Math.hypot(dx, dz) * (1 + .178 * Math.cos(phase * 2 + .6) + .096 * Math.cos(phase * 3 - .37)) / 18.7,
+  };
+}
+
+export function buildCityFerry() {
   const ship = new Group();
   const glass = new MeshStandardMaterial({ color: 0x4d7681, metalness: .17, roughness: .29, emissive: 0xe1ad78, emissiveIntensity: .1 });
+  const tenderLight = new MeshStandardMaterial({ color: 0xe4c49d, emissive: 0xffba6b, emissiveIntensity: 0, roughness: .38 });
   ship.add(hull());
   shape(ship, box, deck, [0, .311, -.032], [1.12, .09, 3.27]);
   shape(ship, box, enamel, [0, .567, -.287], [1.084, .50, 1.85]);
@@ -104,6 +120,14 @@ export function buildCityFerry(polar = false) {
     shape(ship, box, railing, [side * .601, .613, -1.449], [.026, .035, .49], side * .20);
     shape(ship, knob, cork, [side * .621, .495, -.581], [.035, .127, .123]);
     shape(ship, knob, ivory, [side * .651, .495, -.581], [.021, .065, .069]);
+    shape(ship, rescueRing, cork, [side * .617, .621, -.96], [1, 1, 1], side * Math.PI * .5);
+    shape(ship, tube, frame, [side * .34, .579, 1.24], [.071, .068, .071]);
+    shape(ship, tube, tenderLight, [side * .34, .626, 1.24], [.055, .062, .055]);
+    shape(ship, tube, brass, [side * .34, .673, 1.24], [.061, .030, .061]);
+    for (const z of [-1.55, 1.46]) {
+      shape(ship, tube, brass, [side * .314, .395, z], [.067, .12, .067]);
+      shape(ship, box, frame, [side * .316, .454, z], [.166, .038, .069]);
+    }
   }
   shape(ship, box, frame, [0, .383, 1.524], [.548, .168, .253]);
   shape(ship, tube, brass, [0, .43, -1.86], [.089, .165, .091]);
@@ -124,38 +148,60 @@ export function buildCityFerry(polar = false) {
       void main() {
         float fromHull = 1.0 - surfaceUv.y;
         float wing = abs(surfaceUv.x - .5);
-        float lap = abs(wing - (.095 + fromHull * .365));
-        float line = exp(-lap * lap * (460.0 - fromHull * 260.0));
-        float fleck = .52 + .48 * sin(clock * 3.0 - fromHull * 23.0 + sin(wing * 31.0) * .72);
-        float alpha = line * fleck * flow * pow(1.0 - fromHull, 1.8) * (1.0 - .55 * shade);
-        gl_FragColor = vec4(tint, alpha * .43);
+        float lap = abs(wing - (.072 + fromHull * .335));
+        float line = exp(-lap * lap * (540.0 - fromHull * 295.0));
+        float eddy = .5 + .5 * sin(clock * 3.8 - fromHull * 27.0 + sin(wing * 43.0) * .92);
+        float froth = .31 + .69 * smoothstep(.18, .95, eddy);
+        float churn = exp(-wing * wing * 112.0) * pow(1.0 - fromHull, 4.7) * .41;
+        float alpha = (line * froth + churn) * flow * pow(1.0 - fromHull, 1.62) * (1.0 - .52 * shade);
+        gl_FragColor = vec4(tint, alpha * .48);
         #include <colorspace_fragment>
       }
     `,
   });
-  const wake = new Mesh(new PlaneGeometry(2.24, 5.8), foam);
-  wake.rotation.x = -Math.PI / 2;
+  const strips = 12;
+  const wakeGeometry = new PlaneGeometry(1, 1, 1, strips);
+  const waterline = wakeGeometry.getAttribute('position');
+  const wake = new Mesh(wakeGeometry, foam);
+  wake.frustumCulled = false;
+  wake.renderOrder = 2;
   group.add(wake);
   return {
     group,
     update(time: number, night: number) {
-      const cycle = time ? (time / 1000 + 9) % 58 : 15;
-      const phase = cycle * Math.PI * 2 / 58;
-      const rotation = time ? time / 16800 - .63 : -.75;
-      const perimeter = ringRadius(harborHeight + 3);
-      const z = polar ? Math.cos(rotation) * perimeter : 12.3 + 7.45 * Math.sin(phase);
-      const x = polar ? Math.sin(rotation) * perimeter : .29 + .56 * Math.cos(phase + .2);
-      const heading = polar ? rotation + Math.PI / 2 : Math.atan2(-.56 * Math.sin(phase + .2), 7.45 * Math.cos(phase));
-      const rocking = time ? Math.sin(time / 1431 + .35) : 0;
-      model.position.set(x, seaLevel + rocking * .023, z);
-      model.rotation.set(rocking * .019, heading, rocking * .034);
-      wake.position.set(x - Math.sin(heading) * 4.10, seaLevel + .012, z - Math.cos(heading) * 4.10);
-      wake.rotation.set(-Math.PI / 2, 0, -heading);
+      const seconds = time / 1000;
+      const { x, z, heading, speed } = harborCourse(seconds);
+      const pitch = time ? Math.sin(seconds * 1.7 + .6) : 0;
+      const roll = time ? Math.sin(seconds * 1.19 + .18) : 0;
+      model.position.set(x, seaLevel + pitch * .018, z);
+      model.rotation.set(pitch * .013, heading, roll * .029, 'YXZ');
       wake.visible = Boolean(time);
-      foam.uniforms.clock.value = time / 1000;
-      foam.uniforms.flow.value = .64 + .31 * Math.abs(Math.cos(phase));
+      if (wake.visible) {
+        const sternDelay = 1.68 / Math.max(.80, speed);
+        for (let i = 0; i <= strips; i++) {
+          const trail = i / strips;
+          const earlier = harborCourse(seconds - sternDelay - trail * 3.70);
+          const width = Math.min(.96 + .60 * trail, Math.hypot(earlier.x, earlier.z) - outerWaterline);
+          const dx = Math.cos(earlier.heading) * width, dz = -Math.sin(earlier.heading) * width;
+          waterline.setXYZ(i * 2, earlier.x + dx, seaLevel + .009, earlier.z + dz);
+          waterline.setXYZ(i * 2 + 1, earlier.x - dx, seaLevel + .009, earlier.z - dz);
+        }
+        waterline.needsUpdate = true;
+      }
+      foam.uniforms.clock.value = seconds;
+      foam.uniforms.flow.value = Math.min(1, .41 + .36 * speed);
       foam.uniforms.shade.value = night;
       glass.emissiveIntensity = .045 + night * .72;
+      tenderLight.emissiveIntensity = .065 + night * .89;
+    },
+    dispose() {
+      wakeGeometry.dispose();
+      foam.dispose();
+      sign.map?.dispose();
+      sign.dispose();
+      glass.dispose();
+      tenderLight.dispose();
+      model.traverse(object => { if (object instanceof Mesh) object.geometry.dispose(); });
     },
   };
 }

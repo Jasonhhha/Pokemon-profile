@@ -4,10 +4,10 @@ import { maps, TILE, type FieldMap } from './field-art';
 import type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
 import { rooms } from './field-rooms';
 import { cityObstacles } from './field-city-layout';
-import { ringXDelta, wrapRingX } from './field-ring-coordinates';
+import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
 import type { Footing } from './sound';
-import { createFieldPresentation } from './field-presentation';
+import { createFieldPresentation, streetAxisMinSpan } from './field-presentation';
 import { fieldFadeDuration } from './field-renderer';
 
 export type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
@@ -58,6 +58,7 @@ type Rustle = TilePoint & { expires: number };
 const offsets: Record<Direction, TilePoint> = {
   up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
 };
+const opposite: Record<Direction, Direction> = { up: 'down', down: 'up', left: 'right', right: 'left' };
 const stepDirections = Object.keys(offsets) as Direction[];
 const keys: Record<string, Direction | undefined> = {
   ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right',
@@ -149,6 +150,7 @@ export function createField(options: FieldOptions): FieldControls {
   let facing: Direction = 'down';
   let held: Direction | null = null;
   let queued: Direction | null = null;
+  let streetInput: { screen: Direction; travel: Direction; at: number } | undefined;
   let path: TilePoint[] = [];
   let onArrival: (() => void) | undefined;
   let step: WalkStep | undefined;
@@ -221,6 +223,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function clearInput() {
+    streetInput = undefined;
     pressed.clear();
     shiftPressed = false;
     held = null;
@@ -268,7 +271,10 @@ export function createField(options: FieldOptions): FieldControls {
       return;
     }
     const sprint = running || shiftPressed;
-    step = { from: location, to: target, startedAt: time, duration: sprint ? runDuration : walkDuration, running: sprint };
+    const baseline = sprint ? runDuration : walkDuration;
+    const acrossQuay = map.wrapX && target.x !== location.x && location.y > 18;
+    const distance = acrossQuay ? Math.min(1.46, Math.sqrt(ringRadius(ringStreetRow(location.y)) / ringRadius(12))) : 1;
+    step = { from: location, to: target, startedAt: time, duration: baseline * distance, running: sprint };
   }
 
   function searchGrass(map: FieldMap, time: number) {
@@ -374,10 +380,25 @@ export function createField(options: FieldOptions): FieldControls {
     else beginStep(direction, performance.now());
   }
 
+  function streetDirection(direction: Direction): Direction {
+    if (overview || location.area !== 'harbor' || location.room) return direction;
+    const axis = direction === 'left' || direction === 'right' ? 'x' : 'y';
+    const projection = renderer.streetAxisProjection(location.x, location.y, axis);
+    const flipped = projection !== undefined && Math.abs(projection) > .0008
+      ? projection < 0 : renderer.lastUsableAxis(axis) ?? ringStreetLooksOutward(location.x, location.y);
+    const time = performance.now();
+    // A repeated tap can straddle the least legible part of a camera turn.
+    const repeat = streetInput?.screen === direction && time - streetInput.at < 410 ? streetInput : undefined;
+    const travel = repeat && projection !== undefined && Math.abs(projection) < streetAxisMinSpan
+      ? repeat.travel : flipped ? opposite[direction] : direction;
+    streetInput = { screen: direction, travel, at: time };
+    return travel;
+  }
+
   function hold(direction: Direction | null) {
     if (paused) return;
-    held = direction;
-    if (direction) move(direction);
+    held = direction && streetDirection(direction);
+    if (held) move(held);
   }
 
   function route(targets: TilePoint[], callback?: () => void) {
@@ -451,8 +472,9 @@ export function createField(options: FieldOptions): FieldControls {
     if (direction) {
       event.preventDefault();
       if (!event.repeat && !pressed.has(key)) {
-        pressed.set(key, direction);
-        move(direction);
+        const travel = streetDirection(direction);
+        pressed.set(key, travel);
+        move(travel);
       }
     } else if (key === 'e' || key === ' ' || key === 'Enter') {
       event.preventDefault();
@@ -549,7 +571,7 @@ export function createField(options: FieldOptions): FieldControls {
   canvas.addEventListener('pointercancel', pointerEnd);
   canvas.addEventListener('lostpointercapture', pointerEnd);
   const controls: FieldControls = {
-    move, hold, interact,
+    move: direction => move(streetDirection(direction)), hold, interact,
     setPaused(value) {
       paused = value;
       if (value) {

@@ -1,4 +1,4 @@
-import { cityObstacles, harborHeight, reclaimedRingQuays } from './field-city-layout';
+import { cityAlleyAt, cityCourtyardAt, cityObstacles, harborHeight, reclaimedRingQuays } from './field-city-layout';
 import type { Point } from './field-pixels';
 
 export const TILE = 16;
@@ -119,7 +119,11 @@ export function tileAt(area: FieldArea, x: number, y: number): Tile {
   if (area === 'harbor') {
     if ((x === 0 || x === width - 1) && y >= 11 && y <= 13) return 'quay';
     if (x === 37 && y >= 14 && y <= 16) return 'quay';
-    if (reclaimedRingQuays.some(([column, row, width, depth]) => x >= column && x < column + width && y >= row && y < row + depth)) return 'quay';
+    if (reclaimedRingQuays.some(([column, row, width, depth]) => x >= column && x < column + width && y >= row && y < row + depth)) {
+      if (cityCourtyardAt(x, y)?.kind === 'garden') return 'lawn';
+      if (cityAlleyAt(x, y)) return 'path';
+      return 'quay';
+    }
     if (y >= height) return 'water';
     if (y >= 11 && y <= 13 && x >= 1 && x < 7) return 'dock';
     if ((y === 7 && x >= 2 && x <= 5) || (y === 8 && x >= 2 && x <= 4)) return 'quay';

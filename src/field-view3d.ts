@@ -1,15 +1,17 @@
 import {
   ACESFilmicToneMapping, AdditiveBlending, Box3, CanvasTexture, Color, DirectionalLight, FogExp2, Group, HemisphereLight,
-  Mesh, MeshBasicMaterial, OrthographicCamera, PCFShadowMap, Plane, PlaneGeometry, PointLight, Ray, Raycaster,
+  Mesh, MeshBasicMaterial, OrthographicCamera, PCFShadowMap, PerspectiveCamera, Plane, PlaneGeometry, PointLight, Ray, Raycaster,
   RingGeometry, Scene, Sprite, SpriteMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderer, type Intersection, type Object3D,
 } from 'three';
 import { props, TILE, type FieldArea } from './field-layout';
+import { cityLighthouseSite, harborHeight } from './field-city-layout';
 import { updateCityArchitecture } from './field-city-models';
 import { buildRingArchitecture } from './field-ring-architecture';
+import { buildRingGates } from './field-ring-gates';
 import { buildRingGround } from './field-ring-ground';
-import { ringOverviewCamera, ringStreetRow } from './field-ring-coordinates';
+import { frameStreetSubject, harborAerialCamera, harborOverviewYaw, ringStreetLooksOutward, ringStreetRow } from './field-ring-coordinates';
 import { buildRingTerraces } from './field-ring-terraces';
-import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringXDelta } from './field-ring-space';
+import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringRadius, ringXDelta } from './field-ring-space';
 import { buildCityFerry } from './field-city-ferry';
 import { buildCityCrowd } from './field-city-crowd';
 import { buildCityLight } from './field-city-light';
@@ -18,7 +20,7 @@ import { buildCityStreet, type CityLamp } from './field-city-street';
 import { buildRingTransit } from './field-ring-transit';
 import { buildFieldDressing } from './field-dressing';
 import { createFieldEffects } from './field-effects';
-import { createFieldPokemon } from './field-pokemon';
+import { createFieldPokemon, type FieldSpriteLight } from './field-pokemon';
 import { buildFieldProp } from './field-models';
 import { companionPosition, fieldFadeDuration, type FieldView } from './field-renderer';
 import { buildRoomModel } from './field-room-models';
@@ -31,13 +33,35 @@ const outlooks: Record<FieldArea, readonly [number, number, number][]> = {
   summit: [[18, 12, 6], [31, 9, 5]],
 };
 const alleyAngles = [
-  [0, 0], [0, .11], [0, .21], [-.27, .14], [.27, .14], [-.38, .23], [.38, .23],
-  [0, .31], [-.56, .25], [.56, .25], [0, .43], [-.36, .47], [.36, .47], [0, .53],
-  [-.33, .58], [.33, .58], [0, .665],
+  [0, 0], [-.33, .035], [.33, .035], [-.63, .07], [.63, .07], [-.91, .12], [.91, .12],
+  [0, .17], [-.44, .21], [.44, .21], [-.75, .25], [.75, .25], [-1.10, .29], [1.10, .29],
+  [0, .36], [-.34, .43], [.34, .43], [0, .52], [-.28, .62], [.28, .62], [0, .73],
 ] as const;
+const nearAlleyAngles = [[-.82, .06], [.82, .06], [-1.13, .09], [1.13, .09], [-.5, .15], [.5, .15]] as const;
+const steepAlleyAngles = [[-.72, .83], [.72, .83], [-1.12, .83], [1.12, .83], [0, .83]] as const;
+const fieldCameraDistance = 34;
+type StreetView = { yaw: number; pitch: number; distance: number; inset: number; lateral: number };
+
+function streetDistance(compact: boolean, row: number) {
+  if (row >= 23) return compact ? 12.5 : 14.1;
+  return compact ? 14.0 : 16.1;
+}
+
+function streetCenter(column: number, row: number, compact: boolean, outward: boolean, inset = 0, lateral = 0) {
+  const lead = (compact ? .86 : 1.30) + inset;
+  const point = ringPosition(column + (outward ? -.18 : .18), row + (outward ? lead : -lead));
+  const tangent = ringAngle(column);
+  point.x += lateral * Math.cos(tangent);
+  point.z -= lateral * Math.sin(tangent);
+  return point;
+}
+
+function streetPitch(row: number, outward: boolean) {
+  return (outward ? .49 : row >= 23 ? .56 : .64) + .16 * Math.min(1, Math.max(0, (8.4 - row) / 3.9));
+}
 
 const atmospheres = {
-  harbor: { day: 0x92b8c2, night: 0x273e58, ground: 0xa7a796 },
+  harbor: { day: 0x93aeb9, night: 0x213754, ground: 0xa79680 },
   grove: { day: 0x8aa597, night: 0x303f51, ground: 0x7b9977 },
   summit: { day: 0x96a9bd, night: 0x3a4567, ground: 0x9a8b9a },
   home: { day: 0x343237, night: 0x343237, ground: 0xc9926c },
@@ -51,8 +75,10 @@ type SceneModel = ReturnType<typeof buildFieldTerrain> & {
   optics?: ReturnType<typeof buildCityLight>;
   crowd?: ReturnType<typeof buildCityCrowd>;
   reflections?: ReturnType<typeof buildCityReflections>;
+  dispose?: () => void;
   occluders?: { object: Object3D; bounds: Box3 }[];
 };
+type SpriteShade = { x: number; z: number; at: number; shaded: number };
 
 function conversationTexture(active: boolean) {
   const image = document.createElement('canvas');
@@ -142,7 +168,9 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   const scene = new Scene();
   const haze = new FogExp2(0x80acaf, .011);
   scene.fog = haze;
-  const camera = new OrthographicCamera(-1, 1, 1, -1, .1, 115);
+  const streetCamera = new OrthographicCamera(-1, 1, 1, -1, .1, 115);
+  const harborCamera = new PerspectiveCamera(35, 1, .25, 280);
+  let camera: OrthographicCamera | PerspectiveCamera = streetCamera;
   const ambient = new HemisphereLight(0xe2f4ff, 0xb2a576, 2.05);
   scene.add(ambient);
   const sun = new DirectionalLight(0xffe0af, 2.2);
@@ -151,7 +179,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   shadowCamera.left = shadowCamera.bottom = -21;
   shadowCamera.right = shadowCamera.top = 21;
   shadowCamera.near = .5;
-  shadowCamera.far = 78;
+  shadowCamera.far = 88;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -.00018;
   sun.shadow.normalBias = .021;
@@ -166,6 +194,10 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
 
   const nightSky = new Color(0x98b2fa);
   const nightLight = new Color(0xb5c8f6);
+  const aerialDay = new Color(0x9dbbcd);
+  const aerialNight = new Color(0x24395c);
+  const eveningSun = new Color(0xffb272);
+  const horizonTint = new Color();
   const shadows = Object.fromEntries(Object.entries(atmospheres).map(([key, palette]) => [key, new Color(palette.night)])) as Record<SceneKey, Color>;
   const shadowMap = radialTexture('rgba(15,24,22,.48)', 'rgba(20,30,27,.25)');
   const shadowGeometry = new PlaneGeometry(1, 1);
@@ -219,7 +251,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
 
   const actors = new Group();
   travelers.add(actors);
-  let locals: { npc: FieldView['map']['npcs'][number]; traveler: ReturnType<typeof createTraveler>; marker: Sprite }[] = [];
+  let locals: { npc: FieldView['map']['npcs'][number]; traveler: ReturnType<typeof createTraveler>; marker: Sprite; pickBounds: Box3 }[] = [];
   const cache = new Map<SceneKey, SceneModel>();
   const glow = radialTexture('rgba(255,222,152,.8)', 'rgba(255,179,79,.27)');
   const lamps: { sprite: Sprite; beacon: boolean }[] = [];
@@ -240,14 +272,17 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   let width = 0;
   let height = 0;
   let depth = 0;
+  let aerialAmount = 0;
   let aimX = 0;
   let aimZ = 0;
   let span = 12;
   let viewYaw = .26;
   let viewPitch = .70;
   let viewElevation = 0;
+  let viewDistance = fieldCameraDistance;
   let shadowX = NaN;
   let shadowZ = NaN;
+  let shadowExtent = 21;
   let needsFrame = true;
 
   const raycaster = new Raycaster();
@@ -258,11 +293,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   const obstacle = new Box3();
   const actorHit = new Vector3();
   const cameraLine = new Ray();
+  const lightLine = new Ray();
   const shadowCaster = new Raycaster();
   const hits: Intersection[] = [];
-  const viewDirection = new Vector3();
-  const alleyView = new Map<number, { yaw: number; pitch: number }>();
+  const cameraProbe = new Vector3();
+  const alleyView = new Map<number, StreetView>();
   let pinVisibility = 0;
+  const companionShade: SpriteShade = { x: 0, z: 0, at: -Infinity, shaded: 0 };
+  const guideShade: SpriteShade = { x: 0, z: 0, at: -Infinity, shaded: 0 };
 
   function pointAt(x: number, z: number, polar = key === 'harbor') {
     return polar ? ringPosition(x, z) : { x, z };
@@ -287,29 +325,73 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     });
   }
 
-  function hiddenFrom(x: number, z: number, direction: Vector3, elevation = 1.02) {
-    const range = 16;
-    cameraLine.set(actorHit.set(x, elevation, z).addScaledVector(direction, -range), direction);
-    return cityBlocksRay(cameraLine, range - .04);
+  function hiddenFrom(origin: Vector3, x: number, z: number, elevation = 1.02) {
+    cameraLine.origin.copy(origin);
+    cameraLine.direction.set(x, elevation, z).sub(origin);
+    const range = cameraLine.direction.length();
+    cameraLine.direction.divideScalar(range);
+    return cityBlocksRay(cameraLine, range - .045);
   }
 
-  function alleyCamera(column: number, row: number, yaw: number, pitch: number) {
-    const tile = row * RING_PERIOD + column;
+  function spriteLight(point: { x: number; z: number }, time: number, memory: SpriteShade): FieldSpriteLight {
+    const moved = Math.hypot(point.x - memory.x, point.z - memory.z);
+    if (darkness < .96 && (time - memory.at > 110 || moved > .47)) {
+      lightLine.origin.set(point.x, .51, point.z);
+      lightLine.direction.copy(sun.position).sub(sun.target.position).normalize();
+      memory.shaded = Number(cityBlocksRay(lightLine, 30));
+      memory.x = point.x;
+      memory.z = point.z;
+      memory.at = time;
+    }
+    let lamplight = 0;
+    for (const light of localLights) {
+      if (light.intensity < .07) continue;
+      const distance = Math.hypot(light.position.x - point.x, light.position.y - .54, light.position.z - point.z);
+      lamplight = Math.max(lamplight, Math.max(0, 1 - distance / 4.25) ** 1.4 * 1.55);
+    }
+    return { shade: memory.shaded, lamplight: Math.min(1, lamplight) };
+  }
+
+  function alleyCamera(column: number, row: number, compact: boolean, farSubject: boolean) {
+    const tile = (row * RING_PERIOD + column) * 4 + Number(compact) * 2 + Number(farSubject);
     const cached = alleyView.get(tile);
     if (cached) return cached;
-    const { x, z } = ringPosition(column + .5, ringStreetRow(row));
-    let visible: { yaw: number; pitch: number } | undefined;
-    for (const [yawBias, pitchBias] of alleyAngles) {
-      const look = yaw + yawBias, tilt = Math.min(1.47, pitch + pitchBias);
-      viewDirection.set(-Math.sin(look) * Math.cos(tilt), -Math.sin(tilt), -Math.cos(look) * Math.cos(tilt));
-      const angle = { yaw: yawBias, pitch: tilt - pitch };
-      if (!hiddenFrom(x, z, viewDirection, .26)) {
-        visible = angle;
-        break;
+    const streetRow = ringStreetRow(row);
+    const outward = ringStreetLooksOutward(column, row);
+    const yaw = ringAngle(column + .5) + (outward ? Math.PI - .26 : .27);
+    const pitch = streetPitch(streetRow, outward);
+    const { x, z } = ringPosition(column + .5, streetRow);
+    const radius = streetDistance(compact, row);
+    let partial: StreetView | undefined;
+    function choose(angles: readonly (readonly [number, number])[], distance: number, inset = 0, lateral = 0) {
+      const center = streetCenter(column + .5, streetRow, compact, outward, inset, lateral);
+      for (const [yawBias, pitchBias] of angles) {
+        const look = yaw + yawBias, tilt = Math.min(1.45, pitch + pitchBias);
+        const flat = distance * Math.cos(tilt);
+        cameraProbe.set(center.x + flat * Math.sin(look), .78 + distance * Math.sin(tilt), center.z + flat * Math.cos(look));
+        if (lateral && cache.get('harbor')?.occluders?.some(({ object, bounds }) =>
+          (object.userData.parcel || object.userData.buildingIds) && bounds.containsPoint(cameraProbe))) continue;
+        const shot = { yaw: yawBias, pitch: tilt - pitch, distance, inset, lateral };
+        const headVisible = !hiddenFrom(cameraProbe, x, z, 1.32);
+        if (headVisible && !hiddenFrom(cameraProbe, x, z, .15)) {
+          if (!lateral) return shot;
+          const sideX = Math.cos(look) * .22, sideZ = -Math.sin(look) * .22;
+          if (!hiddenFrom(cameraProbe, x + sideX, z + sideZ, .81) &&
+            !hiddenFrom(cameraProbe, x - sideX, z - sideZ, .81)) return shot;
+        }
+        if (!lateral && !partial && headVisible) partial = shot;
       }
-      if (!visible && !hiddenFrom(x, z, viewDirection)) visible = angle;
     }
-    const result = visible ?? { yaw: 0, pitch: 0 };
+    const civic = column >= 12 && column <= 13 && row >= 11 && row <= 13;
+    const salt = column >= 23 && column <= 24 && row >= 34 && row <= 35;
+    const close = !farSubject && (civic || salt);
+    const result = (close ? choose([[civic ? .57 : -.57, .44 - pitch]], compact ? 6.6 : 7.45, 0, civic ? -1.19 : 1.19) : undefined)
+      ?? choose(alleyAngles.slice(0, 7), radius)
+      ?? (row > 22 ? choose(nearAlleyAngles, radius * .73, 1.42) : undefined)
+      ?? choose(alleyAngles.slice(7), radius)
+      ?? (row > 22 ? choose(steepAlleyAngles, radius) : undefined)
+      ?? partial
+      ?? { yaw: 0, pitch: 1.445 - pitch, distance: radius, inset: 0, lateral: 0 };
     alleyView.set(tile, result);
     return result;
   }
@@ -325,36 +407,42 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         const ground = buildRingGround();
         const structures = buildRingArchitecture();
         const terraces = buildRingTerraces();
+        const gateways = buildRingGates();
         const opaque = structures.children.filter(object => object.userData.parcel || object.name === 'ring-observatory');
-        opaque.push(...terraces.group.children);
-        structures.add(terraces.group);
+        opaque.push(...terraces.group.children, ...gateways.gates);
+        structures.add(terraces.group, ...gateways.gates);
         let lighthouse: Object3D | undefined;
         const street = buildCityStreet(true);
         const transit = buildRingTransit();
-        opaque.push(transit.structure);
-        const ferry = buildCityFerry(true);
+        opaque.push(transit.structure, ...street.occluders);
+        const ferry = buildCityFerry();
         const optics = buildCityLight(street.lamps, true);
-        const crowd = buildCityCrowd(shadowMap, true);
+        const crowd = buildCityCrowd(shadowMap);
         ground.group.add(structures, street.group, transit.group, ferry.group, optics.group, crowd.group);
         for (const prop of props.harbor) {
           if (prop.kind !== 'beacon' && prop.kind !== 'boat') continue;
           const object = buildFieldProp(prop, area);
-          const point = ringPosition(prop.x + .5, prop.y + .82);
+          const point = prop.kind === 'beacon' ? ringPosition(cityLighthouseSite.x, cityLighthouseSite.z) : ringPosition(prop.x + .5, prop.y + .82);
           object.position.set(point.x, 0, point.z);
           object.rotation.y = ringAngle(prop.x + .5);
           ground.group.add(object);
-          if (prop.kind === 'beacon') { opaque.push(object); lighthouse = object; }
+          if (prop.kind === 'beacon') {
+            object.scale.set(cityLighthouseSite.widthScale, 1, cityLighthouseSite.widthScale);
+            opaque.push(object);
+            lighthouse = object;
+          }
         }
         ground.group.updateMatrixWorld(true);
         const occluders = opaque.map(object => ({ object, bounds: new Box3().setFromObject(object) }));
-        const reflections = buildCityReflections(structures, lighthouse, true);
+        const reflections = buildCityReflections(structures, lighthouse);
         ground.group.add(reflections.group);
         model = {
           group: ground.group,
           lamps: street.lamps,
           optics, crowd, occluders, reflections,
+          dispose() { ferry.dispose(); gateways.dispose(); },
           update(time, night) {
-            ground.update(time, night);
+            ground.update(time, night, aerialAmount);
             street.update(time, night);
             transit.update(time, night);
             ferry.update(time, night);
@@ -377,7 +465,9 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     }
     if (key !== sceneKey) {
       key = sceneKey;
+      renderer.shadowMap.needsUpdate = true;
       effects.reset();
+      companionShade.at = guideShade.at = -Infinity;
       pinVisibility = 0;
       partner.reset();
       sylveon.reset();
@@ -416,14 +506,17 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         base.add(traveler.model, marker);
         contact(base);
         actors.add(base);
-        return { npc, traveler, marker };
+        const pickBounds = new Box3(new Vector3(npcPoint.x - .61, 0, npcPoint.z - .61),
+          new Vector3(npcPoint.x + .61, 2.33, npcPoint.z + .61));
+        return { npc, traveler, marker, pickBounds };
       });
       lamps.length = 0;
       if (!room) {
         const positions = props[area].filter(prop => prop.kind === 'beacon' || prop.kind === 'lamp' && area !== 'harbor').map(prop => ({
           beacon: prop.kind === 'beacon',
-          ...pointAt(prop.x + .5, prop.y + 1.02),
-          height: prop.kind === 'beacon' ? area === 'summit' ? 2.85 : 3.15 : 1.53,
+          ...(area === 'harbor' && prop.kind === 'beacon'
+            ? ringPosition(cityLighthouseSite.x, cityLighthouseSite.z) : pointAt(prop.x + .5, prop.y + 1.02)),
+          height: prop.kind === 'beacon' ? area === 'summit' ? 2.85 : cityLighthouseSite.lampHeight : 1.53,
         }));
         for (const position of model.lamps ?? []) positions.push({ ...position, beacon: false });
         for (const { x, z, height, beacon } of positions) {
@@ -481,51 +574,85 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     depth += ((calm ? 0 : lookout) - depth) * lens;
     const mobile = cssWidth < 545;
     const aspect = width / height;
-    const tour = panorama ? ringOverviewCamera(aspect, mobile, view.orbitTilt) : undefined;
+    const tour = harborAerialCamera(aspect, mobile, view.orbitTilt);
+    const outward = polar && ringStreetLooksOutward(view.location.x, view.location.y);
+    const rustle = polar && !panorama ? view.rustle : undefined;
+    const reveal = rustle && Math.abs(ringXDelta(x, rustle.x + .5)) + Math.abs(z - rustle.y - .5) < 7.8
+      ? ringPosition(rustle.x + .5, rustle.y + .5) : undefined;
+    aerialAmount += ((panorama ? 1 : 0) - aerialAmount) * lens;
+    if (!polar || aerialAmount < .012) aerialAmount = 0;
     const alley = polar ? Math.min(1, Math.max(0, (8.0 - z) / 3.7)) : 0;
-    const center = panorama ? { x: 0, z: 0 } : polar
-      ? ringPosition(x + .37, z - (mobile ? 1.02 : 1.47))
-      : room ? { x: x * .42 + 12.1 * .58, z: z * .26 + 8.85 * .74 }
-      : { x: x - 1.03, z: z - (mobile ? 1.61 : 2.48) };
-    aimX += (center.x - aimX) * pan;
-    aimZ += (center.z - aimZ) * pan;
-
-    const goalSpan = tour ? tour.span
-      : polar ? (mobile ? 8.82 : 9.47) + 1.9 * depth + .73 * alley
-      : room ? (mobile ? 10.7 : 12.0)
-      : (mobile ? 10.45 : aspect > 2.6 ? 10.8 : 12.85) + depth * 2.92;
-    let yaw = panorama ? .16 + view.orbitOffset + (calm ? 0 : time / 35000)
-      : polar ? ringAngle(x) + .28 - .14 * depth : room ? .12 : .33 - .16 * depth;
-    let pitch = tour ? tour.pitch
-      : polar ? .805 + .075 * alley - .080 * depth : room ? .92 : .79 - .08 * depth;
-    if (!panorama && polar && (alley > 0 || view.location.y >= 16)) {
-      const bias = alleyCamera(view.location.x, view.location.y, yaw, pitch);
+    let yaw = panorama ? harborOverviewYaw + view.orbitOffset + (calm ? 0 : Math.sin(time / 8300) * .09)
+      : polar ? ringAngle(x) + (outward ? Math.PI - .26 : .27) - .08 * depth : room ? .12 : .33 - .16 * depth;
+    let pitch = panorama ? tour.pitch
+      : polar ? streetPitch(z, outward) - .045 * depth : room ? .92 : .79 - .08 * depth;
+    const bias = !panorama && polar ? alleyCamera(view.location.x, view.location.y, mobile, Boolean(reveal)) : undefined;
+    if (bias) {
       yaw += bias.yaw;
       pitch += bias.pitch;
     }
-    const elevation = tour ? tour.elevation : polar ? .67 - .37 * alley : 0;
-    span += (goalSpan - span) * lens;
     const turn = Math.atan2(Math.sin(yaw - viewYaw), Math.cos(yaw - viewYaw));
     viewYaw += turn * lens;
-    viewPitch += (pitch - viewPitch) * lens;
+    const turning = polar && !panorama && !calm && lens < 1 ? Math.min(.45, Math.max(0, (Math.abs(turn) - 1.05) * .26)) : 0;
+    viewPitch += (Math.min(1.45, pitch + turning) - viewPitch) * lens;
+    const center = panorama ? { x: Math.sin(viewYaw) * tour.advance, z: Math.cos(viewYaw) * tour.advance } : polar
+      ? streetCenter(x, z, mobile, outward, bias?.inset, bias?.lateral)
+      : room ? { x: x * .42 + 12.1 * .58, z: z * .26 + 8.85 * .74 }
+      : { x: x - 1.03, z: z - (mobile ? 1.61 : 2.48) };
+    if (reveal) {
+      center.x += (reveal.x - center.x) * .24;
+      center.z += (reveal.z - center.z) * .24;
+    }
+    aimX += (center.x - aimX) * pan;
+    aimZ += (center.z - aimZ) * pan;
+
+    const goalSpan = panorama ? tour.span
+      : polar ? (mobile ? 7.45 : 8.56) + 1.70 * depth + .62 * alley
+      : room ? (mobile ? 10.7 : 12.0)
+      : (mobile ? 10.45 : aspect > 2.6 ? 10.8 : 12.85) + depth * 2.92;
+    const elevation = panorama ? tour.elevation : polar ? .78 : 0;
+    span += (goalSpan - span) * lens;
     viewElevation += (elevation - viewElevation) * lens;
-    const radius = panorama ? 43 : 34;
+    const distance = panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
+    viewDistance += (distance - viewDistance) * lens;
+    const radius = viewDistance;
+    if (reveal) {
+      const feet = ringPosition(x, z);
+      const markerSpan = frameStreetSubject(reveal.x - aimX, reveal.z - aimZ, .30 - viewElevation, viewYaw, viewPitch, aspect, radius);
+      const playerSpan = frameStreetSubject(feet.x - aimX, feet.z - aimZ, .70 - viewElevation, viewYaw, viewPitch, aspect, radius);
+      span = Math.max(span, markerSpan, playerSpan);
+    }
+    camera = polar ? harborCamera : streetCamera;
     camera.position.set(aimX + radius * Math.cos(viewPitch) * Math.sin(viewYaw),
       viewElevation + radius * Math.sin(viewPitch), aimZ + radius * Math.cos(viewPitch) * Math.cos(viewYaw));
     camera.lookAt(aimX, viewElevation, aimZ);
-    camera.left = -span * aspect / 2;
-    camera.right = span * aspect / 2;
-    camera.top = span / 2;
-    camera.bottom = -span / 2;
+    if (polar) {
+      harborCamera.aspect = aspect;
+      harborCamera.fov = Math.atan(span / (2 * radius)) * 360 / Math.PI;
+      harborCamera.near = Math.max(.25, radius * .032);
+      harborCamera.far = radius + 230;
+    } else {
+      streetCamera.left = -span * aspect / 2;
+      streetCamera.right = span * aspect / 2;
+      streetCamera.top = span / 2;
+      streetCamera.bottom = -span / 2;
+    }
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
 
-    const viewportX = polar ? 0 : Math.round(aimX / 5) * 5;
-    const viewportZ = polar ? 0 : Math.round(aimZ / 5) * 5;
-    if (viewportX !== shadowX || viewportZ !== shadowZ) {
+    const entireCity = polar && aerialAmount > .42;
+    const grid = polar ? 6 : 5;
+    const viewportX = entireCity ? 0 : Math.round(aimX / grid) * grid;
+    const viewportZ = entireCity ? 0 : Math.round(aimZ / grid) * grid;
+    const extent = entireCity ? ringRadius(harborHeight + 2) * 1.21 : polar ? (mobile ? 12.4 : 14.8) : 21;
+    if (viewportX !== shadowX || viewportZ !== shadowZ || extent !== shadowExtent) {
       shadowX = viewportX;
       shadowZ = viewportZ;
-      sun.position.set(shadowX - (polar ? 15 : 12), polar ? 21 : 24, shadowZ + (polar ? 12 : -7));
+      shadowExtent = extent;
+      shadowCamera.left = shadowCamera.bottom = -extent;
+      shadowCamera.right = shadowCamera.top = extent;
+      shadowCamera.updateProjectionMatrix();
+      sun.position.set(shadowX - (polar ? 19.4 : 12), polar ? 19.2 : 24, shadowZ + (polar ? 20.8 : -7));
       sun.target.position.set(shadowX, 0, shadowZ);
       renderer.shadowMap.needsUpdate = true;
     }
@@ -543,6 +670,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const responsive = time - lastActivity < 260 && renderCost < 12.5 && !reducedMotion.matches;
     if (!needsFrame && !sceneChanged && time - lastRender < (responsive ? 14 : 28)) return;
     const drawStarted = performance.now();
+    const frameTime = Math.min(70, Math.max(0, time - lastRender));
     lastRender = time;
     needsFrame = false;
     const model = source(view);
@@ -588,23 +716,30 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     });
 
     const target = !location.room && view.night ? 1 : 0;
-    darkness = sceneChanged || reducedMotion.matches ? target : darkness + (target - darkness) * .14;
+    const twilight = polar ? 1 - Math.exp(-frameTime / 235) : .14;
+    darkness = sceneChanged || reducedMotion.matches ? target : darkness + (target - darkness) * twilight;
+    aim(view, x, z, time);
     const sky = atmospheres[sceneKey];
     haze.color.setHex(sky.day).lerp(shadows[sceneKey], darkness);
+    haze.color.lerp(horizonTint.copy(aerialDay).lerp(aerialNight, darkness), aerialAmount);
     const city = polar;
-    haze.density = location.room ? .002 : city ? .0088 + darkness * .0017 : .0105;
-    ambient.color.setHex(0xe7f3ff).lerp(nightSky, darkness);
+    const streetHaze = .253 + darkness * .073;
+    const aerialHaze = .245 + darkness * .093;
+    haze.density = location.room ? .002 : city ? (streetHaze + (aerialHaze - streetHaze) * aerialAmount) / viewDistance : .0105;
+    ambient.color.setHex(city ? 0xd4e5ff : 0xe7f3ff).lerp(nightSky, darkness);
     ambient.groundColor.setHex(sky.ground);
-    ambient.intensity = city ? 1.37 + darkness * .02 : 1.72 - darkness * .25;
-    sun.color.setHex(city ? 0xffdfba : 0xffe3b8).lerp(nightLight, darkness);
-    sun.intensity = (city ? 2.62 : 2.26) - darkness * (city ? 2.12 : 1.73);
-    sun.shadow.intensity = city ? .83 - darkness * .07 : .76;
-    renderer.toneMappingExposure = 1.045 - darkness * .21;
+    ambient.intensity = city ? 1.06 + darkness * .28 : 1.72 - darkness * .25;
+    sun.color.setHex(city ? 0xffd5a6 : 0xffe3b8).lerp(nightLight, darkness);
+    if (city) sun.color.lerp(eveningSun, darkness * (1 - darkness) * 1.27);
+    sun.intensity = (city ? 3.0 : 2.26) - darkness * (city ? 2.53 : 1.73);
+    sun.shadow.intensity = city ? .93 - darkness * .15 : .76;
+    renderer.toneMappingExposure = (city ? 1.02 : 1.045) - darkness * .21;
     renderer.setClearColor(haze.color);
     scene.environmentIntensity = city ? .31 - darkness * .22 : 1;
-    for (const { sprite, beacon } of lamps) {
+    for (const [index, { sprite, beacon }] of lamps.entries()) {
       const activeBeacon = beacon && (location.area !== 'summit' || view.beaconLit);
-      sprite.material.opacity = activeBeacon ? Math.max(.24, darkness * .87) : beacon ? 0 : darkness * .81;
+      const flicker = city && !reduced ? .96 + .04 * Math.sin(time * .0071 + index * 2.62) : 1;
+      sprite.material.opacity = activeBeacon ? Math.max(.24, darkness * .87) : beacon ? 0 : darkness * (city ? .76 * flicker : .81);
       sprite.visible = sprite.material.opacity > .04;
     }
     const nearbyLights = darkness > .015 && !location.room
@@ -614,15 +749,17 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       : [];
     localLights.forEach((light, index) => {
       const lamp = nearbyLights[index];
-      light.intensity = lamp ? darkness * (city ? 11.5 : 8.4) : 0;
-      if (lamp) light.position.copy(lamp.sprite.position);
+      light.intensity = lamp ? darkness * (city ? 7.4 : 8.4) : 0;
+      if (lamp) {
+        light.position.copy(lamp.sprite.position);
+        if (city) light.position.y -= .34;
+      }
     });
     model.update(reduced ? 0 : time, darkness);
     model.crowd?.update(time, x, z, reduced, cssWidth < 545, view.overview);
     effects.update(time, view, heroPosition.x, heroPosition.z, progress, darkness, width / cssWidth, reduced);
-    aim(view, x, z, time);
     const obscured = model.occluders && !view.overview &&
-      hiddenFrom(heroPosition.x, heroPosition.z, camera.getWorldDirection(viewDirection)) ? 1 : 0;
+      hiddenFrom(camera.position, heroPosition.x, heroPosition.z) ? 1 : 0;
     pinVisibility = reduced ? obscured : pinVisibility + (obscured - pinVisibility) * .27;
     pin.visible = pinVisibility > .06;
     pin.material.opacity = pinVisibility * .9;
@@ -634,14 +771,17 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       const position = pointAt(guide.x + 1.23, guide.y + .98);
       sylveon.update(view.sylveon, {
         ...position, time, reduced, camera, night: darkness, lookX: guideTarget.x, lookZ: guideTarget.z, guided: true,
+        lighting: polar ? spriteLight(position, time, guideShade) : undefined,
       });
     } else {
       sylveon.root.visible = false;
     }
     const pet = companionPosition(view, progress);
+    const petPoint = pointAt(pet.x + .5, polar ? ringStreetRow(pet.y) : pet.y + .875);
     partner.update(companionImage, {
-      ...pointAt(pet.x + .5, polar ? ringStreetRow(pet.y) : pet.y + .875), camera, time, reduced, night: darkness, passing: pet.passing,
+      ...petPoint, camera, time, reduced, night: darkness, passing: pet.passing,
       lookX: visibleTarget.x, lookZ: visibleTarget.z, id: view.companionId, sprint: step?.running,
+      lighting: polar && companionImage ? spriteLight(petPoint, time, companionShade) : undefined,
     });
     model.reflections?.update(renderer, camera, time, darkness, {
       mobile: cssWidth < 550, reducedMotion: reduced, enabled: renderCost < 16 || !step,
@@ -674,11 +814,23 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const radius = cssWidth < 550 ? .49 : .42;
     let nearest: FieldView['map']['npcs'][number] | undefined;
     let best = Infinity;
-    for (const actor of candidates) {
+    for (const { npc: actor, traveler, marker, pickBounds } of locals) {
+      if (!candidates.includes(actor)) continue;
       const center = pointAt(actor.x + .5, actor.y + .875);
-      obstacle.min.set(center.x - radius, .02, center.z - radius);
-      obstacle.max.set(center.x + radius, 2.11, center.z + radius);
-      let inside = ray.intersectBox(obstacle, actorHit);
+      let inside: Vector3 | null = null;
+      if (key === 'harbor') {
+        if (ray.intersectsBox(pickBounds)) {
+          // Mobile target padding should not turn the cobbles in front of a person into a doorway.
+          hits.length = 0;
+          raycaster.intersectObject(traveler.model, true, hits);
+          if (marker.visible) raycaster.intersectObject(marker, false, hits);
+          inside = hits[0]?.point ?? null;
+        }
+      } else {
+        obstacle.min.set(center.x - radius, .02, center.z - radius);
+        obstacle.max.set(center.x + radius, 2.11, center.z + radius);
+        inside = ray.intersectBox(obstacle, actorHit);
+      }
       let entry: string | undefined;
       if (!inside && doorway(actor)) {
         const door = pointAt(actor.x + .5, actor.y - .075);
@@ -688,7 +840,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         if (actor.event === 'about') entry = 'archive';
       }
       if (!inside) continue;
-      const depth = ray.origin.distanceTo(actorHit);
+      const depth = ray.origin.distanceTo(inside);
       if (depth < best && !cityBlocksRay(ray, depth - .033, entry)) {
         best = depth;
         nearest = actor;
@@ -719,15 +871,18 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     ring.material.dispose();
     dotGeometry.dispose();
     dotMaterial.dispose();
-    cache.forEach(model => { model.optics?.dispose(); model.crowd?.dispose(); model.reflections?.dispose(); });
+    cache.forEach(model => { model.optics?.dispose(); model.crowd?.dispose(); model.reflections?.dispose(); model.dispose?.(); });
     renderer.dispose();
     renderer.forceContextLoss();
+    world.clear();
+    scene.clear();
     cache.clear();
   }
 
   return {
     surface, draw, resize, projectPoint, pointInWorld, hitActor, destroy,
     resetCamera: () => { previousTime = 0; needsFrame = true; },
+    hasStreetFrame: () => key === 'harbor' && !previousOverview && width > 0 && height > 0,
     getCamera: () => ({ x: aimX * TILE, y: aimZ * TILE, scale: height / (span * TILE), depth, width, height }),
   };
 }

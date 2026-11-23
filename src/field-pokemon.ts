@@ -2,22 +2,9 @@ import {
   CanvasTexture, Color, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter,
   PlaneGeometry, SRGBColorSpace, Vector3, type Camera, type Texture,
 } from 'three';
-import type { CreatureId } from './creatures';
+import { creatureGaits, type FieldCreature } from './field-creature-motion';
 
-type Walker = CreatureId | 'sylveon';
-type Gait = { height: number; pace: number; bounce: number; sway: number; airborne: number; flex: number; leg: number; sourceFacing: number };
-
-const profiles: Record<Walker, Gait> = {
-  piplup: { height: .89, pace: 2.1, bounce: .113, sway: .118, airborne: 0, flex: .70, leg: 0.31, sourceFacing: -1 },
-  starly: { height: .86, pace: 1.7, bounce: .186, sway: .068, airborne: .0, flex: .81, leg: 0.37, sourceFacing: -1 },
-  shinx: { height: .84, pace: 2.5, bounce: .084, sway: .068, airborne: 0, flex: 1, leg: 0.41, sourceFacing: -1 },
-  buizel: { height: .99, pace: 2.45, bounce: .113, sway: .075, airborne: 0, flex: 1.11, leg: 0.46, sourceFacing: -1 },
-  drifloon: { height: .98, pace: 1.20, bounce: .083, sway: .122, airborne: .34, flex: 1.31, leg: 0.56, sourceFacing: 1 },
-  riolu: { height: 1.03, pace: 2.20, bounce: .130, sway: .063, airborne: 0, flex: .89, leg: 0.44, sourceFacing: -1 },
-  gible: { height: 1.02, pace: 1.66, bounce: .111, sway: .111, airborne: 0, flex: .55, leg: 0.29, sourceFacing: -1 },
-  snover: { height: 1.11, pace: 1.52, bounce: .067, sway: .075, airborne: 0, flex: .85, leg: 0.35, sourceFacing: -1 },
-  sylveon: { height: 1.05, pace: 1.86, bounce: .104, sway: .06, airborne: 0, flex: 1.22, leg: 0.39, sourceFacing: -1 },
-};
+export type FieldSpriteLight = { shade: number; lamplight: number };
 
 export function createFieldPokemon(shadowMap: Texture) {
   const geometry = new PlaneGeometry(1, 1, 10, 13);
@@ -26,7 +13,10 @@ export function createFieldPokemon(shadowMap: Texture) {
   footprint.rotateX(-Math.PI / 2);
   const textures = new Map<HTMLCanvasElement, CanvasTexture>();
   const sky = new Color(0xb2c8ec);
+  const shadeColor = new Color(0xabc2d9);
+  const lampColor = new Color(0xffcf93);
   const right = new Vector3();
+  const planeNormal = new Vector3();
 
   function textureFor(image: HTMLCanvasElement) {
     let texture = textures.get(image);
@@ -40,7 +30,7 @@ export function createFieldPokemon(shadowMap: Texture) {
     return texture;
   }
 
-  function actor(defaultId: Walker) {
+  function actor(defaultId: FieldCreature) {
     const root = new Group();
     const shadow = new Mesh(footprint, new MeshBasicMaterial({
       map: shadowMap, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, toneMapped: false,
@@ -96,22 +86,25 @@ export function createFieldPokemon(shadowMap: Texture) {
     let z = 0;
     let targetX = 0;
     let targetZ = 0;
-    let heading = profiles[defaultId].sourceFacing;
+    let heading = creatureGaits[defaultId].sourceFacing;
     let headingTarget = heading;
     let energy = 0;
     let passingLift = 0;
     let steps = .11;
     let gaitAngle = 0;
     let ready = false;
+    let shade = 0;
+    let lamplight = 0;
 
     function update(image: HTMLCanvasElement | undefined, position: {
       x: number; z: number; lookX: number; lookZ: number; time: number; reduced: boolean; night: number;
-      camera: Camera; id?: Walker; guided?: boolean; sprint?: boolean; passing?: number;
+      camera: Camera; id?: FieldCreature; guided?: boolean; sprint?: boolean; passing?: number;
+      lighting?: FieldSpriteLight;
     }) {
       root.visible = Boolean(image);
       if (!image) return;
       const { time, reduced, camera, night, lookX, lookZ } = position;
-      const profile = profiles[position.id ?? defaultId];
+      const profile = creatureGaits[position.id ?? defaultId];
       const map = textureFor(image);
       if (paint.map !== map) {
         paint.map = map;
@@ -163,6 +156,10 @@ export function createFieldPokemon(shadowMap: Texture) {
       root.position.set(x, 0, z);
       sprite.position.y = .054 + Math.max(-.017, airborne + lift);
       sprite.quaternion.copy(camera.quaternion);
+      if (position.lighting) {
+        planeNormal.set(0, 0, 1).applyQuaternion(camera.quaternion);
+        sprite.rotateX(Math.asin(Math.min(1, Math.max(-1, planeNormal.y))) * .24);
+      }
       sprite.rotateZ(reduced ? 0 : Math.sin(angle) * profile.sway * energy +
         Math.sin(idle) * (floating ? .078 : .020) + (headingTarget - heading) * -.045);
       const width = profile.height * image.width / image.height;
@@ -175,7 +172,15 @@ export function createFieldPokemon(shadowMap: Texture) {
       flex.uBreedLean.value = reduced ? 0 : profile.flex * (Math.sin(idle * 1.34) * .025 + Math.sin(angle + .6) * .041 * energy);
       flex.uStride.value = (Math.sin(angle) || 0) * .115 * energy * profile.flex;
       flex.uBreath.value = reduced ? 0 : Math.sin(idle * 1.83) * (floating ? .014 : .021);
+      const lightEase = snap ? 1 : 1 - Math.exp(-elapsed / 92);
+      shade += ((position.lighting?.shade ?? 0) - shade) * lightEase;
+      lamplight += ((position.lighting?.lamplight ?? 0) - lamplight) * lightEase;
       paint.color.setHex(0xffffff).lerp(sky, night * .78);
+      if (position.lighting) {
+        paint.color.lerp(shadeColor, shade * (1 - night) * .68);
+        paint.color.lerp(lampColor, lamplight * night * .56);
+        paint.color.multiplyScalar(1 - .245 * shade * (1 - night) - night * (.43 - lamplight * .31));
+      }
 
       const shadowHeight = Math.max(0, airborne) + lift;
       shadow.scale.set(Math.max(.64, width * 1.23) * (1 + shadowHeight * .37), 1, .65 + shadowHeight * .43);

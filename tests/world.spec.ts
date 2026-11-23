@@ -81,12 +81,16 @@ test('a pre-city save inside a new building moves to the nearest sidewalk', asyn
   await expect.poll(() => position(page)).toEqual(relocated);
 });
 
-test('tapping the city guide hits the 3D actor and routes to a conversation', async ({ page }) => {
+test('tapping the city guide from the street hits the 3D actor and routes to a conversation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await ready(page);
   const canvas = field(page).locator('canvas');
   const available = await page.evaluate(() => Boolean(document.createElement('canvas').getContext('webgl2')));
   test.skip(!available, 'This browser has no available WebGL context');
   await expect(canvas).toHaveAttribute('data-renderer', 'webgl');
+  const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);
+  await page.getByRole('button', { name: '返回街道', exact: true }).click();
+  await page.waitForFunction(scale => (window as FieldWindow).__field!.getCamera().scale > scale * 1.6, overviewScale);
   const target = await canvas.evaluate(element => {
     const world = (window as FieldWindow).__field!;
     const position = world.projectPoint(14 * 16 + 8, 12 * 16 + 14);
@@ -98,6 +102,47 @@ test('tapping the city guide hits the 3D actor and routes to a conversation', as
   await expect(page.getByRole('group', { name: '与韩怡萱的对话' })).toBeVisible();
   await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 13, y: 12 });
 });
+
+for (const renderer of ['webgl', 'canvas2d'] as const) {
+  test(`Archive touch in ${renderer} distinguishes the cobbles from the entrance`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(renderer => {
+        localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 9, y: 11 } }));
+        if (renderer === 'canvas2d') {
+          const canvas = HTMLCanvasElement.prototype;
+          canvas.getContext = new Proxy(canvas.getContext, {
+            apply: (target, self, args) => /^(webgl|experimental-webgl)/.test(args[0]) ? null : Reflect.apply(target, self, args),
+          });
+        }
+      }, renderer);
+      await ready(page);
+      const canvas = field(page).locator('canvas');
+      test.skip(renderer === 'webgl' && await canvas.getAttribute('data-renderer') !== 'webgl', 'This browser has no available WebGL context');
+      await expect(canvas).toHaveAttribute('data-renderer', renderer);
+      const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);
+      await page.getByRole('button', { name: '返回街道', exact: true }).tap();
+      await page.waitForFunction(scale => (window as FieldWindow).__field!.getCamera().scale > scale * 1.6, overviewScale);
+      const tapPoint = async (column: number, row: number, height = 0) => {
+        const target = await canvas.evaluate((element, { column, row, height }) => {
+          const world = (window as FieldWindow).__field!;
+          const { width, height: frameHeight, scale } = world.getCamera();
+          const point = world.projectPoint(column * 16, row * 16);
+          const bounds = element.getBoundingClientRect();
+          return { x: bounds.x + bounds.width * point.x / width, y: bounds.y + bounds.height * (point.y - height * scale) / frameHeight };
+        }, { column, row, height });
+        await page.touchscreen.tap(target.x, target.y);
+      };
+      await tapPoint(10.2, 11.2);
+      await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 10, y: 11 });
+      await tapPoint(10.5, 9.925, 13);
+      await expect(page.locator('.game-viewport')).toHaveAttribute('data-room', 'home');
+    } finally {
+      await context.close();
+    }
+  });
+}
 
 test('a roof tap does not route through the city to invisible pavement', async ({ page }) => {
   await ready(page);
@@ -176,6 +221,47 @@ test('the city has a connected network of sidewalks and all three tall-grass are
     return { unreachable, lighthouse: seen.has('3,7'), stationPark: seen.has('34,5') };
   });
   expect(outside).toEqual({ unreachable: [], lighthouse: true, stationPark: true });
+});
+
+test('the outer quay has a walkable dogleg into the lock courtyard', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 10, y: 28 } }));
+  });
+  await ready(page);
+  await field(page).focus();
+  await step(page, 'Down', 5);
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 10, y: 33 });
+  await page.keyboard.press('ArrowDown');
+  await step(page, 'Left');
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 9, y: 33 });
+  await step(page, 'Down', 2);
+  await step(page, 'Left', 3);
+  await step(page, 'Down', 3);
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 6, y: 38 });
+  await page.keyboard.press('ArrowLeft');
+  await step(page, 'Down');
+  await step(page, 'Left', 2);
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 4, y: 39 });
+  await expect(page.locator('.map-district')).toHaveText('西闸仓院');
+});
+
+test('street controls follow the view inside an outward-facing shop court', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 14, y: 33 } }));
+  });
+  await ready(page);
+  await page.getByRole('button', { name: '返回街道', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const { projectPoint } = (window as FieldWindow).__field!;
+    return projectPoint(15.5 * 16, 33.5 * 16).x < projectPoint(14.5 * 16, 33.5 * 16).x;
+  })).toBe(true);
+  await field(page).focus();
+  await step(page, 'Left');
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 15, y: 33 });
+  await step(page, 'Right');
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 14, y: 33 });
 });
 
 test('the ring has fifty individually modeled street buildings', async ({ page }) => {
@@ -325,7 +411,8 @@ test('WebGL renders at the viewport resolution and falls back after context loss
   expect(dimensions.pixels).toBeGreaterThanOrEqual(Math.floor(dimensions.layout));
   await page.evaluate(() => (window as Window & { loseFieldGraphics: () => void }).loseFieldGraphics());
   await expect(canvas).toHaveAttribute('data-renderer', 'canvas2d');
-  await clickTile(page, 11, 5);
+  await page.waitForFunction(() => (window as FieldWindow).__field!.getCamera().width > 356);
+  await clickTile(page, 10, 8);
   await expect(page.locator('.game-hint')).toContainText('这里无法通行');
   expect(await position(page)).toEqual({ area: 'harbor', x: 12, y: 12 });
   const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);

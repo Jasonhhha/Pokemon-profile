@@ -1,5 +1,5 @@
 import {
-  BoxGeometry, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, RingGeometry,
+  BoxGeometry, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, RingGeometry, Vector3,
   type Material,
 } from 'three';
 import { cityTransit, cityViaductPiers } from './field-city-layout';
@@ -7,14 +7,18 @@ import { buildCityCarriages } from './field-city-transit';
 import { batchStaticMeshes } from './field-mesh-batch';
 import { RING_PERIOD, ringAngle, ringPosition, ringRadius } from './field-ring-space';
 
-const dark = new MeshStandardMaterial({ color: 0x304b56, roughness: .68, metalness: .28, side: DoubleSide });
-const upper = new MeshStandardMaterial({ color: 0x718287, roughness: .65, metalness: .23 });
-const steel = new MeshStandardMaterial({ color: 0xadb6ae, roughness: .40, metalness: .42 });
-const brass = new MeshStandardMaterial({ color: 0xc09a68, roughness: .45, metalness: .41 });
+const dark = new MeshStandardMaterial({ color: 0x30494d, roughness: .68, metalness: .28, side: DoubleSide });
+const upper = new MeshStandardMaterial({ color: 0x697a7b, roughness: .69, metalness: .23 });
+const steel = new MeshStandardMaterial({ color: 0xa1aaa6, roughness: .42, metalness: .47 });
+const brass = new MeshStandardMaterial({ color: 0xb18c5f, roughness: .51, metalness: .40 });
+const paintedIron = new MeshStandardMaterial({ color: 0x4b675d, roughness: .59, metalness: .32 });
+const mortar = new MeshStandardMaterial({ color: 0x92816c, roughness: .91 });
 const column = new MeshStandardMaterial({ color: 0xb9aa91, roughness: .88 });
 const coping = new MeshStandardMaterial({ color: 0xd8c7a5, roughness: .78 });
 const tile = new BoxGeometry(1, 1, 1);
 const cylinder = new CylinderGeometry(1, 1, 1, 12);
+const up = new Vector3(0, 1, 0);
+const arrow = new Vector3();
 
 function ribbon(root: Group, at: number, radius: number, width: number, material: Material) {
   const geometry = new RingGeometry(radius - width / 2, radius + width / 2, 160);
@@ -40,38 +44,86 @@ function piece(group: Group, position: { x: number; z: number }, y: number, scal
   return mesh;
 }
 
+function strut(group: Group, a: Vector3, b: Vector3, width: number, depth: number, finish: Material) {
+  arrow.copy(b).sub(a);
+  const length = arrow.length();
+  const member = new Mesh(tile, finish);
+  member.position.copy(a).addScaledVector(arrow, .5);
+  member.quaternion.setFromUnitVectors(up, arrow.normalize());
+  member.scale.set(width, length + .012, depth);
+  group.add(member);
+}
+
+function spanBraces(base: Group, posts: number[]) {
+  const { railZ, railHeight } = cityTransit;
+  const archPoint = (start: number, end: number, progress: number, side: number, y: number) => {
+    const inset = Math.sin(Math.PI * progress) * .53 + .37;
+    const point = ringPosition(start + (end - start) * progress, railZ + side * inset);
+    return new Vector3(point.x, y, point.z);
+  };
+  for (let index = 0; index < posts.length; index++) {
+    const start = posts[index], end = posts.at(index + 1) ?? posts[0] + RING_PERIOD;
+    for (const side of [-1, 1]) {
+      const points = Array.from({ length: 11 }, (_, step) => {
+        const progress = step / 10;
+        return archPoint(start, end, progress, side, railHeight - 1.02 + .65 * Math.sin(Math.PI * progress));
+      });
+      for (let j = 1; j < points.length; j++) strut(base, points[j - 1], points[j], .071, .061, paintedIron);
+      for (const at of [2, 4, 6, 8]) {
+        const foot = points[at];
+        const head = archPoint(start, end, at / 10, side, railHeight - .215);
+        strut(base, foot, head, .034, .039, dark);
+        piece(base, foot, foot.y, [.062, .038, .065], brass, 0, true);
+      }
+    }
+  }
+}
+
 function structure() {
   const base = new Group();
   const { railZ, railHeight } = cityTransit;
   const radius = ringRadius(railZ);
-  ribbon(base, railHeight - .146, radius, 1.12, dark);
-  ribbon(base, railHeight, radius, .995, upper);
   for (const side of [-1, 1]) {
+    ribbon(base, railHeight - .146, radius + side * .404, .221, dark);
+    ribbon(base, railHeight - .033, radius + side * .405, .183, upper);
     fascia(base, radius + side * .549, railHeight - .193, .305, dark);
     ribbon(base, railHeight - .084, radius + side * .512, .062, brass);
     ribbon(base, railHeight + .05, radius + side * .208, .055, steel);
+    fascia(base, radius + side * .208, railHeight + .016, .052, dark);
     fascia(base, radius + side * .49, railHeight + .163, .031, steel);
   }
   for (let i = 0; i < 156; i++) {
     const x = i / 156 * RING_PERIOD;
     const theta = ringAngle(x);
     const center = ringPosition(x, railZ);
-    piece(base, center, railHeight + .017, [.071, .047, .80], dark, theta);
+    piece(base, center, railHeight + .006, [.083, .060, .94], dark, theta);
     if (i % 2) continue;
     for (const side of [-1, 1]) {
       const stanchion = ringPosition(x, railZ + side * 1.02);
       piece(base, stanchion, railHeight + .070, [.032, .211, .045], dark, theta);
     }
   }
-  for (const x of [1.18, 4.65, ...cityViaductPiers, 36.10, 39.1]) {
+  const piers = [1.18, 4.65, ...cityViaductPiers, 36.10, 39.1];
+  for (const x of piers) {
     const point = ringPosition(x, railZ);
     const yaw = ringAngle(x);
     piece(base, point, -.34, [.34, .99, .33], column, yaw, true);
+    piece(base, point, -.047, [.363, .073, .355], mortar, yaw, true);
     piece(base, point, .14, [.36, .20, .37], coping, yaw, true);
-    piece(base, point, railHeight * .5, [.155, railHeight - .32, .157], dark, yaw, true);
-    piece(base, point, railHeight - .40, [.275, .21, .31], brass, yaw, true);
+    piece(base, point, .274, [.25, .153, .244], column, yaw, true);
+    piece(base, point, .39, [.197, .087, .193], paintedIron, yaw, true);
+    piece(base, point, railHeight * .50, [.164, railHeight - .35, .161], paintedIron, yaw, true);
+    piece(base, point, railHeight - 1.04, [.209, .088, .204], dark, yaw, true);
+    piece(base, point, railHeight - .54, [.227, .115, .23], paintedIron, yaw, true);
+    piece(base, point, railHeight - .40, [.275, .183, .31], brass, yaw, true);
     piece(base, point, railHeight - .24, [.65, .155, .72], dark, yaw);
+    for (const side of [-1, 1]) {
+      const foot = ringPosition(x, railZ + side * .22);
+      const head = ringPosition(x, railZ + side * .94);
+      strut(base, new Vector3(foot.x, railHeight - .91, foot.z), new Vector3(head.x, railHeight - .31, head.z), .14, .12, paintedIron);
+    }
   }
+  spanBraces(base, piers);
 
   const station = ringPosition(29.55, railZ + 1.18);
   const stationHeading = ringAngle(29.55);

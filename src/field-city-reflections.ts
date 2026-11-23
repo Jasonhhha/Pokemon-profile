@@ -1,17 +1,47 @@
 import {
   Box3, Color, DirectionalLight, Frustum, Group, HemisphereLight, LinearFilter,
   Matrix4, Mesh, PlaneGeometry, Scene, ShaderMaterial, UniformsLib, UniformsUtils,
-  Vector2, Vector3, WebGLRenderTarget, type Object3D, type OrthographicCamera, type WebGLRenderer,
+  Vector2, Vector3, WebGLRenderTarget, type Camera, type Object3D, type WebGLRenderer,
 } from 'three';
+import { harborHeight } from './field-city-layout';
+import { tileAt } from './field-layout';
+import { RING_PERIOD, ringPosition, ringRadius } from './field-ring-coordinates';
 
 type ReflectionOptions = { enabled?: boolean; reducedMotion?: boolean; mobile?: boolean };
 
 const waterLine = -.58;
-const visibleWater = [
-  new Box3(new Vector3(-5, -.61, -5), new Vector3(7.2, -.55, 29)),
-  new Box3(new Vector3(33.5, -.61, -7), new Vector3(50, -.55, 28)),
-  new Box3(new Vector3(5, -.61, 23), new Vector3(36, -.55, 32)),
-];
+
+function harborWaterBounds() {
+  const lagoon = ringRadius(0);
+  const bounds = [new Box3(new Vector3(-lagoon, -.63, -lagoon), new Vector3(lagoon, -.53, lagoon))];
+  const vertex = new Vector3();
+
+  function addArc(column: number, from: number, to: number) {
+    const sector = new Box3();
+    for (const x of [column, column + .5, column + 1]) {
+      for (const z of [from, to]) {
+        const point = ringPosition(x, z);
+        sector.expandByPoint(vertex.set(point.x, waterLine, point.z));
+      }
+    }
+    bounds.push(sector.expandByScalar(.07));
+  }
+
+  for (let x = 0; x < RING_PERIOD; x++) {
+    let start: number | undefined;
+    for (let z = 0; z <= harborHeight; z++) {
+      const tile = tileAt('harbor', x, z);
+      const water = tile === 'water' || tile === 'shelf' || tile === 'drop' || tile === 'dock';
+      if (water) start ??= z;
+      else if (start !== undefined) {
+        addArc(x, start, z);
+        start = undefined;
+      }
+    }
+    addArc(x, start ?? harborHeight, harborHeight + 5.5);
+  }
+  return bounds;
+}
 
 function reflectedObject(object: Object3D) {
   object.updateWorldMatrix(true, true);
@@ -93,7 +123,7 @@ function materiallyMoved(prior: Matrix4, next: Matrix4) {
   return prior.elements.some((value, index) => Math.abs(value - next.elements[index]) > .0025);
 }
 
-export function buildCityReflections(staticBuildings: Group, harborBeacon?: Object3D, polar = false) {
+export function buildCityReflections(staticBuildings: Group, harborBeacon?: Object3D) {
   // Reflect the static meshes across the water plane and use the unchanged field camera.
   const pool = new Scene();
   const inverse = new Group();
@@ -122,13 +152,14 @@ export function buildCityReflections(staticBuildings: Group, harborBeacon?: Obje
     clock: { value: 0 },
     darkness: { value: 0 },
   };
-  const sheet = new Mesh(new PlaneGeometry(63, 43), new ShaderMaterial({
+  const ringWaterExtent = ringRadius(harborHeight + 5.5);
+  const sheet = new Mesh(new PlaneGeometry(ringWaterExtent * 2, ringWaterExtent * 2), new ShaderMaterial({
     uniforms, vertexShader: vertex, fragmentShader: fragment, fog: true, transparent: true, depthWrite: false,
   }));
   sheet.name = 'Rippling city reflections';
   sheet.rotation.x = -Math.PI / 2;
-  sheet.position.set(polar ? 0 : 21, waterLine + .014, polar ? 0 : 13);
-  const waterBounds = polar ? [new Box3(new Vector3(-19,-.61,-19), new Vector3(19,-.55,19))] : visibleWater;
+  sheet.position.y = waterLine + .014;
+  const waterBounds = harborWaterBounds();
   sheet.renderOrder = 0;
   const group = new Group();
   group.name = 'Harbor reflection surface';
@@ -148,7 +179,7 @@ export function buildCityReflections(staticBuildings: Group, harborBeacon?: Obje
   let visibleSince: number | undefined;
   let captured = false;
 
-  function capture(renderer: WebGLRenderer, camera: OrthographicCamera) {
+  function capture(renderer: WebGLRenderer, camera: Camera) {
     const formerTarget = renderer.getRenderTarget();
     const formerCubeFace = renderer.getActiveCubeFace();
     const formerMipmap = renderer.getActiveMipmapLevel();
@@ -176,7 +207,7 @@ export function buildCityReflections(staticBuildings: Group, harborBeacon?: Obje
 
   return {
     group,
-    update(renderer: WebGLRenderer, camera: OrthographicCamera, time: number, darkness: number, options: ReflectionOptions = {}) {
+    update(renderer: WebGLRenderer, camera: Camera, time: number, darkness: number, options: ReflectionOptions = {}) {
       if (options.enabled === false || renderer.getContext().isContextLost()) {
         group.visible = false;
         return;

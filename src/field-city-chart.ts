@@ -1,4 +1,7 @@
-import { cityParcels, cityStreet, cityTerraces, cityTransit, harborHeight } from './field-city-layout';
+import {
+  cityAlleys, cityAlleyBarriers, cityCourtyards, cityForecourts, cityFountainSite, cityGateSites, cityParcels, cityStreet,
+  cityTerraceFrontages, cityTerraces, cityTransit, harborHeight, ringBreakwaterSpans,
+} from './field-city-layout';
 import { maps, tileAt, type FieldLocation, type Tile } from './field-layout';
 import { RING_PERIOD, ringAngle, ringPosition, ringRadius } from './field-ring-coordinates';
 
@@ -15,6 +18,18 @@ const landscapeInk: Record<Tile, string> = {
   dock: '#b99661', stone: '#bbbcb1', quay: '#c4c5b6', drop: '#347f8c',
 };
 const surveyRoof = ['#829098', '#688b89', '#a08e78', '#6f8a97'];
+const courtInk = {
+  wharf: ['#746963', '#b6aa91'],
+  garden: ['#537263', '#91a080'],
+  market: ['#836b63', '#b59a83'],
+  station: ['#666f79', '#a4aaa5'],
+} as const;
+const barrierInk = {
+  brick: ['#3d4650', '#9e806c'],
+  hedge: ['#334e43', '#748665'],
+  iron: ['#324550', '#797f7b'],
+  stone: ['#495257', '#a2998a'],
+} as const;
 
 function polarArc(ctx: CanvasRenderingContext2D, cx: number, cy: number, scale: number, start: number, end: number, inner: number, outer: number) {
   ctx.beginPath();
@@ -45,6 +60,35 @@ export function paintRingPlan(ctx: CanvasRenderingContext2D, cx: number, cy: num
       ctx.fillStyle = ink[tile];
       ctx.fill();
     }
+  }
+  for (const lane of cityAlleys) {
+    polarArc(ctx, cx, cy, scale, lane.x + .08, lane.x + lane.width - .08,
+      ringRadius(lane.z + .12), ringRadius(lane.z + lane.depth - .12));
+    ctx.fillStyle = terrain ? '#c0b39b' : '#667c7b';
+    ctx.fill();
+  }
+  for (const court of cityForecourts) {
+    polarArc(ctx, cx, cy, scale, court.x + .10, court.x + court.width - .10,
+      ringRadius(court.z + .12), ringRadius(court.z + court.depth - .12));
+    ctx.fillStyle = terrain ? '#bba28a' : '#976d5b';
+    ctx.fill();
+  }
+  for (const court of cityCourtyards) {
+    polarArc(ctx, cx, cy, scale, court.x + .08, court.x + court.width - .08,
+      ringRadius(court.z + .13), ringRadius(court.z + court.depth - .13));
+    ctx.fillStyle = courtInk[court.kind][terrain ? 1 : 0];
+    ctx.fill();
+    const { x, z, width, depth } = court.feature;
+    polarArc(ctx, cx, cy, scale, x + .19, x + width - .19, ringRadius(z + .16), ringRadius(z + depth - .16));
+    ctx.fillStyle = terrain ? '#777c6b' : '#334749';
+    ctx.fill();
+  }
+  for (const barrier of cityAlleyBarriers) {
+    const { x, z, width, depth, kind } = barrier;
+    polarArc(ctx, cx, cy, scale, x + .11, x + width - .11,
+      ringRadius(z + .16), ringRadius(z + depth - .16));
+    ctx.fillStyle = barrierInk[kind][terrain ? 1 : 0];
+    ctx.fill();
   }
   const paved = (radius: number, fill: string, width: number, dash: number[] = []) => {
     ctx.strokeStyle = fill;
@@ -79,10 +123,22 @@ export function paintRingPlan(ctx: CanvasRenderingContext2D, cx: number, cy: num
       }
     }
   }
-  for (const [from, to] of [[.9, 4.3], [5.1, 8.8], [18.1, 21.7], [27.6, 33.4], [36.6, 39.7]]) {
-    polarArc(ctx, cx, cy, scale, from, to, ringRadius(harborHeight + .44), ringRadius(harborHeight + .61));
-    ctx.fillStyle = terrain ? '#b3b5a2' : '#7f9491';
+  if (!terrain) {
+    const column = cityFountainSite.x + cityFountainSite.width / 2;
+    const row = cityFountainSite.z + cityFountainSite.depth / 2;
+    const basin = ringPosition(column, row);
+    ctx.beginPath();
+    ctx.ellipse(cx + basin.x * scale, cy + basin.z * scale, 1.39 * scale, .36 * scale, -ringAngle(column), 0, Math.PI * 2);
+    ctx.fillStyle = '#6d9397';
     ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#beb39a';
+    ctx.stroke();
+    for (const [from, to] of ringBreakwaterSpans) {
+      polarArc(ctx, cx, cy, scale, from, to, ringRadius(harborHeight + .33), ringRadius(harborHeight + .965));
+      ctx.fillStyle = '#8c9994';
+      ctx.fill();
+    }
   }
 }
 
@@ -113,6 +169,19 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
       ctx.fillStyle = unit % 3 === 0 ? '#8f7770' : '#7b7e85';
       ctx.fill();
     }
+    ctx.fillStyle = '#d3b58a';
+    for (const front of cityTerraceFrontages(lot)) {
+      if (lot.sideFront) {
+        const edge = lot.sideFront === 'east' ? lot.x + lot.width : lot.x;
+        polarArc(ctx, cx, cy, scale, edge - .055, edge + .055,
+          ringRadius(front.z + .14), ringRadius(front.z + .86));
+      } else {
+        const edge = lot.facing === 'inner' ? lot.z : lot.z + lot.depth;
+        polarArc(ctx, cx, cy, scale, front.x + .34, front.x + .66,
+          ringRadius(edge - .09), ringRadius(edge + .09));
+      }
+      ctx.fill();
+    }
   }
 
   ctx.fillStyle = '#8ca9ad';
@@ -141,13 +210,22 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
     ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.stroke();
   }
+  ctx.fillStyle = '#ceaa7a';
+  for (const { x, z } of cityGateSites) {
+    for (const side of [x + .04, x + .74]) {
+      polarArc(ctx, cx, cy, scale, side, side + .22, ringRadius(z + .23), ringRadius(z + .77));
+      ctx.fill();
+    }
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = '700 17px system-ui, sans-serif';
   ctx.fillStyle = '#f1e6cf';
   ctx.fillText('潮汐塔', cx, cy + 1);
   const labels = [[4.15, 12.5, '西栈桥'], [11.05, 14.6, '档案馆'], [22.85, 17.3, '外环绿廊'],
-    [29.8, 10.35, '中央车站'], [37.65, 19.5, '东渡口'], [13.9, 28.8, '海堤排屋街']] as const;
+    [29.8, 10.35, '中央车站'], [37.65, 18, '东渡口'], ...cityCourtyards.map(court => [
+      court.x + court.width / 2, court.z + court.depth / 2, court.label,
+    ] as const)] as const;
   for (const [mapX, mapZ, text] of labels) {
     const [x, y] = point(mapX, mapZ);
     const w = ctx.measureText(text).width + 13;
@@ -156,9 +234,28 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
     ctx.fillStyle = '#f0d9b2';
     ctx.fillText(text,x,y+.6);
   }
+  ctx.textAlign = 'left';
+  ctx.font = '600 14px system-ui, sans-serif';
+  for (const court of cityForecourts) {
+    const [x, y] = point(court.x + court.width / 2, court.z + court.depth / 2);
+    const [labelX, labelY] = court.id === 'sailmakers-forecourt' ? [369, 346] : [466, 179];
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(labelX - 14, labelY);
+    ctx.lineTo(labelX, labelY);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#d3b58acc';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 2.15, 0, Math.PI * 2);
+    ctx.fillStyle = '#e7cba0';
+    ctx.fill();
+    ctx.fillText(court.label, labelX + 3, labelY);
+  }
   ctx.strokeStyle = '#bad4ce35';
   ctx.strokeRect(17.5,17.5,width-35,height-35);
   ctx.fillStyle = '#b4cbce';
+  ctx.textAlign = 'center';
   ctx.font = '700 13px ui-monospace, monospace';
   ctx.fillText('N', width - 36, 33);
   ctx.beginPath();
@@ -167,6 +264,17 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
   ctx.lineTo(width - 31, 55);
   ctx.closePath();
   ctx.fill();
+
+  ctx.textAlign = 'left';
+  ctx.font = '600 13px system-ui, sans-serif';
+  const key = [['#667c7b', '巷道'], ['#537263', '院落'], ['#3d4650', '围墙'], ['#ceaa7a', '拱门']];
+  for (const [index, [color, name]] of key.entries()) {
+    const y = height - 79 + index * 17;
+    ctx.fillStyle = color;
+    ctx.fillRect(33, y - 3, 12, 6);
+    ctx.fillStyle = '#bdcfd0';
+    ctx.fillText(name, 51, y);
+  }
 
   if (location) {
     const [x,y] = point(location.x + .5, location.y + .54);

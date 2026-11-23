@@ -1,6 +1,10 @@
 import { createFieldRenderer, feetX, feetY, type FieldView } from './field-renderer';
+import { TILE } from './field-layout';
 import type { createFieldView3d } from './field-view3d';
 import { createRingRasterView } from './field-ring-raster-view';
+import { ringStreetRow } from './field-ring-coordinates';
+
+export const streetAxisMinSpan = .0072;
 
 export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion: MediaQueryList, onReady?: () => void) {
   const classic = createFieldRenderer(canvas, reducedMotion);
@@ -13,7 +17,28 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
   const requestedAt = performance.now();
   let size = { width: 0, height: 0 };
   let destroyed = false;
+  const usableAxes: { x?: boolean; y?: boolean } = {};
   canvas.dataset.renderer = 'canvas2d';
+
+  function streetAxisProjection(column: number, row: number, axis: 'x' | 'y', cityView = world ?? (raster === ring ? ring : undefined)) {
+    if (!cityView?.hasStreetFrame()) return;
+    const x = feetX(column), y = ringStreetRow(row) * TILE;
+    const dx = axis === 'x' ? TILE * .22 : 0;
+    const dy = axis === 'y' ? TILE * .22 : 0;
+    const span = cityView.projectPoint(x + dx, y + dy)[axis] - cityView.projectPoint(x - dx, y - dy)[axis];
+    if (Number.isFinite(span)) return span / cityView.getCamera().height;
+  }
+
+  function rememberAxes(view: FieldView, cityView: NonNullable<typeof world> | typeof ring) {
+    if (view.overview || view.location.area !== 'harbor' || view.location.room) {
+      usableAxes.x = usableAxes.y = undefined;
+      return;
+    }
+    for (const axis of ['x', 'y'] as const) {
+      const projection = streetAxisProjection(view.location.x, view.location.y, axis, cityView);
+      if (projection !== undefined && Math.abs(projection) > streetAxisMinSpan) usableAxes[axis] = projection < 0;
+    }
+  }
 
   function markReady() {
     if (ready) return;
@@ -54,6 +79,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
             pendingWorld = undefined;
             canvas.dataset.renderer = 'webgl';
           }
+          rememberAxes(view, active);
           markReady();
           return;
         } catch (error) {
@@ -70,6 +96,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
         raster.resetCamera();
       }
       raster.draw(time, view);
+      rememberAxes(view, raster === ring ? ring : undefined);
       markReady();
     },
     resize(width: number, height: number) {
@@ -80,6 +107,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     pointInWorld: (x: number, y: number) => (world ?? raster).pointInWorld(x, y),
     hitActor(x: number, y: number, candidates: FieldView['map']['npcs'], doorway: (actor: FieldView['map']['npcs'][number]) => boolean) {
       if (world) return world.hitActor(x, y, candidates, doorway);
+      if (ring && raster === ring) return ring.hitActor(x, y, candidates, doorway);
       return candidates.find(actor => {
         const entrance = doorway(actor);
         const projected = raster.projectPoint(feetX(actor.x), feetY(actor.y));
@@ -89,6 +117,8 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     },
     resetCamera: () => (world ?? raster).resetCamera(),
     getCamera: () => (world ?? raster).getCamera(),
+    streetAxisProjection,
+    lastUsableAxis: (axis: 'x' | 'y') => usableAxes[axis],
     destroy() {
       destroyed = true;
       const active = world ?? pendingWorld;

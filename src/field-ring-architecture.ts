@@ -1,6 +1,6 @@
 import {
-  BoxGeometry, BufferGeometry, CylinderGeometry, Float32BufferAttribute, Group, Mesh, MeshStandardMaterial,
-  TorusGeometry, Vector3,
+  BoxGeometry, BufferGeometry, CylinderGeometry, Float32BufferAttribute, Group, LatheGeometry, Mesh, MeshStandardMaterial,
+  TorusGeometry, Vector2, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCityArchitecture } from './field-city-models';
@@ -19,21 +19,50 @@ const glass = new MeshStandardMaterial({ color: 0x7caba4, roughness: .33, metaln
 const timber = new MeshStandardMaterial({ color: 0x916e53, roughness: .88 });
 const dryTimber = new MeshStandardMaterial({ color: 0xb89d71, roughness: .85 });
 const tile = new MeshStandardMaterial({ color: 0x9a6e54, roughness: .82 });
-const seaBrick = new MeshStandardMaterial({ color: 0xac7359, roughness: .93 });
-const bathStone = new MeshStandardMaterial({ color: 0xc8a784, roughness: .87 });
-const charcoalSlate = new MeshStandardMaterial({ color: 0x44555d, metalness: .12, roughness: .66 });
 const lantern = new MeshStandardMaterial({
   color: 0xe3c288, emissive: 0xffc16c, emissiveIntensity: .015, roughness: .35,
 });
 const innerGlass = new MeshStandardMaterial({
   color: 0x7a9a92, emissive: 0xe7b46c, emissiveIntensity: 0, metalness: .08, roughness: .38,
 });
+const clockIvory = new MeshStandardMaterial({ color: 0xe4cea0, roughness: .67, emissive: 0xf4cc84, emissiveIntensity: 0 });
+const domeSlate = new MeshStandardMaterial({ color: 0x375358, roughness: .74, metalness: .20 });
+const domeCopper = new MeshStandardMaterial({ color: 0x658479, roughness: .64, metalness: .33 });
+const brightBrass = new MeshStandardMaterial({ color: 0xd3af71, roughness: .52, metalness: .38 });
+const steelGlazing = new MeshStandardMaterial({ color: 0x425452, roughness: .64, metalness: .25 });
+
+function cutStone(color: number, course: number, density: number) {
+  const surface = new MeshStandardMaterial({ color, roughness: .91 });
+  surface.customProgramCacheKey = () => `municipal-ashlar-${course}-${density}`;
+  surface.onBeforeCompile = shader => {
+    shader.vertexShader = `varying vec3 masonryPosition;\n${shader.vertexShader}`.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\n masonryPosition = position;');
+    shader.fragmentShader = `varying vec3 masonryPosition;\n${shader.fragmentShader}`.replace('#include <color_fragment>', `
+      #include <color_fragment>
+      vec2 joint = vec2(atan(masonryPosition.x, masonryPosition.z) * ${density.toFixed(3)}, masonryPosition.y / ${course.toFixed(3)});
+      joint.x += mod(floor(joint.y), 2.0) * .5;
+      vec2 stepWidth = fwidth(joint);
+      vec2 portion = fract(joint);
+      float close = 1.0 - smoothstep(.16, .56, max(stepWidth.x, stepWidth.y));
+      vec2 seam = 1.0 - smoothstep(vec2(.023), vec2(.076), min(portion, 1.0 - portion));
+      float block = fract(sin(dot(floor(joint), vec2(134.9, 361.81))) * 713.9) - .5;
+      float edge = smoothstep(.11, .26, portion.y) - smoothstep(.77, .97, portion.y);
+      float weather = sin(masonryPosition.x * 7.4 + sin(masonryPosition.z * 3.0) - masonryPosition.y * .57) * .035;
+      diffuseColor.rgb *= 1.0 + weather + close * (.19 * block + .075 * edge - max(seam.x * .71, seam.y) * .19);
+    `);
+  };
+  return surface;
+}
+
+const cutSandstone = cutStone(0xcab493, .214, 4.137);
+const cutPlinth = cutStone(0xb29a7b, .248, 4.456);
 
 const origin = new Vector3();
 const up = new Vector3(0, 1, 0);
 const end = new Vector3();
 const flatBox = new BoxGeometry(1, 1, 1);
 const rod = new CylinderGeometry(1, 1, 1, 9);
+const clockDisc = new CylinderGeometry(1, 1, 1, 36);
 
 class Monument {
   private readonly pieces = new Map<MeshStandardMaterial, BufferGeometry[]>();
@@ -42,7 +71,8 @@ class Monument {
     const object = new Mesh(geometry, material);
     configure(object);
     object.updateMatrix();
-    const part = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+    const part = geometry.clone();
+    if (!part.index) part.setIndex(Array.from({ length: part.getAttribute('position').count }, (_, index) => index));
     part.applyMatrix4(object.matrix);
     const bucket = this.pieces.get(material) ?? [];
     bucket.push(part);
@@ -54,6 +84,32 @@ class Monument {
       object.position.set(...at);
       object.scale.set(...size);
       object.rotation.set(pitch, yaw, 0);
+    });
+  }
+
+  panel(material: MeshStandardMaterial, points: readonly Point[]) {
+    const geometry = new BufferGeometry();
+    const indices: number[] = [];
+    for (let index = 1; index < points.length - 1; index++) indices.push(0, index, index + 1);
+    geometry.setAttribute('position', new Float32BufferAttribute(points.flat(), 3));
+    geometry.setAttribute('uv', new Float32BufferAttribute(new Float32Array(points.length * 2), 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    this.bake(geometry, material, () => {});
+    geometry.dispose();
+  }
+
+  profile(material: MeshStandardMaterial, points: readonly (readonly [radius: number, height: number])[], sides: number) {
+    const shape = new LatheGeometry(points.map(([radius, height]) => new Vector2(radius, height)), sides, Math.PI / sides);
+    this.bake(shape, material, () => {});
+    shape.dispose();
+  }
+
+  disc(material: MeshStandardMaterial, center: Point, diameter: number, depth: number, heading: number) {
+    this.bake(clockDisc, material, object => {
+      object.position.set(...center);
+      object.scale.set(diameter / 2, depth, diameter / 2);
+      object.quaternion.setFromUnitVectors(up, end.set(Math.sin(heading), 0, Math.cos(heading)));
     });
   }
 
@@ -79,7 +135,7 @@ class Monument {
   }
 
   ring(material: MeshStandardMaterial, at: Point, radius: number, thickness: number, rotation: Point = [0, 0, 0]) {
-    const geometry = new TorusGeometry(radius, thickness, 7, 36);
+    const geometry = new TorusGeometry(radius, thickness, 5, 32);
     this.bake(geometry, material, object => {
       object.position.set(...at);
       object.rotation.set(...rotation);
@@ -95,7 +151,7 @@ class Monument {
       if (!geometry) continue;
       geometry.computeBoundingSphere();
       const mesh = new Mesh(geometry, material);
-      mesh.castShadow = material !== lantern && material !== innerGlass;
+      mesh.castShadow = material !== lantern && material !== innerGlass && material !== clockIvory;
       mesh.receiveShadow = true;
       group.add(mesh);
     }
@@ -109,123 +165,358 @@ const radial = (angle: number, radius: number, height: number, sideways = 0): Po
   Math.cos(angle) * radius - Math.sin(angle) * sideways,
 ];
 
+const eighth = Math.PI / 4;
+const apothem = Math.cos(eighth / 2);
+const halfFace = Math.sin(eighth / 2);
+
+type OctagonalBay = {
+  angle: number;
+  base: number;
+  top: number;
+  width: (y: number) => number;
+  point: (x: number, y: number, outset?: number) => Point;
+};
+
+function bay(angle: number, base: number, top: number, bottomRadius: number, topRadius = bottomRadius): OctagonalBay {
+  const radius = (y: number) => bottomRadius + (topRadius - bottomRadius) * (y - base) / (top - base);
+  return {
+    angle, base, top,
+    width: y => radius(y) * halfFace,
+    point: (x, y, outset = 0) => radial(angle, radius(y) * apothem + outset, y, x),
+  };
+}
+
+function infill(kit: Monument, bay: OctagonalBay, material: MeshStandardMaterial, bottom: number, top: number) {
+  const lower = bay.width(bottom), upper = bay.width(top);
+  kit.panel(material, [bay.point(-lower, bottom), bay.point(lower, bottom), bay.point(upper, top), bay.point(-upper, top)]);
+}
+
+function archway(kit: Monument, wall: OctagonalBay, material: MeshStandardMaterial,
+  width: number, bottom: number, top: number, glazed: MeshStandardMaterial, entrance = false) {
+  const half = width / 2;
+  const height = top - bottom;
+  const archRise = height * (entrance ? .34 : .33);
+  const spring = top - archRise;
+  const depth = entrance ? -.218 : -.156;
+  const rim = entrance ? .102 : .078;
+  const pane = half - (entrance ? .048 : .033);
+  const trim = entrance ? stone : cream;
+  const local = (x: number, y: number, outset: number) => wall.point(x, y, outset);
+  const strip = (mat: MeshStandardMaterial, left: number, right: number, base: number, tip: number, at: number) => {
+    kit.panel(mat, [local(left, base, at), local(right, base, at), local(right, tip, at), local(left, tip, at)]);
+  };
+  infill(kit, wall, material, wall.base, bottom);
+  for (const edge of [-1, 1]) {
+    const lowerOuter = local(edge * wall.width(bottom), bottom, 0);
+    const lowerInner = local(edge * half, bottom, 0);
+    const upperOuter = local(edge * wall.width(wall.top), wall.top, 0);
+    const upperInner = local(edge * half, wall.top, 0);
+    const face = [lowerOuter, lowerInner, upperInner, upperOuter];
+    kit.panel(material, edge === -1 ? face : face.reverse());
+    const curve = (x: number, y: number, side: number) => local(edge * x, y, side);
+    const reveal = [curve(half, bottom, rim), curve(pane, bottom + .019, depth), curve(pane, spring, depth), curve(half, spring, rim)];
+    kit.panel(stone, edge === -1 ? reveal : reveal.reverse());
+    kit.box(trim, local(edge * (half + .021), (bottom + spring) / 2, rim - .027),
+      [entrance ? .106 : .071, spring - bottom, .077], wall.angle);
+    kit.box(cream, local(edge * (half + .024), spring - .013, rim - .007),
+      [entrance ? .161 : .111, .081, .088], wall.angle);
+  }
+  const arc = (angle: number, radius: number, rise: number, at: number) =>
+    local(Math.cos(angle) * radius, spring + Math.sin(angle) * rise, at);
+  for (let index = 0; index < 10; index++) {
+    const from = index * Math.PI / 10, to = (index + 1) * Math.PI / 10;
+    const front = arc(from, half, archRise, 0), next = arc(to, half, archRise, 0);
+    kit.panel(material, [wall.point(Math.cos(from) * half, wall.top), wall.point(Math.cos(to) * half, wall.top), next, front]);
+    const lower = arc(from, pane, archRise - .019, depth), upper = arc(to, pane, archRise - .019, depth);
+    kit.panel(stone, [arc(from, half, archRise, rim), arc(to, half, archRise, rim), upper, lower]);
+    kit.panel(glazed, [local(0, spring - .006, depth + .007), lower, upper]);
+    const keystone = index === 4 || index === 5;
+    const offset = keystone ? .076 : .058;
+    kit.panel(keystone ? cream : trim, [
+      arc(from + .013, half + offset, archRise + offset, rim + .028),
+      arc(to - .013, half + offset, archRise + offset, rim + .028),
+      arc(to - .013, half - .001, archRise -.002, rim),
+      arc(from + .013, half - .001, archRise -.002, rim),
+    ]);
+  }
+  strip(glazed, -pane, pane, bottom + .009, spring, depth + .012);
+  const sash = depth + .043;
+  kit.box(steelGlazing, local(0, spring, sash), [pane * 2, .028, .035], wall.angle);
+  kit.box(steelGlazing, local(0, (bottom + top) / 2, sash), [.031, top - bottom - .063, .033], wall.angle);
+  if (entrance) {
+    for (const edge of [-1, 1]) {
+      kit.box(steelGlazing, local(edge * pane * .50, bottom + .205, sash + .013), [pane - .014, .40, .047], wall.angle);
+      kit.box(copper, local(edge * .068, bottom + .406, sash + .047), [.023, .091, .023], wall.angle);
+    }
+    for (const x of [-.70, .70]) {
+      kit.beam(steelGlazing, local(0, spring + .014, sash), local(x * pane, spring + archRise * .59, sash), .016);
+    }
+  } else {
+    kit.box(steelGlazing, local(0, bottom + .37 * height, sash), [pane * 2, .025, .034], wall.angle);
+  }
+  kit.box(trim, local(0, bottom - .042, rim - .049), [width + .198, .082, .192], wall.angle);
+}
+
 function caisson(kit: Monument) {
   kit.tier(shadow, 2.51, 2.43, -1.52, -.62, 28);
-  kit.tier(pier, 2.57, 2.49, -.64, -.20, 28);
-  kit.tier(stone, 2.60, 2.58, -.23, -.083, 28);
-  kit.tier(cream, 2.59, 2.59, -.086, .014, 28);
-  kit.tier(pier, 2.32, 2.40, .013, .109, 28);
-  kit.ring(ink, [0, .048, 0], 2.53, .018, [Math.PI / 2, 0, 0]);
+  kit.profile(cutPlinth, [[2.51, -.64], [2.58, -.56], [2.60, -.43], [2.59, -.20], [2.57, -.12], [2.48, -.075]], 28);
+  kit.profile(cream, [[2.48, -.085], [2.59, -.078], [2.60, -.020], [2.60, .038], [2.51, .059]], 28);
+  // The plinth is a solid marine foundation, capped below the quay's visible iron rail.
+  kit.tier(stone, 2.48, 2.51, .035, .087, 28);
+  kit.tier(pier, 2.32, 2.40, .083, .133, 28);
   for (let i = 0; i < 20; i++) {
     const angle = i * Math.PI / 10;
-    const thick = i % 5 === 0;
-    kit.box(thick ? cream : stone, radial(angle, 2.44, .20), [thick ? .146 : .074, thick ? .33 : .238, .109], angle);
-    kit.box(copper, radial(angle, 2.44, thick ? .37 : .345), [thick ? .171 : .086, .039, .117], angle);
+    const pierGate = i % 5 === 0;
     const next = angle + Math.PI / 10;
-    if (!thick) {
-      kit.beam(ink, radial(angle, 2.435, .173), radial(next, 2.435, .173), .016);
-      kit.beam(ink, radial(angle, 2.435, .271), radial(next, 2.435, .271), .017);
-    }
-  }
-  kit.tier(stone, 1.77, 1.85, .097, .244, 12);
-  kit.tier(cream, 1.67, 1.77, .242, .390, 12);
-  kit.tier(stone, 1.57, 1.68, .388, .574, 12);
-}
-
-function tidalShaft(kit: Monument) {
-  kit.tier(seaBrick, 1.33, 1.56, .57, 1.87);
-  for (const [height, radius] of [[.90, 1.527], [1.149, 1.479], [1.514, 1.416]]) {
-    kit.tier(bathStone, radius - .009, radius, height, height + .056);
-  }
-  kit.tier(cream, 1.47, 1.48, 1.66, 1.84);
-  kit.tier(cream, 1.36, 1.45, 1.83, 2.02);
-  kit.tier(bathStone, .92, 1.30, 1.98, 6.18);
-  for (const [height, radius] of [[2.699, 1.250], [3.721, 1.153], [4.740, 1.058]]) {
-    kit.tier(cream, radius - .008, radius, height, height + .036);
-  }
-  kit.tier(cream, .97, 1.01, 5.91, 6.12);
-  kit.tier(pier, 1.17, .99, 6.12, 6.36);
-  kit.tier(cream, 1.20, 1.19, 6.36, 6.51);
-  for (let direction = 0; direction < 8; direction++) {
-    const a = direction * Math.PI / 4;
-    const major = direction % 2 === 0;
-    const foot = major ? 1.635 : 1.486;
-    kit.beam(shadow, radial(a, foot, .63), radial(a, major ? 1.015 : .954, 5.96), major ? .102 : .058);
-    kit.beam(cream, radial(a, foot + .027, .67), radial(a, 1.023, 5.83), major ? .062 : .037);
-    if (major) {
-      kit.box(shadow, radial(a, 1.429, 1.096), [.46, 1.20, .131], a);
-      kit.box(ink, radial(a, 1.512, 1.072), [.329, .964, .067], a);
-      kit.box(innerGlass, radial(a, 1.550, 1.207), [.243, .481, .041], a);
-      kit.box(cream, radial(a, 1.518, 1.59), [.202, .074, .064], a);
-      for (const x of [-.155, .155]) kit.beam(copper, radial(a, 1.556, 1.48, x), radial(a, 1.556, .595, x), .021);
-      kit.box(cream, radial(a, 1.62, .581), [.489, .087, .274], a);
-    }
-    const windowAngle = a + Math.PI / 8;
-    for (let row = 0; row < 3; row++) {
-      const y = 2.35 + row * 1.068;
-      const wallR = 1.28 - (y - 1.99) * .089;
-      const pane = (direction + row) % 4 === 0 ? innerGlass : glass;
-      kit.box(shadow, radial(windowAngle, wallR -.008, y + .23), [.239, .681, .236], windowAngle);
-      kit.box(ink, radial(windowAngle, wallR + .106, y + .211), [.186, .569, .056], windowAngle);
-      kit.box(pane, radial(windowAngle, wallR + .143, y + .22), [.137, .474, .031], windowAngle);
-      kit.box(copper, radial(windowAngle, wallR + .152, y + .123), [.151, .023, .037], windowAngle);
-      kit.box(cream, radial(windowAngle, wallR + .06, y - .091), [.253, .071, .186], windowAngle);
-      kit.box(cream, radial(windowAngle, wallR + .09, y + .560), [.085, .085, .088], windowAngle);
-    }
+    kit.box(pierGate ? cream : stone, radial(angle, 2.421, .191), [pierGate ? .130 : .064, pierGate ? .251 : .202, .082], angle);
+    kit.box(copper, radial(angle, 2.424, pierGate ? .324 : .281), [pierGate ? .150 : .073, .034, .086], angle);
+    kit.beam(ink, radial(angle, 2.420, .162), radial(next, 2.420, .162), .012);
+    kit.beam(ink, radial(angle, 2.420, .258), radial(next, 2.420, .258), .012);
   }
 }
 
-function observatoryCrown(kit: Monument) {
-  kit.tier(ink, 1.154, 1.109, 6.48, 6.60, 16);
-  kit.tier(copper, 1.205, 1.195, 6.58, 6.66, 16);
-  kit.tier(teal, 1.082, 1.105, 6.63, 7.66, 16);
-  for (let i = 0; i < 16; i++) {
-    const a = i * Math.PI / 8;
-    kit.box(i % 4 === 1 ? innerGlass : glass, radial(a, 1.091, 7.116), [.346, .706, .076], a);
-    kit.box(ink, radial(a, 1.141, 7.22), [.324, .030, .032], a);
-    kit.box(copper, radial(a, 1.143, 6.884), [.322, .037, .037], a);
-    kit.beam(copper, radial(a - Math.PI / 16, 1.120, 6.63), radial(a - Math.PI / 16, 1.108, 7.63), .026);
-    kit.beam(ink, radial(a, 1.112, 6.397), radial(a + Math.PI / 8, 1.112, 6.397), .025);
+function rusticatedPavilion(kit: Monument) {
+  kit.profile(cream, [[2.17, .118], [2.19, .17], [2.18, .222], [2.05, .265], [2.04, .382]], 8);
+  kit.profile(stone, [[2.04, .372], [2.06, .424], [2.06, .486], [1.97, .524]], 8);
+  for (let sector = 0; sector < 8; sector++) {
+    const axis = sector * eighth;
+    const primary = sector % 2 === 0;
+    const face = bay(axis, .484, 1.992, 1.99, 1.90);
+    archway(kit, face, cutPlinth, primary ? .728 : .506, primary ? .645 : .774,
+      primary ? 1.797 : 1.735, primary ? innerGlass : glass, primary);
+    for (const edge of [-1, 1]) {
+      const x = edge * face.width(.63) * .82;
+      kit.beam(stone, face.point(x, .545, .031), face.point(x * .969, 1.971, .034), .039);
+      for (const [row, y] of [.655, .928, 1.200, 1.472, 1.746].entries()) {
+        const inward = edge * (primary ? .060 : .051) * (row % 2 ? 1 : -1);
+        kit.box(row % 2 ? stone : cream, face.point(x + inward, y, .053), [row % 2 ? .151 : .197, .119, .130], axis);
+      }
+    }
+    if (primary) {
+      kit.box(stone, face.point(0, .543, .198), [1.014, .106, .383], axis);
+      kit.box(cream, face.point(0, .608, .136), [.913, .071, .381], axis);
+    }
   }
-  kit.tier(copper, 1.18, 1.185, 7.62, 7.717, 16);
-  kit.tier(ink, 1.209, 1.197, 7.70, 7.807, 16);
-  kit.tier(charcoalSlate, .87, 1.21, 7.80, 8.117, 16);
-  kit.tier(charcoalSlate, .315, .87, 8.10, 8.622, 16);
-  for (let i = 0; i < 12; i++) {
-    const angle = i * Math.PI / 6;
-    kit.beam(ink, radial(angle, 1.182, 7.807), radial(angle, .853, 8.113), .012);
-    kit.beam(ink, radial(angle, .854, 8.116), radial(angle, .318, 8.601), .010);
-  }
-  kit.tier(copper, .272, .386, 8.60, 8.702, 12);
-  kit.tier(ink, .144, .18, 8.69, 8.97, 10);
-  kit.tier(copper, .124, .145, 8.92, 9.046, 12);
-  kit.tier(copper, .012, .049, 9.96, 10.186, 9);
+  kit.profile(stone, [[1.90, 1.940], [1.96, 1.993], [2.02, 2.035], [2.02, 2.092], [1.93, 2.118]], 8);
+  kit.profile(cream, [[1.93, 2.104], [1.98, 2.128], [1.98, 2.180], [1.89, 2.206], [1.71, 2.252], [1.56, 2.361]], 8);
+  kit.profile(steelGlazing, [[1.91, 2.252], [1.87, 2.320], [1.69, 2.383], [1.54, 2.389]], 8);
 }
 
-function tidalDial() {
-  const kit = new Monument();
-  kit.ring(ink, [0, 9.474, 0], .493, .024, [Math.PI / 2, 0, 0]);
-  kit.ring(copper, [0, 9.474, 0], .512, .032, [.205, 0, -.412]);
-  kit.ring(copper, [0, 9.474, 0], .510, .028, [0, Math.PI / 2, .216]);
-  kit.tier(lantern, .184, .184, 9.349, 9.596, 16);
-  kit.tier(lantern, .020, .184, 9.593, 9.74, 16);
-  kit.tier(lantern, .184, .020, 9.206, 9.350, 16);
-  kit.beam(ink, [0, 8.98, 0], [0, 10.0, 0], .028);
-  const group = kit.finish();
-  group.name = 'Orbit dial';
-  return group;
+function shaftMasonry(kit: Monument) {
+  const levels = [
+    { base: 2.318, top: 3.542, start: 1.52, end: 1.469 },
+    { base: 3.542, top: 4.805, start: 1.469, end: 1.417 },
+    { base: 4.805, top: 6.095, start: 1.417, end: 1.372 },
+  ];
+  for (const [row, floor] of levels.entries()) {
+    for (let side = 0; side < 8; side++) {
+      const angle = side * eighth;
+      const wall = bay(angle, floor.base, floor.top, floor.start, floor.end);
+      const decorativeBay = side % 2 === 0;
+      const glazed = (side + row) % 4 === 0 ? innerGlass : glass;
+      const openingWidth = (decorativeBay ? .406 : .307) + (row === 1 ? -.032 : row === 2 ? .025 : 0);
+      const bottom = floor.base + (row === 0 ? .218 : row === 1 ? .250 : .160);
+      archway(kit, wall, cutSandstone, openingWidth, bottom, floor.top - .125, glazed);
+      if (row === 2 && !decorativeBay) {
+        for (const y of [.26, .37, .48, .59]) {
+          kit.box(steelGlazing, wall.point(0, bottom + y, -.084), [openingWidth * .75, .029, .031], angle, -.128);
+        }
+      }
+      if (decorativeBay && row < 2) {
+        const sill = floor.base + .129;
+        kit.box(stone, wall.point(0, sill, .102), [.567, .070, .221], angle);
+        for (const x of [-.076, .076]) {
+          kit.box(cream, wall.point(x * 2, sill - .057, .101), [.103, .047, .187], angle);
+        }
+      }
+    }
+    if (row > 0) {
+      kit.profile(cream, [[floor.start, floor.base -.033], [floor.start + .036, floor.base -.010],
+        [floor.start + .036, floor.base + .042], [floor.start, floor.base + .068]], 8);
+    }
+  }
+  for (let side = 0; side < 8; side++) {
+    const a = side * eighth + eighth / 2;
+    kit.beam(stone, radial(a, 1.513, 2.335), radial(a, 1.365, 6.033), .107);
+    kit.beam(cream, radial(a, 1.566, 2.455), radial(a, 1.425, 5.987), .079);
+    kit.box(cream, radial(a, 1.532, 2.449), [.171, .150, .146], a);
+    kit.box(stone, radial(a, 1.426, 5.916), [.152, .205, .145], a);
+    kit.box(cream, radial(a, 1.444, 6.004), [.162, .084, .160], a);
+  }
+}
+
+const clockHeight = 7.040;
+const dialRadius = 1.598;
+const handBar = new BoxGeometry(.013, .222, .014);
+
+const romanStrokes = {
+  I: [[0, -.5, 0, .5]],
+  V: [[-.39, .5, 0, -.5], [0, -.5, .39, .5]],
+  X: [[-.39, -.5, .39, .5], [-.39, .5, .39, -.5]],
+} as const;
+
+function chapterMark(kit: Monument, angle: number, x: number, y: number, text: readonly (keyof typeof romanStrokes)[]) {
+  for (const [column, glyph] of text.entries()) {
+    const shift = x + (column - (text.length - 1) / 2) * .0174;
+    for (const [fromX, fromY, toX, toY] of romanStrokes[glyph]) {
+      const x0 = shift + fromX * .014, y0 = clockHeight + y + fromY * .032;
+      const x1 = shift + toX * .014, y1 = clockHeight + y + toY * .032;
+      const length = Math.hypot(x1 - x0, y1 - y0);
+      const side = (y1 - y0) * .0028 / length, rise = (x0 - x1) * .0028 / length;
+      const d = dialRadius + .044;
+      kit.panel(ink, [radial(angle, d, y0 + rise, x0 + side), radial(angle, d, y1 + rise, x1 + side),
+        radial(angle, d, y1 - rise, x1 - side), radial(angle, d, y0 - rise, x0 - side)]);
+    }
+  }
+}
+
+function clockFace(kit: Monument, face: OctagonalBay) {
+  const a = face.angle;
+  kit.box(stone, face.point(0, clockHeight, .043), [.795, .841, .129], a);
+  kit.box(cream, face.point(0, clockHeight - .436, .064), [.864, .059, .162], a);
+  kit.box(stone, face.point(0, clockHeight + .441, .060), [.837, .089, .151], a);
+  kit.disc(ink, radial(a, dialRadius - .079, clockHeight), .712, .10, a);
+  kit.disc(brightBrass, radial(a, dialRadius - .023, clockHeight), .674, .047, a);
+  kit.disc(clockIvory, radial(a, dialRadius + .005, clockHeight), .594, .032, a);
+  kit.ring(copper, radial(a, dialRadius + .025, clockHeight), .266, .010, [0, a, 0]);
+  const tickAt = dialRadius + .043;
+  for (let mark = 0; mark < 12; mark++) {
+    if (mark % 3 === 0) continue;
+    const angle = mark * Math.PI / 6;
+    const inner = .226;
+    const outer = .248;
+    kit.beam(ink, radial(a, tickAt, clockHeight + Math.cos(angle) * inner, Math.sin(angle) * inner),
+      radial(a, tickAt, clockHeight + Math.cos(angle) * outer, Math.sin(angle) * outer), .008);
+  }
+  chapterMark(kit, a, 0, .232, ['X', 'I', 'I']);
+  chapterMark(kit, a, .220, 0, ['I', 'I', 'I']);
+  chapterMark(kit, a, 0, -.231, ['V', 'I']);
+  chapterMark(kit, a, -.221, 0, ['I', 'X']);
+  for (const x of [-.35, .35]) {
+    for (const side of [-1, 1]) {
+      kit.box(cream, face.point(x, clockHeight + side * .329, .112), [.048, .092, .043], a);
+      kit.disc(copper, face.point(x, clockHeight + side * .327, .141), .041, .009, a);
+    }
+  }
+  const pins = dialRadius + .055;
+  kit.disc(ink, radial(a, pins, clockHeight), .047, .018, a);
+}
+
+function clockRoom(kit: Monument) {
+  kit.profile(stone, [[1.37, 6.018], [1.47, 6.056], [1.57, 6.114], [1.57, 6.191], [1.66, 6.237]], 8);
+  kit.profile(cream, [[1.66, 6.217], [1.72, 6.267], [1.72, 6.326], [1.64, 6.375]], 8);
+  kit.profile(cutSandstone, [[1.64, 6.348], [1.56, 6.435], [1.56, 6.545]], 8);
+  for (let side = 0; side < 8; side++) {
+    const a = side * eighth;
+    const face = bay(a, 6.49, 7.643, 1.56);
+    if (side % 2 === 0) {
+      infill(kit, face, cutSandstone, face.base, face.top);
+      clockFace(kit, face);
+    } else {
+      archway(kit, face, cutSandstone, .484, 6.645, 7.489, innerGlass);
+      for (const y of [6.840, 6.943, 7.046, 7.149, 7.251]) {
+        kit.box(steelGlazing, face.point(0, y, -.074), [.294, .042, .046], a, -.168);
+      }
+    }
+    for (const x of [-.521, .521]) {
+      kit.box(stone, face.point(x, 7.062, .014), [.099, 1.12, .123], a);
+      kit.box(cream, face.point(x, 6.550, .043), [.145, .140, .151], a);
+      kit.box(cream, face.point(x, 7.560, .053), [.155, .123, .148], a);
+    }
+    for (const x of [-.42, -.214, 0, .214, .42]) {
+      kit.box(cream, face.point(x, 7.681, .155), [.059, .096, .136], a);
+    }
+  }
+  kit.profile(cream, [[1.56, 7.604], [1.68, 7.668], [1.74, 7.727], [1.74, 7.790]], 8);
+  kit.profile(steelGlazing, [[1.74, 7.773], [1.782, 7.805], [1.764, 7.879], [1.698, 7.924]], 16);
+}
+
+function verdigrisCupola(kit: Monument) {
+  const profile = [[1.703, 7.900], [1.653, 8.072], [1.565, 8.271], [1.441, 8.470],
+    [1.254, 8.675], [.994, 8.853], [.684, 8.991], [.391, 9.080]] as const;
+  kit.profile(domeSlate, profile, 32);
+  // Raised copper seams follow the dome over continuously curved slate panels.
+  for (let side = 0; side < 12; side++) {
+    const angle = side * Math.PI / 6;
+    for (let step = 1; step < profile.length; step++) {
+      const [lower, base] = profile[step - 1], [upper, top] = profile[step];
+      kit.beam(side % 3 === 0 ? copper : domeCopper, radial(angle, lower + .014, base), radial(angle, upper + .014, top), side % 3 === 0 ? .024 : .017);
+    }
+  }
+  for (const [index, y] of [8.044, 8.400, 8.742].entries()) {
+    const marker = profile.findIndex(([, height]) => height > y);
+    const from = profile[marker - 1], to = profile[marker];
+    const r = from[0] + (to[0] - from[0]) * (y - from[1]) / (to[1] - from[1]);
+    kit.profile(index ? domeCopper : copper, [[r + .021, y - .014], [r + .026, y], [r + .014, y + .016]], 32);
+  }
+  kit.profile(copper, [[.377, 9.044], [.421, 9.082], [.421, 9.134], [.304, 9.183]], 12);
+  kit.tier(lantern, .187, .187, 9.170, 9.614, 12);
+  for (let side = 0; side < 8; side++) {
+    const a = side * eighth;
+    kit.box(steelGlazing, radial(a, .236, 9.390), [.049, .454, .067], a);
+    kit.box(copper, radial(a, .236, 9.201), [.087, .066, .097], a);
+    kit.box(copper, radial(a, .236, 9.590), [.091, .064, .095], a);
+  }
+  kit.profile(steelGlazing, [[.242, 9.584], [.310, 9.638], [.303, 9.695], [.201, 9.805], [.091, 9.865]], 16);
+  kit.tier(copper, .094, .113, 9.848, 9.914, 12);
+  kit.tier(brightBrass, .037, .090, 9.906, 9.991, 12);
+  kit.tier(copper, .012, .044, 9.981, 10.186, 9);
+}
+
+function clockwork() {
+  const clocks: { hour: Group; minute: Group; sweep: Group }[] = [];
+  const faces = new Group();
+  faces.name = 'Four clock mechanisms';
+  for (let n = 0; n < 4; n++) {
+    const angle = n * Math.PI / 2;
+    const support = new Group();
+    support.position.set(...radial(angle, dialRadius + .077, clockHeight));
+    support.rotation.y = angle;
+    const hand = (length: number, width: number, depth: number, material: MeshStandardMaterial) => {
+      const pivot = new Group();
+      const blade = new Mesh(handBar, material);
+      blade.scale.set(width / .013, length / .222, .85);
+      blade.position.set(0, length * .425, depth);
+      pivot.add(blade);
+      support.add(pivot);
+      return pivot;
+    };
+    clocks.push({ hour: hand(.146, .031, .001, ink), minute: hand(.225, .023, .007, ink), sweep: hand(.221, .010, .017, copper) });
+    faces.add(support);
+  }
+  let lastTick = -1;
+  return {
+    faces,
+    tick(time: number) {
+      const second = Math.trunc(time / 1000);
+      if (lastTick === second) return;
+      lastTick = second;
+      const fraction = Math.PI * 2;
+      const localTime = second + 8 * 3600 + 17 * 60;
+      for (const { hour, minute, sweep } of clocks) {
+        hour.rotation.z = -localTime / (12 * 3600) * fraction;
+        minute.rotation.z = -localTime / 3600 * fraction;
+        sweep.rotation.z = -localTime / 60 * fraction;
+      }
+    },
+  };
 }
 
 function observatory() {
   const kit = new Monument();
   caisson(kit);
-  tidalShaft(kit);
-  observatoryCrown(kit);
-  const group = kit.finish();
-  group.name = 'Central tidal observatory';
-  group.userData.parcel = 'ring-observatory';
-  group.scale.y = 1.13;
-  return group;
+  rusticatedPavilion(kit);
+  shaftMasonry(kit);
+  clockRoom(kit);
+  verdigrisCupola(kit);
+  const shape = kit.finish();
+  const { faces, tick } = clockwork();
+  shape.add(faces);
+  shape.name = 'Central tidal observatory';
+  shape.userData.parcel = 'ring-observatory';
+  shape.scale.y = 1.13;
+  tick(0);
+  return { shape, tick };
 }
 
 function placeAlongRing(group: Group, x: number, z: number, name: string, parcel?: string) {
@@ -498,7 +789,7 @@ function subdivideArcEdges(geometry: BufferGeometry) {
 }
 
 export function buildRingArchitecture() {
-  const architecture = buildCityArchitecture({ skyline: false });
+  const architecture = buildCityArchitecture();
   const city = new Group();
   city.name = 'Tidebound ring architecture';
   for (const parcel of [...architecture.children]) {
@@ -516,11 +807,9 @@ export function buildRingArchitecture() {
     });
   }
   const monument = observatory();
-  const dial = tidalDial();
-  monument.add(dial);
-  city.add(monument, tideGate(), tideGateApron(), breakwater(), servicePier(), pilotsStation(), boardingSpur(), abutmentRail());
+  city.add(monument.shape, tideGate(), tideGateApron(), breakwater(), servicePier(), pilotsStation(), boardingSpur(), abutmentRail());
   city.userData.update = (time: number, darkness: number) => {
-    dial.rotation.y = time * .000046;
+    monument.tick(time);
     updateRingArchitecture(darkness);
   };
   return city;
@@ -530,4 +819,5 @@ export function updateRingArchitecture(darkness: number) {
   const night = Math.max(0, Math.min(1, darkness));
   lantern.emissiveIntensity = .015 + night * 1.03;
   innerGlass.emissiveIntensity = night * .46;
+  clockIvory.emissiveIntensity = night * .30;
 }

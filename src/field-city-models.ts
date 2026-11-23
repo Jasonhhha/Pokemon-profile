@@ -7,11 +7,13 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { cityParcels, type CityParcel } from './field-city-layout';
 
 type XYZ = [x: number, y: number, z: number];
-type Finish = 'stone' | 'brick' | 'slate' | 'metal' | 'glass' | 'light' | 'skylight' | 'wood';
+type Finish = 'stone' | 'ashlar' | 'brick' | 'stucco' | 'slate' | 'metal' | 'glass' | 'light' | 'skylight' | 'wood';
 
 const surfaces: Record<Finish, MeshStandardMaterial> = {
   stone: new MeshStandardMaterial({ vertexColors: true, roughness: .87 }),
+  ashlar: new MeshStandardMaterial({ vertexColors: true, roughness: .91 }),
   brick: new MeshStandardMaterial({ vertexColors: true, roughness: .96 }),
+  stucco: new MeshStandardMaterial({ vertexColors: true, roughness: .93 }),
   slate: new MeshStandardMaterial({ vertexColors: true, roughness: .81, side: DoubleSide }),
   metal: new MeshStandardMaterial({ vertexColors: true, roughness: .57, metalness: .24, side: DoubleSide }),
   glass: new MeshStandardMaterial({ vertexColors: true, roughness: .30, metalness: .16 }),
@@ -71,16 +73,19 @@ function rand(x: number, z: number, salt = 0) {
 
 const finishes: Partial<Record<Finish, { density: number; rough: number }>> = {
   stone: { density: 1.22, rough: .95 },
+  ashlar: { density: .87, rough: .98 },
   brick: { density: 1.12, rough: .90 },
+  stucco: { density: .72, rough: 1.30 },
   slate: { density: .98, rough: .82 },
   metal: { density: .88, rough: .63 },
   wood: { density: 1.08, rough: 1.03 },
 };
 
-function quarriedPattern(finish: 'brick' | 'slate', x: number, y: number, size: number) {
-  const masonry = finish === 'brick';
-  const rows = masonry ? 6 : 7;
-  const columns = masonry ? 3 : 5;
+function quarriedPattern(finish: 'ashlar' | 'brick' | 'slate', x: number, y: number, size: number) {
+  const brick = finish === 'brick';
+  const ashlar = finish === 'ashlar';
+  const rows = ashlar ? 4 : brick ? 7 : 8;
+  const columns = ashlar ? 2 : brick ? 3 : 5;
   const v = y / size * rows;
   const course = Math.floor(v);
   const stagger = course % 2 ? .5 : 0;
@@ -88,12 +93,12 @@ function quarriedPattern(finish: 'brick' | 'slate', x: number, y: number, size: 
   const joint = Math.floor(u);
   const run = u - joint;
   const rise = v - course;
-  const localStone = rand(joint % columns, course, masonry ? 61 : 81);
-  const seam = masonry ? .045 : .032;
-  if (rise < seam || run < seam * .70) return masonry ? 245 : 169;
-  const edge = rise < seam + .040 || run < seam + .028 ? (masonry ? -10 : 7) : 0;
-  const contour = masonry ? Math.sin(rise * Math.PI) * 3 : (1 - rise) * 9;
-  return (masonry ? 213 : 225) + localStone * 18 + edge + contour;
+  const localStone = rand(joint % columns, course, brick ? 61 : ashlar ? 80 : 81);
+  const seam = ashlar ? .041 : brick ? .042 : .033;
+  if (rise < seam || run < seam * .72) return brick ? 233 : ashlar ? 184 : 169;
+  const edge = rise < seam + .045 || run < seam + .029 ? 10 : rise > .908 ? -14 : 0;
+  const contour = Math.sin(rise * Math.PI) * (ashlar ? 8 : 3);
+  return (brick ? 194 : 209) + localStone * (brick ? 41 : 31) + edge + contour;
 }
 
 function cityFinish(finish: Finish, geometry: BufferGeometry) {
@@ -105,7 +110,7 @@ function cityFinish(finish: Finish, geometry: BufferGeometry) {
   const material = surfaces[finish];
   if (!material.map) {
     const image = document.createElement('canvas');
-    const size = 128;
+    const size = 192;
     image.width = image.height = size;
     const ctx = image.getContext('2d')!;
     const sample = ctx.createImageData(size, size);
@@ -115,10 +120,14 @@ function cityFinish(finish: Finish, geometry: BufferGeometry) {
       const fleck = rand(x, y, 11) - .5;
       const wash = Math.sin(phaseX * 2 + phaseY * 3) * 4 + Math.sin(phaseX * 5 - phaseY * 2) * 2.7;
       const materialGrain = finish === 'wood' ? Math.sin(phaseY * 24 + Math.sin(phaseX * 2)) * 5.7 : finish === 'metal' ? Math.sin(phaseY * 13 + phaseX) * 3 : 0;
-      const base = finish === 'brick' || finish === 'slate' ? quarriedPattern(finish, x, y, size) : 244;
-      const shade = base + (wash + materialGrain + fleck * 13 - (fleck < -.47 ? 9 : 0)) * recipe.rough;
+      const masonry = finish === 'brick' || finish === 'ashlar' || finish === 'slate';
+      const base = masonry ? quarriedPattern(finish, x, y, size) : finish === 'stucco' ? 236 : 244;
+      const erosion = Math.sin(phaseX * 12 + Math.sin(phaseY) * .8) * Math.sin(phaseY * 3) * (masonry ? 3.2 : finish === 'stucco' ? 6.7 : 2);
+      const shade = base + (wash + materialGrain + erosion + fleck * 14 - (fleck < -.47 ? 14 : 0)) * recipe.rough;
       const index = (y * size + x) * 4;
-      sample.data[index] = sample.data[index + 1] = sample.data[index + 2] = shade;
+      sample.data[index] = shade + (finish === 'brick' ? wash * .31 + erosion : 0);
+      sample.data[index + 1] = shade;
+      sample.data[index + 2] = shade - (finish === 'brick' ? wash * .37 + erosion : 0);
       sample.data[index + 3] = 255;
     }
     ctx.putImageData(sample, 0, 0);
@@ -208,67 +217,171 @@ class StructureKit {
   }
 }
 
-type Wall = { point: (x: number, y: number, inset: number) => XYZ; yaw: number };
+type Pierce = { left: number; right: number; bottom: number; top: number };
+type Masonry = { finish: 'ashlar' | 'brick' | 'stucco'; material: number };
+type Wall = { point: (x: number, y: number, inset: number) => XYZ; yaw: number; openings?: Pierce[]; masonry?: Masonry };
 
-function wall(x: number, z: number, yaw = 0): Wall {
+function wall(x: number, z: number, yaw = 0, masonry?: Masonry): Wall {
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
-  return { yaw, point: (offset, y, inset) => [x + offset * cos + inset * sin, y, z - offset * sin + inset * cos] };
+  return { yaw, masonry, openings: masonry ? [] : undefined,
+    point: (offset, y, inset) => [x + offset * cos + inset * sin, y, z - offset * sin + inset * cos] };
 }
 
-function jamb(kit: StructureKit, mount: Wall, x: number, top: number, width: number, tint = limestone) {
-  for (const offset of [-.27, .27]) {
-    kit.block('stone', tint, mount.point(x + offset * width, top + .062, .052), [width * .53, .115, .177], true, mount.yaw);
+function facadePanel(kit: StructureKit, mount: Wall, left: number, right: number, bottom: number, top: number, depth: number, finish: Finish, color: ColorRepresentation) {
+  if (right - left < .0005 || top - bottom < .0005) return;
+  kit.panel(finish, color, [mount.point(left, bottom, depth), mount.point(right, bottom, depth),
+    mount.point(right, top, depth), mount.point(left, top, depth)]);
+}
+
+function piercedWall(kit: StructureKit, mount: Wall, width: number, base: number, height: number, depth: number, finish: Finish, color: ColorRepresentation) {
+  const openings = mount.openings?.filter(opening => opening.bottom < height && opening.top > base) ?? [];
+  const levels = [...new Set([base, height, ...openings.flatMap(opening => [Math.max(opening.bottom, base), Math.min(opening.top, height)])])].sort((a, b) => a - b);
+  for (let i = 0; i < levels.length - 1; i++) {
+    const bottom = levels[i], top = levels[i + 1];
+    const cuts = openings.filter(opening => opening.bottom <= bottom && opening.top >= top).sort((a, b) => a.left - b.left);
+    let cursor = -width / 2;
+    for (const cut of cuts) {
+      facadePanel(kit, mount, cursor, Math.min(cut.left, width / 2), bottom, top, depth, finish, color);
+      cursor = Math.max(cut.right, cursor);
+    }
+    facadePanel(kit, mount, cursor, width / 2, bottom, top, depth, finish, color);
   }
 }
 
-function windowBay(kit: StructureKit, mount: Wall, x: number, y: number, w: number, h: number, style: 'arch' | 'sash' | 'band', lit = false) {
-  const backing = style === 'arch' ? arch : unitCube;
-  const base = style === 'arch' ? y : y + h / 2;
-  const z = .027;
+function civicReveal(kit: StructureKit, mount: Wall, x: number, y: number, w: number, h: number, curved: boolean, paint: number) {
+  const depth = mount.openings ? -.232 : .056;
+  const rim = mount.openings ? .093 : .202;
+  const span = w * .50;
+  const frame = w * .436;
+  const spring = y + (curved ? h * .646 : h);
+  const top = y + h;
+  const stone = new Color(paint);
+  mount.openings?.push({ left: x - span, right: x + span, bottom: y, top });
+  const direction = [-1, 1] as const;
+  for (const side of direction) {
+    const face = x + span * side;
+    const jambEdge = x + frame * side;
+    const shape = [mount.point(face, y, rim), mount.point(face, spring, rim),
+      mount.point(jambEdge, spring - .033, depth), mount.point(jambEdge, y + .022, depth)];
+    kit.panel('stone', stone.clone().multiplyScalar(side === -1 ? .66 : .79), side === -1 ? shape : shape.reverse());
+    kit.block('stone', paint, mount.point(face, (spring + y) / 2, rim - .028), [.051, spring - y, .087], true, mount.yaw);
+  }
+  kit.panel('stone', stone.clone().multiplyScalar(.81), [mount.point(x - span, y, rim), mount.point(x + span, y, rim),
+    mount.point(x + frame, y + .022, depth), mount.point(x - frame, y + .022, depth)]);
+  if (!curved) {
+    kit.panel('stone', stone.clone().multiplyScalar(.69), [mount.point(x - span, top, rim), mount.point(x - frame, top - .033, depth),
+      mount.point(x + frame, top - .033, depth), mount.point(x + span, top, rim)]);
+  } else {
+    const radius = h * .354;
+    const arc = (angle: number, width: number, arcRise: number, at: number) => mount.point(x + Math.cos(angle) * width, spring + Math.sin(angle) * arcRise, at);
+    for (let index = 0; index < 10; index++) {
+      const from = index * Math.PI / 10, to = (index + 1) * Math.PI / 10;
+      const lipA = arc(from, span, radius, rim), lipB = arc(to, span, radius, rim);
+      kit.panel('stone', stone.clone().multiplyScalar(.66 + index * .013), [lipA, lipB,
+        arc(to, frame, radius - .026, depth), arc(from, frame, radius - .026, depth)]);
+      if (mount.masonry) {
+        const a = arc(from, span, radius, 0), b = arc(to, span, radius, 0);
+        kit.panel(mount.masonry.finish, mount.masonry.material, [a, mount.point(x + Math.cos(from) * span, top, 0),
+          mount.point(x + Math.cos(to) * span, top, 0), b]);
+      }
+    }
+  }
+  return { depth, rim, frame, spring, top };
+}
+
+function windowBay(kit: StructureKit, mount: Wall, x: number, y: number, w: number, h: number,
+  style: 'arch' | 'sash' | 'band', lit = false, glazingOffset = 0) {
+  const curved = style === 'arch';
+  const stone = style === 'band' ? 0x778381 : limestone;
+  const reveal = civicReveal(kit, mount, x, y, w, h, curved, stone);
+  const { depth, rim, frame, spring, top } = reveal;
   const finish: Finish = lit ? 'light' : 'glass';
   const glow = lit ? warmGlass : blueGlass;
-  kit.piece('stone', style === 'band' ? slate : agedStone, backing, mount.point(x, base, z), [w + .094, h + .066, .047], mount.yaw);
-  kit.piece('metal', ink, backing, mount.point(x, base + (style === 'arch' ? .032 : 0), z + .033), [w - .026, h - .028, .026], mount.yaw);
-  kit.piece(finish, glow, backing, mount.point(x, base + (style === 'arch' ? .061 : 0), z + .058), [w - .115, h - .104, .021], mount.yaw);
-  const trim = style === 'sash' ? 0xdad5bf : slate;
-  kit.block('metal', trim, mount.point(x, y + h * .475, z + .082), [w - .10, .025, .023], false, mount.yaw);
+  const glazing = depth + .026 + (mount.openings ? glazingOffset * .36 : glazingOffset * .27);
+  const panelWidth = frame * 2;
+  const trim = style === 'sash' ? 0xd5c4a1 : 0x566261;
+  facadePanel(kit, mount, x - frame, x + frame, y + .022, spring - .026, glazing, finish, glow);
+  facadePanel(kit, mount, x - frame, x + frame, y + .023, y + h * .225, glazing + .006, finish,
+    new Color(glow).multiplyScalar(lit ? .79 : .63));
+  if (curved) {
+    const height = h * .354 - .014;
+    const arc = (angle: number) => mount.point(x + Math.cos(angle) * frame, spring + Math.sin(angle) * height - .027, glazing);
+    for (let i = 0; i < 10; i++) {
+      kit.panel(finish, glow, [mount.point(x, spring - .036, glazing + .002), arc(i * Math.PI / 10), arc((i + 1) * Math.PI / 10)]);
+    }
+  }
+  const bars = glazing + .036;
+  for (const offset of [-frame + .015, frame - .015]) {
+    kit.block('metal', trim, mount.point(x + offset, (y + spring) / 2, bars), [.029, spring - y - .048, .041], false, mount.yaw);
+  }
+  kit.block('metal', trim, mount.point(x, y + h * (curved ? .635 : .475), bars), [panelWidth, .032, .041], false, mount.yaw);
   if (style === 'sash') {
-    for (const offset of [-w * .134, w * .134]) {
-      kit.block('metal', trim, mount.point(x + offset, y + h * .50, z + .082), [.014, h - .10, .018], false, mount.yaw);
-    }
-    for (const rise of [.264, .722]) {
-      kit.block('metal', trim, mount.point(x, y + h * rise, z + .081), [w - .119, .011, .015], false, mount.yaw);
-    }
-    kit.block('stone', paleStone, mount.point(x, y + h + .032, .037), [w + .138, .082, .113], true, mount.yaw);
+    kit.block('wood', trim, mount.point(x, y + h * .51, bars), [.024, h - .049, .041], false, mount.yaw);
+    if (w > .63) kit.block('wood', trim, mount.point(x, y + h * .736, bars), [panelWidth, .018, .037], false, mount.yaw);
+    kit.block('stone', paleStone, mount.point(x, top + .030, rim - .027), [w + .128, .081, .137], true, mount.yaw);
   } else {
-    kit.block('metal', trim, mount.point(x, y + h * .55, z + .070), [.026, h * .70, .021], false, mount.yaw);
+    kit.block('metal', trim, mount.point(x, y + h * .451, bars), [.025, h * .836, .042], false, mount.yaw);
   }
-  kit.block('glass', 0xa5bcb0, mount.point(x - w * .26, y + h * .642, z + .072), [.033, h * .173, .014], false, mount.yaw);
-  if (!lit && style !== 'arch') {
-    const a = mount.point(x - w * .292, y + h * .73, z + .078);
-    const b = mount.point(x - w * .176, y + h * .796, z + .078);
-    const c = mount.point(x + w * .24, y + h * .562, z + .078);
-    const d = mount.point(x + w * .17, y + h * .485, z + .078);
-    kit.panel('glass', 0x8dafa8, [a, d, c, b]);
+  if (!lit) {
+    kit.panel('glass', 0x88978c, [mount.point(x - frame, y + h * .51, glazing + .010), mount.point(x + frame, y + h * .31, glazing + .010),
+      mount.point(x + frame, y + h * .37, glazing + .010), mount.point(x - frame, y + h * .57, glazing + .010)]);
+  } else if (style !== 'band') {
+    for (const sign of [-1, 1]) {
+      kit.block('wood', 0xbba17d, mount.point(x + sign * frame * .77, (spring + y) / 2, glazing + .014),
+        [panelWidth * .19, spring - y - .051, .012], false, mount.yaw);
+    }
   }
-  if (style !== 'band') jamb(kit, mount, x, y - .091, w + .135);
+  if (style !== 'band') {
+    kit.block('stone', paleStone, mount.point(x, y - .042, rim - .046), [w + .146, .089, .228], true, mount.yaw);
+    for (const offset of [-.28, .28]) kit.block('stone', agedStone, mount.point(x + offset * w, y - .104, rim - .051), [.074, .087, .135], true, mount.yaw);
+  }
 }
 
 function portal(kit: StructureKit, mount: Wall, x: number, w: number, h: number, rectangular = false) {
-  const geometry = rectangular ? unitCube : arch;
-  const bottom = rectangular ? h / 2 : .018;
-  kit.piece('stone', paleStone, geometry, mount.point(x, bottom + (rectangular ? .061 : .025), .005), [w + .23, h + .12, .104], mount.yaw);
-  kit.piece('metal', ink, geometry, mount.point(x, bottom + .06, .094), [w, h - .047, .033], mount.yaw);
-  kit.piece('glass', 0x5c8587, geometry, mount.point(x, bottom + .100, .121), [w - .176, h - .167, .022], mount.yaw);
-  kit.block('metal', ink, mount.point(x, h * .49, .152), [.058, h * .85, .041], true, mount.yaw);
-  kit.block('metal', ink, mount.point(x, h * .61, .151), [w - .14, .055, .03], false, mount.yaw);
-  for (const side of [-1, 1]) {
-    kit.block('metal', brightGold, mount.point(x + side * .108, .64, .174), [.023, .125, .039], true, mount.yaw);
-    kit.block('metal', slate, mount.point(x + side * w * .237, .292, .153), [w * .333, .31, .048], true, mount.yaw);
+  const reveal = civicReveal(kit, mount, x, .153, w, h - .153, !rectangular, limestone);
+  const { depth, rim, frame, spring } = reveal;
+  const glazing = depth + .036;
+  const bars = glazing + .035;
+  const leafHead = Math.min(h * .735, spring - .089);
+  facadePanel(kit, mount, x - frame, x + frame, .161, spring - .015, depth + .009, 'glass', 0x4d6263);
+  facadePanel(kit, mount, x - frame, x + frame, .202, leafHead - .066, glazing, 'glass', 0x537879);
+  if (!rectangular) {
+    const upper = mount.point(x, spring, depth + .012);
+    for (let i = 0; i < 10; i++) {
+      const arc = (a: number) => mount.point(x + Math.cos(a) * frame, spring + Math.sin(a) * (h - spring - .023), depth + .012);
+      kit.panel('glass', 0x6c837a, [upper, arc(i * Math.PI / 10), arc((i + 1) * Math.PI / 10)]);
+    }
+    for (const ray of [-1, -.48, .48, 1]) {
+      kit.beam('metal', bottle, mount.point(x, spring - .006, bars), mount.point(x + ray * frame * .96, spring + (h - spring) * (1 - Math.abs(ray) * .82), bars), .026);
+    }
+    const arch = (angle: number, offset: number, projection: number) => mount.point(
+      x + Math.cos(angle) * (w / 2 + offset), spring + Math.sin(angle) * (h - spring + offset), projection,
+    );
+    for (let i = 0; i < 11; i++) {
+      const a = i * Math.PI / 11 + .012, b = (i + 1) * Math.PI / 11 - .012;
+      const outer = i === 5 ? .135 : .101;
+      const face = rim + (i === 5 ? .114 : .062);
+      kit.panel('stone', i === 5 ? paleStone : limestone, [arch(a, outer, face), arch(b, outer, face), arch(b, .002, rim + .024), arch(a, .002, rim + .024)]);
+      kit.panel('stone', agedStone, [arch(a, .002, rim + .024), arch(b, .002, rim + .024), arch(b, -.011, rim), arch(a, -.011, rim)]);
+    }
   }
-  kit.block('stone', concrete, mount.point(x, .046, .294), [w + .36, .09, .38], true, mount.yaw);
-  kit.block('stone', agedStone, mount.point(x, .111, .173), [w + .27, .124, .26], true, mount.yaw);
+  kit.block('metal', bottle, mount.point(x, (leafHead + .171) / 2, bars), [.056, leafHead - .171, .071], true, mount.yaw);
+  for (const y of [leafHead, spring - .052]) {
+    kit.block('metal', bottle, mount.point(x, y, bars), [frame * 2, .052, .068], false, mount.yaw);
+  }
+  for (const offset of [-.5, .5]) {
+    kit.block('stone', paleStone, mount.point(x + w * offset, h * .407, rim - .048), [.082, h * .61, .144], true, mount.yaw);
+  }
+  if (rectangular) kit.block('stone', paleStone, mount.point(x, h + .012, rim - .020), [w + .228, .127, .213], true, mount.yaw);
+  for (const side of [-1, 1]) {
+    const center = x + side * frame * .515;
+    kit.block('wood', bottle, mount.point(center, .366, bars), [frame * .951, .414, .056], true, mount.yaw);
+    kit.block('wood', 0x496254, mount.point(center, .369, bars + .033), [frame * .66, .274, .024], true, mount.yaw);
+    kit.block('metal', brightGold, mount.point(x + side * w * .105, .665, bars + .041), [.023, .124, .036], true, mount.yaw);
+  }
+  kit.block('stone', concrete, mount.point(x, .043, .186), [w + .39, .086, .605], true, mount.yaw);
+  kit.block('stone', agedStone, mount.point(x, .114, .024), [w + .24, .126, .666], true, mount.yaw);
 }
 
 function pilaster(kit: StructureKit, mount: Wall, x: number, h: number, tint = limestone, spread = .19) {
@@ -277,6 +390,17 @@ function pilaster(kit: StructureKit, mount: Wall, x: number, h: number, tint = l
   kit.block('stone', paleStone, mount.point(x, h - .10, .11), [spread + .09, .15, .21], true, mount.yaw);
   for (const delta of [-.050, 0, .05]) {
     kit.block('stone', paleStone, mount.point(x + delta, h * .55, .171), [.018, h * .64, .023], false, mount.yaw);
+  }
+}
+
+function pilasterPedestal(kit: StructureKit, mount: Wall, x: number, top: number) {
+  kit.block('stone', agedStone, mount.point(x, .258, .128), [.298, .36, .267], true, mount.yaw);
+  kit.block('stone', limestone, mount.point(x, .405, .149), [.304, .076, .312], true, mount.yaw);
+  kit.block('stone', paleStone, mount.point(x, top - .183, .203), [.235, .068, .259], true, mount.yaw);
+  kit.block('stone', agedStone, mount.point(x, top - .111, .189), [.276, .098, .288], true, mount.yaw);
+  kit.block('stone', paleStone, mount.point(x, top - .034, .177), [.316, .072, .307], true, mount.yaw);
+  for (const offset of [-.079, .079]) {
+    kit.piece('stone', agedStone, cylinder, mount.point(x + offset, top - .129, .337), [.035, .094, .033], mount.yaw);
   }
 }
 
@@ -344,19 +468,52 @@ function slab(kit: StructureKit, x: number, z: number, y: number, w: number, d: 
   kit.block('stone', paleStone, [x, y + .069, z], [w + .024, .041, d + .024], true);
 }
 
-type Lot = { parcel: CityParcel; x: number; z: number; front: number; rear: number; w: number; d: number; h: number; facade: Wall; side: Wall };
+type Lot = { parcel: CityParcel; x: number; z: number; front: number; rear: number; w: number; d: number; h: number;
+  facade: Wall; side: Wall; innerWall: Wall; westWall: Wall; shell?: Masonry };
+
+const civicMasonry: Partial<Record<CityParcel['kind'], Masonry>> = {
+  archive: { finish: 'ashlar', material: 0xcbb086 },
+  clinic: { finish: 'brick', material: 0xa8735c },
+  market: { finish: 'brick', material: 0x935541 },
+  station: { finish: 'brick', material: 0x9c674e },
+  office: { finish: 'ashlar', material: 0xc3b196 },
+  hotel: { finish: 'stucco', material: 0xca8a50 },
+};
 
 function lotBounds(parcel: CityParcel): Lot {
   const w = parcel.width - .34;
   const d = parcel.depth - .31;
   const x = parcel.x + parcel.width / 2;
   const z = parcel.z + parcel.depth / 2;
+  const shell = parcel.kind === 'apartment'
+    ? { finish: 'brick' as const, material: parcel.finish < 2 ? buffStock : 0xa0674e }
+    : parcel.kind === 'warehouse' ? { finish: 'brick' as const, material: parcel.stories === 1 ? 0x8f5945 : buffStock }
+      : civicMasonry[parcel.kind];
   return {
-    parcel, x, z, w, d, front: z + d / 2, rear: z - d / 2,
+    parcel, x, z, w, d, shell, front: z + d / 2, rear: z - d / 2,
     h: .76 + parcel.stories * 1.05,
-    facade: wall(x, z + d / 2),
-    side: wall(x + w / 2, z, Math.PI / 2),
+    facade: wall(x, z + d / 2, 0, shell),
+    side: wall(x + w / 2, z, Math.PI / 2, shell),
+    innerWall: wall(x, z - d / 2, Math.PI, shell),
+    westWall: wall(x - w / 2, z, -Math.PI / 2, shell),
   };
+}
+
+function civicShell(kit: StructureKit, lot: Lot, masonry: Masonry, height: number) {
+  const { facade, innerWall, side, westWall, w, d } = lot;
+  for (const [mount, width, shade] of [[facade, w, 1], [innerWall, w, .96], [side, d, .98], [westWall, d, .92]] as const) {
+    const base = new Color(masonry.material).multiplyScalar(shade);
+    piercedWall(kit, mount, width, 0, height, 0, masonry.finish, base);
+    if (masonry.finish === 'brick') continue;
+    const courses = lot.parcel.kind === 'office' ? 10 : 6;
+    const plinth = masonry.finish === 'stucco' ? new Color(0xc5a484).multiplyScalar(shade) : base;
+    for (let course = 0; course < courses; course++) {
+      const lower = .227 + course * .229;
+      const color = plinth.clone().multiplyScalar(course % 2 ? .92 : .97);
+      piercedWall(kit, mount, width - .055, lower + .013, lower + .196, .024, 'ashlar', color);
+      piercedWall(kit, mount, width - .080, lower + .196, lower + .213, .019, 'stone', plinth.clone().multiplyScalar(1.09));
+    }
+  }
 }
 
 function foundation(kit: StructureKit, lot: Lot, finish = concrete) {
@@ -366,6 +523,77 @@ function foundation(kit: StructureKit, lot: Lot, finish = concrete) {
 
 function stringCourse(kit: StructureKit, lot: Lot, y: number, tint = agedStone) {
   kit.block('stone', tint, [lot.x, y, lot.z], [lot.w + .085, .079, lot.d + .079], true);
+}
+
+function streetCornice(kit: StructureKit, mount: Wall, width: number, y: number) {
+  kit.block('stone', agedStone, mount.point(0, y - .089, .064), [width, .079, .16], true, mount.yaw);
+  kit.block('stone', limestone, mount.point(0, y - .018, .107), [width + .058, .079, .244], true, mount.yaw);
+  kit.block('stone', paleStone, mount.point(0, y + .041, .131), [width + .098, .055, .282], true, mount.yaw);
+  const consoles = Math.round(width / .25);
+  for (let i = 0; i < consoles; i++) {
+    const x = (i - (consoles - 1) / 2) * .25;
+    kit.block('stone', limestone, mount.point(x, y - .096, .156), [.076, .071, .145], true, mount.yaw);
+  }
+}
+
+function dressedArch(kit: StructureKit, mount: Wall, x: number, y: number, width: number, height: number, lit = false) {
+  windowBay(kit, mount, x, y, width, height, 'arch', lit, .039);
+  const spring = y + height * .65;
+  const point = (angle: number, outer: boolean, depth: number) => mount.point(
+    x + Math.cos(angle) * (width * .50 + (outer ? .080 : .019)),
+    spring + Math.sin(angle) * (height * .345 + (outer ? .085 : .026)), depth,
+  );
+  for (let i = 0; i < 9; i++) {
+    const start = Math.PI * i / 9 + .017;
+    const end = Math.PI * (i + 1) / 9 - .017;
+    const depth = i === 4 ? .182 : .156;
+    const outerStart = point(start, true, depth), outerEnd = point(end, true, depth);
+    const innerStart = point(start, false, depth), innerEnd = point(end, false, depth);
+    kit.panel('stone', i === 4 ? paleStone : limestone, [outerStart, outerEnd, innerEnd, innerStart]);
+    kit.panel('stone', agedStone, [innerStart, innerEnd, point(end, false, .065), point(start, false, .065)]);
+  }
+}
+
+function cantedSash(kit: StructureKit, mount: Wall, x: number, y: number, width: number, height: number, lit: boolean) {
+  const outline = [[-.5, .024], [-.27, .207], [.27, .207], [.5, .024]] as const;
+  const unit = ([u, depth]: readonly [number, number], elevation: number) => mount.point(x + u * width, elevation, depth);
+  kit.panel('stone', paleStone, outline.map(point => unit(point, y + height)));
+  kit.panel('stone', agedStone, [...outline].reverse().map(point => unit(point, y)));
+  for (let i = 0; i < outline.length - 1; i++) {
+    const a = outline[i], b = outline[i + 1];
+    const run = (b[0] - a[0]) * width;
+    const depth = b[1] - a[1];
+    const span = Math.hypot(run, depth);
+    const center = unit([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], y);
+    const face = wall(center[0], center[2], mount.yaw - Math.atan2(depth, run));
+    kit.panel('stone', limestone, [unit(a, y), unit(b, y), unit(b, y + height), unit(a, y + height)]);
+    kit.block('metal', bottle, face.point(0, y + height * .51, .014), [span - .034, height - .13, .041], true, face.yaw);
+    kit.block(lit ? 'light' : 'glass', lit ? warmGlass : blueGlass,
+      face.point(0, y + height * .51, .043), [span - .084, height - .183, .017], false, face.yaw);
+    for (const rail of [.29, .51, .73]) {
+      kit.block('wood', ivory, face.point(0, y + height * rail, .055), [span - .080, rail === .51 ? .031 : .017, .024], false, face.yaw);
+    }
+    kit.block('wood', ivory, face.point(0, y + height * .51, .058), [.023, height - .183, .023], false, face.yaw);
+    kit.block('stone', paleStone, face.point(0, y + height - .027, .032), [span + .024, .064, .099], true, face.yaw);
+    kit.block('stone', paleStone, face.point(0, y + .018, .036), [span + .035, .079, .112], true, face.yaw);
+  }
+  for (const offset of [-.24, .24]) {
+    kit.block('stone', agedStone, mount.point(x + width * offset, y - .061, .101), [.098, .138, .203], true, mount.yaw);
+  }
+}
+
+function shopBlade(kit: StructureKit, mount: Wall, x: number, y: number, text: string, theme: 'bronze' | 'navy') {
+  const at = mount.point(x, y, .37);
+  kit.beam('metal', castIron, mount.point(x, y + .292, .062), mount.point(x, y + .292, .603), .035);
+  kit.beam('metal', castIron, mount.point(x, y + .185, .093), mount.point(x, y + .290, .528), .028);
+  kit.block('metal', theme === 'bronze' ? darkBrick : bottle, at, [.388, .414, .052], true, mount.yaw + Math.PI / 2);
+  for (const depth of [.228, .517]) {
+    kit.beam('metal', brass, mount.point(x, y + .288, depth), mount.point(x, y + .158, depth), .023, true);
+  }
+  for (const side of [-1, 1]) {
+    const face = mount.point(x + side * .013, y, .366);
+    signage(kit, wall(face[0], face[2], mount.yaw + side * Math.PI / 2), text, 0, y - .007, .315, .159, theme);
+  }
 }
 
 function steppedCrown(kit: StructureKit, lot: Lot, y: number, color = stoneCrown) {
@@ -391,16 +619,6 @@ function trimPanel(kit: StructureKit, mount: Wall, x: number, y: number, w: numb
   kit.block('stone', stoneColor, mount.point(x, y, .033), [w, h, .085], true, mount.yaw);
   kit.block('stone', new Color(stoneColor).multiplyScalar(.88), mount.point(x, y, .074), [w * .78, h * .64, .035], true, mount.yaw);
   kit.block('stone', new Color(stoneColor).multiplyScalar(1.04), mount.point(x, y + .032, .096), [w * .71, h * .19, .021], false, mount.yaw);
-}
-
-function roofVent(kit: StructureKit, x: number, y: number, z: number, width: number, tint = slate) {
-  kit.block('metal', ink, [x, y, z], [width + .10, .066, .42], true);
-  kit.block('metal', tint, [x, y + .111, z], [width, .20, .35], true);
-  kit.block('metal', slate, [x, y + .227, z], [width + .073, .060, .407], true);
-  kit.block('metal', copper, [x, y + .262, z], [width * .68, .023, .058], true);
-  for (let i = 1; i < 4; i++) {
-    kit.block('metal', ink, [x, y + .047 + i * .041, z + .178], [width * .66, .018, .021]);
-  }
 }
 
 function weatherVane(kit: StructureKit, x: number, y: number, z: number) {
@@ -653,20 +871,6 @@ function gardenWorkshopRoof(kit: StructureKit, lot: Lot, y: number) {
   kit.block('metal', teal, [x, y + .104, head], [.334, .153, .066], true);
 }
 
-function wallCourses(kit: StructureKit, mount: Wall, width: number, lower: number, count: number, interval: number, hue: number) {
-  for (let row = 0; row < count; row++) {
-    const y = lower + row * interval;
-    const seam = .49;
-    for (let left = -width / 2, index = 0; left < width / 2 - .01; index++) {
-      const nominal = row % 2 && index === 0 ? seam / 2 : seam * (.82 + rand(index, row, 5) * .36);
-      const span = Math.min(width / 2 - left, nominal);
-      const tileColor = new Color(hue).multiplyScalar(.89 + rand(row, index, 9) * .17);
-      kit.block('stone', tileColor, mount.point(left + span / 2, y, .026), [Math.max(.018, span - .013), interval - .014, .039], false, mount.yaw);
-      left += span;
-    }
-  }
-}
-
 function upperStoreys(kit: StructureKit, lot: Lot, first = 1.65, count = lot.parcel.stories - 1, style: 'arch' | 'sash' | 'band' = 'sash',
   columns = 3, body = limestone, centerBay = true) {
   const { facade, side, w, d } = lot;
@@ -688,12 +892,13 @@ function upperStoreys(kit: StructureKit, lot: Lot, first = 1.65, count = lot.par
 
 function archiveLightwell(kit: StructureKit, mount: Wall) {
   windowBay(kit, mount, 0, 2.16, .86, 1.47, 'arch');
+  const inner = -.151;
   for (const y of [2.57, 2.864, 3.19]) {
-    kit.block('metal', slate, mount.point(0, y, .116), [.719, .044, .027]);
+    kit.block('metal', slate, mount.point(0, y, inner), [.719, .044, .027]);
   }
   for (const side of [-1, 1]) {
-    kit.beam('metal', gold, mount.point(0, 3.18, .124), mount.point(side * .233, 3.480, .124), .023);
-    kit.beam('metal', slate, mount.point(side * .158, 2.22, .118), mount.point(side * .158, 3.20, .118), .026);
+    kit.beam('metal', gold, mount.point(0, 3.18, inner + .008), mount.point(side * .233, 3.480, inner + .008), .023);
+    kit.beam('metal', slate, mount.point(side * .158, 2.22, inner), mount.point(side * .158, 3.20, inner), .026);
   }
   kit.block('stone', paleStone, mount.point(0, 3.65, .062), [.173, .135, .129], true);
 }
@@ -702,14 +907,14 @@ function archiveShelves(kit: StructureKit, mount: Wall, x: number, y: number) {
   const bindings = [0x557175, 0x6e8580, 0x93927a, 0x637a74, 0x7a7760];
   for (let shelf = 0; shelf < 2; shelf++) {
     const line = y + shelf * .151;
-    kit.block('glass', 0x527378, mount.point(x, line, .101), [.55, .145, .015]);
-    kit.block('glass', 0x567477, mount.point(x, line - .073, .120), [.54, .020, .012]);
+    kit.block('glass', 0x527378, mount.point(x, line, -.175), [.55, .145, .015]);
+    kit.block('glass', 0x567477, mount.point(x, line - .073, -.158), [.54, .020, .012]);
     for (let book = 0; book < 7; book++) {
       const offset = (book - 3) * .075;
       if (Math.abs(offset) < .057) continue;
       const height = .069 + rand(book, shelf, 81) * .044;
       const paint = bindings[(book * 3 + shelf) % bindings.length];
-      kit.block('glass', paint, mount.point(x + offset, line - .065 + height / 2, .123), [.031 + rand(book, shelf, 42) * .026, height, .018]);
+      kit.block('glass', paint, mount.point(x + offset, line - .065 + height / 2, -.143), [.031 + rand(book, shelf, 42) * .026, height, .018]);
     }
   }
 }
@@ -717,38 +922,40 @@ function archiveShelves(kit: StructureKit, mount: Wall, x: number, y: number) {
 function marketDisplay(kit: StructureKit, mount: Wall, x: number, variant: number) {
   const produce = [0xb88962, 0xaaa06d, 0x81916a, 0xb17c65];
   const width = .286;
+  const projection = -.29 + (variant ? .031 : 0);
   for (const side of [-1, 1]) {
     const middle = x + side * .24;
-    kit.block(variant === 0 ? 'skylight' : 'glass', 0x536f6c, mount.point(middle, .824, .154), [width, .257, .022]);
-    kit.block('wood', 0x8b6c52, mount.point(middle, .779, .171), [width, .031, .014]);
+    kit.block(variant === 0 ? 'skylight' : 'glass', 0x536f6c, mount.point(middle, .824, .154 + projection), [width, .257, .022]);
+    kit.block('wood', 0x8b6c52, mount.point(middle, .779, .171 + projection), [width, .031, .014]);
     for (let i = -1; i <= 1; i++) {
       const color = produce[(i + 3 + variant * 2) % produce.length];
-      kit.block('glass', color, mount.point(middle + i * .067, .811, .173), [.059, .05 + .018 * (1 - Math.abs(i)), .017], true);
+      kit.block('glass', color, mount.point(middle + i * .067, .811, .173 + projection), [.059, .05 + .018 * (1 - Math.abs(i)), .017], true);
     }
   }
 }
 
 function archive(kit: StructureKit, lot: Lot) {
-  const { x, z, w, d, h, facade, side } = lot;
-  const walls = 0xaf7459;
-  kit.block('brick', walls, [x, h / 2, z], [w, h, d], true);
-  kit.block('stone', limestone, facade.point(0, h * .51, -.025), [1.80, h * 1.025, .161], true);
-  foundation(kit, lot);
-  wallCourses(kit, facade, w - .28, .27, 4, .168, 0xc6a993);
+  const { x, z, w, d, h, facade } = lot;
+  const walls = 0xcbad84;
+  foundation(kit, lot, 0xa99b80);
   portal(kit, facade, 0, 1.16, 1.63);
-  for (const offset of [-.239, .239]) kit.block('wood', bottle, facade.point(offset, .515, .179), [.305, .57, .042], true);
   placedSign(kit, facade, 1.913, '潮汐档案馆', 2.08);
   for (const offset of [-1.39, 1.39]) {
     windowBay(kit, facade, offset, .54, .84, .79, 'sash');
     archiveShelves(kit, facade, offset, .81);
   }
-  for (const offset of [-1.94, -.97, .97, 1.94]) pilaster(kit, facade, offset, offset === .97 || offset === -.97 ? 3.50 : 3.31, limestone, .145);
+  for (const offset of [-1.94, -.97, .97, 1.94]) {
+    pilaster(kit, facade, offset, Math.abs(offset) < 1 ? 3.50 : 3.31, limestone, .172);
+    pilasterPedestal(kit, facade, offset, Math.abs(offset) < 1 ? 3.50 : 3.31);
+  }
   for (const offset of [-1.39, 1.39]) trimPanel(kit, facade, offset, 2.888, .64, .205, limestone);
-  upperStoreys(kit, lot, 2.08, 2, 'sash', 3, limestone, false);
+  const spacing = w / 3.58;
+  for (const offset of [-spacing, spacing]) {
+    dressedArch(kit, facade, offset, 2.105, .627, .712, offset < 0);
+    windowBay(kit, facade, offset, 3.163, .629, .569, 'sash', offset > 0);
+  }
   archiveLightwell(kit, facade);
-  windowBay(kit, side, .18, .57, 1.05, .86, 'arch');
-  drainpipe(kit, side, -1.301, 3.73);
-  for (const level of [1.46, 3.77]) stringCourse(kit, lot, level);
+  streetCornice(kit, facade, w - .12, 3.745);
   slab(kit, x, z, h + .04, w + .11, d + .118, limestone);
   slateGable(kit, lot, h + .140, w + .087, d + .096, .699, welshSlate, walls);
   pediment(kit, facade, 0, h + .139, 2.09, .58);
@@ -761,13 +968,11 @@ function archive(kit: StructureKit, lot: Lot) {
 
 function clinic(kit: StructureKit, lot: Lot) {
   const { x, z, w, d, h, facade, side } = lot;
-  const walls = 0xb58265;
-  kit.block('brick', walls, [x, h * .49, z], [w, h * .98, d], true);
+  const walls = 0xa8735c;
   foundation(kit, lot, 0xb9ad95);
-  kit.block('stone', 0xc6a78c, facade.point(0, 1.83, -.032), [1.43, 3.62, .162], true);
   for (const offset of [-1.43, 1.43]) {
     windowBay(kit, facade, offset, .51, 1.02, .88, 'sash', offset > 0);
-    windowBay(kit, facade, offset, 1.90, .94, .70, 'sash', offset < 0);
+    cantedSash(kit, facade, offset, 1.89, .96, .735, offset < 0);
     windowBay(kit, facade, offset, 2.90, .88, .61, 'sash');
     for (const corner of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
       const depth = corner % 2 ? .195 : .292;
@@ -777,8 +982,8 @@ function clinic(kit: StructureKit, lot: Lot) {
   for (const offset of [-.69, .69]) pilaster(kit, facade, offset, 3.66, limestone, .143);
   stringCourse(kit, lot, 1.56, agedStone);
   stringCourse(kit, lot, 3.65, limestone);
+  streetCornice(kit, facade, w - .13, 3.627);
   portal(kit, facade, 0, 1.02, 1.53);
-  for (const offset of [-.224, .224]) kit.block('wood', bottle, facade.point(offset, .58, .184), [.335, .699, .065], true);
   kit.block('metal', bottle, facade.point(0, 1.79, .268), [1.78, .088, .53], true);
   kit.block('metal', 0x987c58, facade.point(0, 1.827, .513), [1.74, .030, .038], true);
   kit.block('skylight', 0xc6b59a, facade.point(0, 1.726, .358), [1.01, .020, .093], true);
@@ -817,21 +1022,21 @@ function awning(kit: StructureKit, mount: Wall, x: number, y: number, width: num
 
 function market(kit: StructureKit, lot: Lot) {
   const { x, z, w, d, h, facade, side } = lot;
-  const walls = 0xa9694f;
-  kit.block('brick', walls, [x, h / 2, z], [w, h, d], true);
+  const walls = 0x935541;
   foundation(kit, lot, darkBrick);
-  wallCourses(kit, facade, w - .23, .27, 9, .162, redBrick);
-  wallCourses(kit, side, d - .31, .30, 7, .162, redBrick);
+  portal(kit, facade, 0, 1.01, 1.51, true);
   for (const offset of [-1.38, 0, 1.38]) {
-    portal(kit, facade, offset, 1.01, 1.51, Math.abs(offset) < .1);
-    awning(kit, facade, offset, 1.81, 1.15, 0x7c674f);
+    if (offset) dressedArch(kit, facade, offset, .352, 1.03, 1.19, offset < 0);
+    awning(kit, facade, offset, 1.81, 1.15, offset < 0 ? 0x8d513f : offset > 0 ? 0x8f754e : bottle);
     marketDisplay(kit, facade, offset, Math.sign(offset));
   }
+  shopBlade(kit, facade, 1.987, 2.13, '市集', 'bronze');
   placedSign(kit, facade, 2.16, '港湾市场', 1.74);
   for (const offset of [-2.02, -.687, .687, 2.02]) pilaster(kit, facade, offset, 2.42, agedStone, .13);
   upperStoreys(kit, lot, 2.54, 2, 'sash', 4, redBrick);
   drainpipe(kit, side, -.912, h - .16);
   stringCourse(kit, lot, 2.36, agedStone);
+  streetCornice(kit, facade, w - .08, 2.438);
   stringCourse(kit, lot, 4.31, agedStone);
   steppedCrown(kit, lot, h - .07, redBrick);
   monitorRoof(kit, lot, h + .28);
@@ -870,11 +1075,9 @@ function stationStair(kit: StructureKit, lot: Lot) {
 function station(kit: StructureKit, lot: Lot) {
   const { x, z, w, d, h, facade, side } = lot;
   const walls = 0xa96a4e;
-  kit.block('brick', walls, [x, (h - .41) / 2, z], [w, h - .41, d], true);
-  kit.block('brick', 0xb47859, facade.point(0, 2.51, -.059), [1.99, 2.32, .206], true);
   foundation(kit, lot);
   for (const offset of [-1.54, 1.54]) {
-    windowBay(kit, facade, offset, .42, .85, 1.10, 'arch', offset > 0);
+    dressedArch(kit, facade, offset, .42, .85, 1.10, offset > 0);
     windowBay(kit, facade, offset, 2.07, .84, .70, 'sash');
   }
   for (const offset of [-1.92, -.992, .992, 1.92]) pilaster(kit, facade, offset, 3.21, limestone, .132);
@@ -887,10 +1090,12 @@ function station(kit: StructureKit, lot: Lot) {
   }
   kit.block('skylight', 0xc2ac83, facade.point(0, 1.768, .245), [1.32, .018, .053], true);
   placedSign(kit, facade, 2.12, '中央车站', 1.96, 'navy');
+  shopBlade(kit, side, .922, 1.99, '站厅', 'navy');
   windowBay(kit, facade, 0, 2.36, 1.31, .76, 'arch', true);
   windowBay(kit, side, -.64, .64, .78, .91, 'arch');
   windowBay(kit, side, .70, .64, .78, .91, 'arch');
-  for (const y of [1.38, 2.87, 3.23]) stringCourse(kit, lot, y, limestone);
+  for (const y of [1.895, 3.23]) stringCourse(kit, lot, y, limestone);
+  streetCornice(kit, facade, w - .15, 3.203);
   slab(kit, x, z, h - .36, w + .11, d + .12, limestone);
   barrelRoof(kit, x, z - .04, h - .235, w - .12, d + .085, 0x698581, 1.04, 6, true);
   const clock = wall(x, lot.front + .090);
@@ -970,9 +1175,7 @@ function apartment(kit: StructureKit, lot: Lot) {
   const { parcel, x, z, w, d, h, facade, side } = lot;
   const paint = parcel.finish < 2 ? buffStock : 0xad7257;
   const edge = parcel.finish < 2 ? 0xddc7a7 : 0xceac8a;
-  kit.block('brick', paint, [x, h / 2, z], [w, h, d], true);
   foundation(kit, lot, 0xb6a799);
-  wallCourses(kit, facade, w - .32, .23, 5, .151, edge);
   portal(kit, facade, 0, .91, 1.53, parcel.finish === 1);
   cantedBay(kit, facade, -1.44, .49, .96, .795, parcel.finish === 1);
   cantedBay(kit, facade, 1.44, .49, .96, .795, parcel.finish !== 1);
@@ -1001,21 +1204,23 @@ function apartment(kit: StructureKit, lot: Lot) {
 
 function hotel(kit: StructureKit, lot: Lot) {
   const { x, z, w, d, h, facade, side } = lot;
-  const burgundy = 0xa06651;
-  kit.block('brick', burgundy, [x, h / 2, z], [w, h, d], true);
+  const burgundy = 0xb37550;
   foundation(kit, lot, agedStone);
-  wallCourses(kit, facade, w - .24, .26, 6, .161, 0xbe9071);
   portal(kit, facade, 0, 1.03, 1.46);
   placedSign(kit, facade, 1.82, '潮汐旅馆', 1.54);
-  windowBay(kit, facade, -1.50, .39, .79, .90, 'arch');
-  windowBay(kit, facade, 1.50, .39, .79, .90, 'arch', true);
-  upperStoreys(kit, lot, 2.03, 4, 'sash', 3, burgundy);
-  for (const offset of [-1.41, 1.41]) balustrade(kit, facade, offset, 1.947, .95);
+  for (const offset of [-1.46, 1.46]) {
+    dressedArch(kit, facade, offset, .39, .86, .92, offset > 0);
+    awning(kit, facade, offset, 1.499, 1.032, 0x914837);
+    balustrade(kit, facade, offset, 1.947, .96);
+  }
+  upperStoreys(kit, lot, 2.03, 5, 'sash', 3, burgundy);
   for (const xOffset of [-1.93, -.883, .883, 1.93]) pilaster(kit, facade, xOffset, h - .18, agedStone, .141);
   for (const y of [1.537, h - .54]) stringCourse(kit, lot, y, limestone);
   for (const zOffset of [-1.41, 1.41]) {
     kit.block('stone', agedStone, side.point(zOffset, h * .49, .029), [.157, h * .84, .089], false, side.yaw);
   }
+  streetCornice(kit, facade, w - .12, h - .106);
+  streetCornice(kit, side, d - .12, h - .106);
   steppedCrown(kit, lot, h + .012, limestone);
   slateMansard(kit, lot, h + .377, w - .072, d - .091, .79, welshSlate);
   for (const offset of [-1.31, 0, 1.31]) roofDormer(kit, x + offset, h + .495, z + 1.31, offset === 0 ? .72 : .60, oldSlate, offset === 0);
@@ -1039,8 +1244,7 @@ function exchangeBays(kit: StructureKit, mount: Wall, width: number, height: num
 
 function exchange(kit: StructureKit, lot: Lot) {
   const { x, z, w, d, h, facade, side } = lot;
-  const shade = 0xa47b60;
-  kit.block('brick', shade, [x, h / 2, z], [w, h, d], true);
+  const shade = 0xb09b80;
   foundation(kit, lot, agedStone);
   exchangeBays(kit, facade, w, h);
   exchangeBays(kit, side, d, h, 1);
@@ -1049,7 +1253,10 @@ function exchange(kit: StructureKit, lot: Lot) {
   for (const y of [1.75, 3.77, h - .211]) stringCourse(kit, lot, y, limestone);
   for (const offset of [-.93, .93]) {
     kit.block('stone', limestone, facade.point(offset, h * .53, .051), [.116, h * .81, .097], true);
+    pilasterPedestal(kit, facade, offset, h - .61);
   }
+  streetCornice(kit, facade, w - .11, h - .28);
+  streetCornice(kit, side, d - .11, h - .28);
   steppedCrown(kit, lot, h, agedStone);
   slateMansard(kit, lot, h + .368, w - .062, d - .041, .888, 0x505766);
   pediment(kit, facade, 0, h + .165, 1.75, .705, agedStone);
@@ -1057,16 +1264,38 @@ function exchange(kit: StructureKit, lot: Lot) {
   for (const offset of [-1.49, 1.49]) chimneyStack(kit, x + offset, h + .974, z -.58, shade, .54, 3);
 }
 
+function warehouseLoader(kit: StructureKit, mount: Wall, x: number, width: number, height: number) {
+  const reveal = civicReveal(kit, mount, x, .108, width, height - .108, false, 0xc4ab88);
+  const depth = reveal.depth;
+  const spring = reveal.spring;
+  const half = reveal.frame;
+  facadePanel(kit, mount, x - half, x + half, .135, spring - .028, depth + .007, 'wood', 0x4b4d44);
+  for (let index = 1; index < 12; index++) {
+    const at = x - half + half * index / 6;
+    facadePanel(kit, mount, at - .009, at + .009, .139, spring - .038, depth + .013, 'wood', 0x675f47);
+  }
+  for (const side of [-1, 1]) {
+    const center = x + side * half * .50;
+    for (const y of [.28, spring - .167]) kit.block('wood', castIron, mount.point(center, y, depth + .042), [half - .012, .064, .064], true, mount.yaw);
+    kit.beam('wood', 0x777157, mount.point(x + side * half * .91, .292, depth + .055),
+      mount.point(x + side * .036, spring - .184, depth + .055), .065);
+    kit.block('metal', brass, mount.point(x + side * .064, .620, depth + .061), [.042, .101, .044], true, mount.yaw);
+  }
+  kit.block('metal', ink, mount.point(x, (spring + .135) / 2, depth + .038), [.037, spring - .149, .054], false, mount.yaw);
+  kit.block('stone', limestone, mount.point(x, spring + .058, .068), [width + .176, .142, .225], true, mount.yaw);
+  const sill = mount.point(x, .067, .017);
+  kit.block('stone', agedStone, sill, [width + .263, .134, .474], true, mount.yaw);
+}
+
 function warehouse(kit: StructureKit, lot: Lot) {
   const { parcel, x, z, w, d, facade, side } = lot;
   const single = parcel.stories === 1;
   const h = single ? 1.59 : 2.20;
-  const paint = single ? 0x98614a : buffStock;
-  kit.block('brick', paint, [x, h / 2, z], [w, h, d], true);
+  const paint = single ? 0x8f5945 : buffStock;
   foundation(kit, lot);
-  wallCourses(kit, facade, w - .19, .24, 6, .162, paint);
   const opening = single ? '渡口仓栈' : '园务工坊';
-  portal(kit, facade, 0, single ? 1.03 : 1.14, 1.39, true);
+  if (single) warehouseLoader(kit, facade, 0, 1.22, 1.36);
+  else portal(kit, facade, 0, 1.14, 1.39, true);
   placedSign(kit, facade, 1.61 + (single ? 0 : .20), opening, 1.41);
   for (const offset of [-(w * .34), w * .34]) {
     windowBay(kit, facade, offset, single ? .53 : .57, single ? .64 : .76, single ? .55 : .74, 'sash', !single && offset > 0);
@@ -1075,8 +1304,7 @@ function warehouse(kit: StructureKit, lot: Lot) {
   }
   windowBay(kit, side, .45, .58, single ? .93 : 1.14, single ? .57 : .75, 'sash');
   if (single) {
-    portal(kit, side, -.78, .78, 1.19, true);
-    for (let bar = -2; bar <= 2; bar++) kit.block('metal', slate, side.point(-.78 + bar * .113, .672, .159), [.026, .86, .026], false, side.yaw);
+    warehouseLoader(kit, side, -.78, .78, 1.19);
   } else {
     windowBay(kit, side, -.98, .58, .77, .75, 'sash');
     balconyPot(kit, side, .67, .481);
@@ -1087,9 +1315,14 @@ function warehouse(kit: StructureKit, lot: Lot) {
   else gardenWorkshopRoof(kit, lot, h + .106);
   chimneyStack(kit, x + w * .278, h + .296, z - .74, paint, .388, single ? 1 : 2);
   drainpipe(kit, side, single ? -1.32 : 1.42, h + .075);
+  streetCornice(kit, facade, w - .15, h - .073);
 }
 
 function serviceWindow(kit: StructureKit, mount: Wall, x: number, y: number, w: number, h: number, lit = false) {
+  if (mount.openings) {
+    windowBay(kit, mount, x, y - h / 2, w, h, 'sash', lit);
+    return;
+  }
   kit.block('stone', agedStone, mount.point(x, y, .023), [w + .055, h + .057, .074], true, mount.yaw);
   kit.block('metal', ink, mount.point(x, y, .060), [w, h, .044], false, mount.yaw);
   kit.block(lit ? 'light' : 'glass', lit ? warmGlass : 0x678583, mount.point(x, y, .088), [w - .070, h - .079, .019], false, mount.yaw);
@@ -1098,10 +1331,85 @@ function serviceWindow(kit: StructureKit, mount: Wall, x: number, y: number, w: 
   kit.block('stone', paleStone, mount.point(x, y - h * .52, .055), [w + .102, .049, .129], false, mount.yaw);
 }
 
+function fanGlazing(kit: StructureKit, mount: Wall, x: number, base: number, width: number, height: number) {
+  const spring = base + height * .65;
+  const depth = mount.openings ? -.142 : .139;
+  const from = mount.point(x, spring, depth);
+  for (const angle of [.24, .38, .62, .76]) {
+    const direction = angle * Math.PI;
+    const tip = mount.point(x + Math.cos(direction) * width * .397,
+      spring + Math.sin(direction) * height * .257, depth);
+    kit.beam('metal', bottle, from, tip, .018);
+  }
+  kit.block('metal', bottle, mount.point(x, spring, depth), [width * .798, .029, .021], false, mount.yaw);
+}
+
+function archiveReturn(kit: StructureKit, mount: Wall, width: number, interior: boolean) {
+  const spread = width / (interior ? 3.63 : 3.22);
+  const bays = interior ? [-spread, 0, spread] : [-spread, spread];
+  for (const offset of bays) {
+    dressedArch(kit, mount, offset, .442, .701, 1.05, offset > 0);
+    fanGlazing(kit, mount, offset, .442, .701, 1.05);
+    dressedArch(kit, mount, offset, 2.016, .661, 1.010, offset < 0);
+  }
+  for (const offset of [-width * .445, 0, width * .445]) {
+    if (interior && !offset) continue;
+    pilaster(kit, mount, offset, 3.62, limestone, .137);
+    pilasterPedestal(kit, mount, offset, 3.62);
+  }
+  for (const y of [1.721, 3.706]) streetCornice(kit, mount, width - .13, y);
+  if (!interior) trimPanel(kit, mount, 0, 2.716, .414, .518, paleStone);
+  drainpipe(kit, mount, width * .430 * (interior ? -1 : 1), 3.60);
+}
+
+function stationReturn(kit: StructureKit, mount: Wall, width: number, inner: boolean) {
+  const spread = width / (inner ? 3.39 : 3.16);
+  const columns = inner ? [-spread, 0, spread] : [-spread, spread];
+  for (const offset of columns) {
+    dressedArch(kit, mount, offset, .452, .790, 1.392, offset <= 0);
+    fanGlazing(kit, mount, offset, .452, .790, 1.392);
+    windowBay(kit, mount, offset, 2.199, .658, .749, 'sash', offset > 0);
+  }
+  for (const offset of [-width * .432, width * .432]) {
+    pilaster(kit, mount, offset, 3.19, agedStone, .134);
+  }
+  streetCornice(kit, mount, width - .12, 3.171);
+  if (!inner) drainpipe(kit, mount, -width * .416, 3.43);
+}
+
+function marketReturn(kit: StructureKit, mount: Wall, width: number, interior: boolean) {
+  const spread = width / 3.42;
+  for (const offset of [-spread, spread]) {
+    dressedArch(kit, mount, offset, .363, .887, 1.139, offset < 0);
+    marketDisplay(kit, mount, offset, Math.sign(offset));
+    awning(kit, mount, offset, 1.750, .950, offset < 0 ? 0x84524a : 0x8b774e);
+    windowBay(kit, mount, offset, 2.195, .673, .684, 'sash', offset > 0);
+    windowBay(kit, mount, offset, 3.276, .649, .676, 'sash', offset < 0);
+  }
+  for (const offset of [-width * .426, 0, width * .426]) {
+    pilaster(kit, mount, offset, 2.05, agedStone, .107);
+  }
+  if (!interior) shopBlade(kit, mount, width * .412, 2.183, '纸品', 'navy');
+  streetCornice(kit, mount, width - .15, 2.059);
+  streetCornice(kit, mount, width - .14, 4.298);
+}
+
+function clinicReturn(kit: StructureKit, mount: Wall, width: number, interior: boolean) {
+  const spread = width / 3.47;
+  for (const offset of [-spread, spread]) {
+    windowBay(kit, mount, offset, .528, .712, .799, 'sash', offset < 0);
+    cantedSash(kit, mount, offset, 1.896, .758, .723, offset > 0);
+    windowBay(kit, mount, offset, 2.909, .683, .610, 'sash', offset < 0);
+  }
+  for (const offset of [-width * .445, width * .445]) {
+    pilaster(kit, mount, offset, 3.605, 0xcbb091, .118);
+  }
+  streetCornice(kit, mount, width - .12, 3.570);
+  drainpipe(kit, mount, width * .416 * (interior ? 1 : -1), 3.46);
+}
+
 function orbitalElevations(kit: StructureKit, lot: Lot) {
-  const { parcel, x, z, w, d, h, rear } = lot;
-  const inner = wall(x, rear, Math.PI);
-  const west = wall(x - w / 2, z, -Math.PI / 2);
+  const { parcel, w, d, h, innerWall: inner, westWall: west } = lot;
   if (parcel.kind === 'office') {
     exchangeBays(kit, inner, w, h, 2);
     exchangeBays(kit, west, d, h, 4);
@@ -1110,27 +1418,24 @@ function orbitalElevations(kit: StructureKit, lot: Lot) {
     return;
   }
   if (parcel.kind === 'station') {
-    for (const offset of [-1.39, 0, 1.39]) {
-      windowBay(kit, inner, offset, .62, .79, 1.29, 'arch', offset !== 0);
-      serviceWindow(kit, inner, offset, 2.54, .74, .58, offset > 0);
-    }
-    for (const offset of [-.92, .89]) {
-      windowBay(kit, west, offset, .59, .83, 1.22, 'arch', offset > 0);
-      serviceWindow(kit, west, offset, 2.50, .65, .51);
-    }
-    drainpipe(kit, west, -1.56, 3.50);
+    stationReturn(kit, inner, w, true);
+    stationReturn(kit, west, d, false);
     return;
   }
   if (parcel.kind === 'archive') {
-    for (const mount of [inner, west]) {
-      const span = mount === inner ? 1.31 : .92;
-      for (const offset of [-span, span]) {
-        windowBay(kit, mount, offset, .57, .74, .72, 'arch');
-        windowBay(kit, mount, offset, 2.09, .66, 1.02, 'arch', offset > 0);
-      }
-      trimPanel(kit, mount, 0, 2.894, .485, .388, limestone);
-      drainpipe(kit, mount, (mount === inner ? -w : d) * .396, 3.61);
-    }
+    archiveReturn(kit, inner, w, true);
+    archiveReturn(kit, west, d, false);
+    archiveReturn(kit, lot.side, d, false);
+    return;
+  }
+  if (parcel.kind === 'market') {
+    marketReturn(kit, inner, w, true);
+    marketReturn(kit, west, d, false);
+    return;
+  }
+  if (parcel.kind === 'clinic') {
+    clinicReturn(kit, inner, w, true);
+    clinicReturn(kit, west, d, false);
     return;
   }
   if (parcel.kind === 'warehouse') {
@@ -1139,17 +1444,15 @@ function orbitalElevations(kit: StructureKit, lot: Lot) {
     return;
   }
 
-  const pane = parcel.kind === 'clinic' ? 1.02 : .69;
-  const rows = Math.min(parcel.stories, 5);
-  const topEdge = parcel.kind === 'market' ? agedStone : limestone;
+  const rows = Math.min(parcel.stories, 6);
   for (const mount of [inner, west]) {
     const across = (mount === inner ? w : d) * .296;
     const offsets = mount === inner ? [-across, 0, across] : [-across, across];
     for (let row = 0; row < rows; row++) {
       const y = 1.0 + row * 1.025;
-      kit.block('stone', topEdge, mount.point(0, y - .404, .029), [(mount === inner ? w : d) - .30, .045, .064], false, mount.yaw);
+      kit.block('stone', limestone, mount.point(0, y - .404, .029), [(mount === inner ? w : d) - .30, .045, .064], false, mount.yaw);
       for (const [index, offset] of offsets.entries()) {
-        serviceWindow(kit, mount, offset, y, pane, .59, (row * 3 + index * 9 + parcel.finish + (mount === inner ? 1 : 3)) % 7 === 2);
+        serviceWindow(kit, mount, offset, y, .69, .59, (row * 3 + index * 9 + parcel.finish + (mount === inner ? 1 : 3)) % 7 === 2);
       }
     }
     drainpipe(kit, mount, (mount === inner ? w : d) * .432, h - .20);
@@ -1172,85 +1475,17 @@ function buildParcel(parcel: CityParcel) {
     case 'warehouse': warehouse(kit, lot);
   }
   orbitalElevations(kit, lot);
-  return kit.finish();
-}
-
-function citySkyline() {
-  const kit = new StructureKit();
-  kit.group.name = 'Northern skyline behind the station district';
-  const palette = [0x78918d, 0x8e948c, 0x9a887b, 0x70838b, 0x85948d];
-  kit.block('stone', 0x78928e, [23.2, -.42, -2.24], [37.36, .60, 4.65], true);
-  kit.block('stone', 0x8d9d95, [23.2, -.055, -2.24], [37.39, .18, 4.68], true);
-  kit.block('stone', 0x9aa7a0, [23.2, .043, -2.24], [37.34, .028, 4.61], true);
-  kit.block('stone', 0x8c9a90, [23.2, -.116, .050], [37.37, .121, .173], true);
-  kit.block('stone', 0xa4ab98, [23.2, -.049, .083], [37.40, .046, .149], true);
-  kit.block('stone', 0xa1ac9a, [41.79, -.044, -2.30], [.15, .10, 4.54], true);
-  for (const end of [4.65, 41.58]) {
-    kit.block('stone', 0x859688, [end, .122, -2.09], [.15, .251, 3.69], true);
-    kit.block('stone', 0xafb49e, [end, .252, -2.09], [.197, .059, 3.72], true);
-    for (const z of [-3.73, -2.69, -1.651, -.621]) kit.block('stone', 0x9da494, [end, .154, z], [.235, .319, .153], true);
-  }
-  const buildings: [x: number, z: number, w: number, d: number, h: number][] = [
-    [5.8, -2.6, 2.3, 2.80, 2.9], [8.86, -3.5, 3.0, 2.30, 4.1],
-    [12.52, -2.4, 3.50, 3.12, 4.55], [16.00, -3.79, 3.1, 1.64, 5.5],
-    [19.28, -1.85, 3.20, 2.57, 4.15], [22.80, -3.17, 3.0, 2.20, 5.97],
-    [26.13, -2.0, 2.70, 3.28, 5.14], [29.66, -3.45, 3.11, 2.28, 6.10],
-    [33.33, -2.0, 3.60, 2.42, 4.57], [37.31, -3.05, 3.0, 1.89, 5.2],
-    [40.33, -2.3, 2.2, 2.29, 3.6],
-  ];
-  for (const [index, [x, z, w, d, h]] of buildings.entries()) {
-    const shade = palette[index % palette.length];
-    const visible = x < 16 || x > 32;
-    const front = z + d / 2;
-    const face = wall(x, front);
-    const east = wall(x + w / 2, z, Math.PI / 2);
-    const frame = new Color(shade).multiplyScalar(1.20);
-    kit.block('stone', shade, [x, h / 2, z], [w, h, d], true);
-    kit.block('stone', frame, [x, h + .06, z], [w + .069, .119, d + .069], true);
-    kit.block('stone', shade, [x, h + .234, z - .13], [w * .73, .28, d * .78], true);
-    if (visible) {
-      kit.block('stone', frame, [x, .13, z], [w + .077, .258, d + .069], true);
-      kit.piece('stone', frame, arch, face.point(-w * .187, .10, .019), [.655, .934, .047]);
-      kit.piece('glass', 0x596f71, arch, face.point(-w * .187, .128, .064), [.502, .83, .026]);
-      kit.block('stone', frame, face.point(-w * .187, .073, .168), [.76, .10, .23], true);
-      for (const offset of [-1, 1]) {
-        kit.block('stone', frame, face.point(offset * w * .446, h * .47, .027), [.072, h * .739, .10], true);
-        kit.block('stone', frame, east.point(offset * d * .416, h * .47, .028), [.065, h * .739, .09], true, east.yaw);
-      }
-    }
-    for (let row = 0; row < Math.floor(h) - 1; row++) {
-      const level = (visible ? 1.39 : .95) + row * .78;
-      for (const dx of [-.31, -.10, .10, .31]) {
-        const windowWidth = index % 3 === 1 ? .278 : .224;
-        const window = x + dx * w;
-        const glowing = visible && (index * 2 + row + Math.round(dx * 10)) % 7 === 5;
-        if (visible) {
-          kit.block('stone', frame, [window, level, front + .021], [windowWidth + .058, .441, .039]);
-          kit.block('stone', frame, [window, level - .216, front + .062], [windowWidth + .084, .045, .092]);
-        }
-        kit.block(glowing ? 'light' : 'glass', glowing ? 0x8a8d75 : 0x577179, [window, level, front + (visible ? .049 : .012)], [windowWidth, .39, .031]);
-      }
-      for (const offset of [-.25, .25]) {
-        if (visible) kit.block('stone', frame, east.point(offset * d, level, .020), [.30, .425, .034], false, east.yaw);
-        kit.block('glass', 0x607780, east.point(offset * d, level, visible ? .049 : .012), [.244, .37, .030], false, east.yaw);
-      }
-      if (visible && row % 2 !== 0) kit.block('stone', frame, [x, level - .374, z], [w + .045, .036, d + .043]);
-    }
-    if (index % 3 === 1) {
-      kit.block('stone', new Color(shade).multiplyScalar(1.07), [x + w * .15, h + .46, z -.18], [w * .22, .43, d * .39], true);
-    } else {
-      kit.block('metal', 0x6b817e, [x, h + .370, z - .13], [w * .77, .046, d * .817]);
-    }
-    if (index % 3 === 2) tiledCap(kit, x, z - .13, h + .396, w * .78, d * .831, 0x648081, .33);
-    else if (visible) roofVent(kit, x + w * .12, h + .381, z - .27, .31, 0x6d8581);
+  if (lot.shell) {
+    const top = parcel.kind === 'warehouse' ? (parcel.stories === 1 ? 1.59 : 2.20)
+      : lot.h - (parcel.kind === 'station' ? .41 : parcel.kind === 'clinic' ? .096 : 0);
+    civicShell(kit, lot, lot.shell, top);
   }
   return kit.finish();
 }
 
-export function buildCityArchitecture({ skyline = true }: { skyline?: boolean } = {}) {
+export function buildCityArchitecture() {
   const city = new Group();
   city.name = 'Tidebound waterfront architecture';
-  if (skyline) city.add(citySkyline());
   city.add(...cityParcels.map(buildParcel));
   return city;
 }

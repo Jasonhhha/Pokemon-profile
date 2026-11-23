@@ -71,6 +71,7 @@ h1, h2, h3, p { margin: 0; }
 .area-english { padding-left: 11px; border-left: 1px solid #465c68; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #abc0c8; font-size: 12px; white-space: nowrap; }
 .game-tools { display: flex; align-items: center; flex: none; gap: 7px; }
 .game-tools .icon-button { height: 33px; width: 33px; }
+.overview-button span { display: none; }
 .area-weather { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; margin-right: 2px; padding: 5px 4px; color: #cad9da; background: transparent; border: 1px solid transparent; border-radius: 5px; }
 .area-weather:hover { border-color: #465c68; }
 .area-weather svg { color: #ead197; }
@@ -510,7 +511,9 @@ kbd { font-family: inherit; font-size: 12px; min-width: 20px; line-height: 19px;
 }
 
 @media (min-width: 871px) {
-  .game-frame[data-city=true]:not(.game-expanded) .game-viewport:not(.game-in-battle) { aspect-ratio: 1.90; }
+  .game-frame[data-city=true]:not(.game-expanded) .game-viewport:not(.game-in-battle) { aspect-ratio: 1.67; }
+  .game-tools .overview-button { display: inline-flex; gap: 6px; width: auto; padding-inline: 9px; }
+  .overview-button span { display: inline; font-size: 12px; white-space: nowrap; }
 }
 @media (max-width: 610px) {
   .game-frame[data-city=true]:not(.game-expanded) .game-viewport:not(.game-in-battle) { aspect-ratio: 1.20; }
