@@ -1,8 +1,8 @@
 import {
-  BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry, DoubleSide, DynamicDrawUsage, Float32BufferAttribute, Group, IcosahedronGeometry,
+  BoxGeometry, BufferGeometry, CanvasTexture, CatmullRomCurve3, Color, CylinderGeometry, DoubleSide, DynamicDrawUsage, Float32BufferAttribute, Group, IcosahedronGeometry,
   InstancedMesh, LatheGeometry, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, RingGeometry, ShaderMaterial,
   SphereGeometry, SRGBColorSpace,
-  TorusGeometry, Vector2,
+  TorusGeometry, TubeGeometry, Vector2, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { batchStaticMeshes } from './field-mesh-batch';
@@ -17,10 +17,12 @@ export type CityLamp = { x: number; z: number; height: number };
 
 const cube = new BoxGeometry(1, 1, 1);
 const drum = new CylinderGeometry(1, 1, 1, 12);
+const boltHead = new CylinderGeometry(1, 1, 1, 6);
 const dome = new SphereGeometry(1, 15, 9);
 const rock = new IcosahedronGeometry(1, 1);
 const leaf = new IcosahedronGeometry(1, 0);
 const taper = new CylinderGeometry(.44, 1, 1, 4);
+const pyramidion = new CylinderGeometry(0, 1, 1, 4);
 const rim = new TorusGeometry(1, .14, 6, 18);
 const lanternPane = new CylinderGeometry(1, .72, 1, 4);
 const poolProfile = new LatheGeometry([
@@ -41,6 +43,37 @@ const lanceCorners = lance.attributes.position;
 const lanceUv = Array.from({ length: lanceCorners.count }, (_, index) => [lanceCorners.getX(index) + .5, lanceCorners.getZ(index)]).flat();
 lance.setAttribute('uv', new Float32BufferAttribute(lanceUv, 2));
 lance.computeVertexNormals();
+
+function fernFrond() {
+  const vertices: number[] = [];
+  const rise = (t: number) => Math.sin(t * Math.PI * .89) * .66 + t * .32;
+  const triangle = (a: Position, b: Position, c: Position) => vertices.push(...a, ...b, ...c);
+  for (let pair = 0; pair < 8; pair++) {
+    const t = pair / 9, next = (pair + 1) / 9;
+    const root: Position = [0, rise(t), t];
+    const end: Position = [0, rise(next), next];
+    const length = .053 + .27 * Math.sin(Math.PI * (.20 + .76 * t));
+    for (const side of [-1, 1]) {
+      const spine: Position = [side * .016 * (1 - t), rise(t) - .005, t];
+      triangle(root, end, spine);
+      const ridge: Position = [side * length * .48, rise(t) + .039, t + .084];
+      const tip: Position = [side * length, rise(t) - .038, t + .167];
+      const heel: Position = [0, rise(t + .064), t + .064];
+      triangle(root, ridge, tip);
+      triangle(tip, ridge, heel);
+      triangle(root, heel, ridge);
+    }
+  }
+  triangle([-.040, rise(.88), .88], [0, rise(1), 1], [.040, rise(.88), .88]);
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(vertices, 3));
+  const uv: number[] = [];
+  for (let i = 0; i < vertices.length; i += 3) uv.push(vertices[i] + .5, vertices[i + 2]);
+  geometry.setAttribute('uv', new Float32BufferAttribute(uv, 2));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+const frond = fernFrond();
 const dark = new MeshStandardMaterial({ color: 0x314b52, metalness: .23, roughness: .59 });
 const bronze = new MeshStandardMaterial({ color: 0xaf885d, metalness: .44, roughness: .44 });
 const bright = new MeshStandardMaterial({ color: 0xd9bd8d, metalness: .31, roughness: .58 });
@@ -163,11 +196,21 @@ function tree(parent: Group, variant: number) {
   });
 }
 
-function railing(parent: Group, length: number, high = .61) {
-  for (let x = 0; x <= length + .02; x += .30) {
-    const isPost = Math.round(x * 10) % 6 === 0;
+function railing(parent: Group, length: number, high = .61, anchored = false) {
+  const slots = anchored ? Math.ceil(length / .30) : Math.floor((length + .02) / .30);
+  for (let index = 0; index <= slots; index++) {
+    const x = anchored ? length * index / slots : index * .30;
+    const isPost = index % 2 === 0 || (anchored && index === slots);
     put(parent, drum, dark, [x, high * .5, 0], [isPost ? .035 : .018, high, isPost ? .035 : .018]);
     if (isPost) put(parent, dome, bronze, [x, high + .029, 0], [.047, .036, .047]);
+    if (anchored && isPost) {
+      box(parent, ashlar[1], x, .039, 0, .139, .075, .176);
+      put(parent, drum, patina, [x, .084, 0], [.059, .032, .057]);
+      for (const bolt of [-.035, .035]) put(parent, boltHead, bronze, [x + bolt, .104, -.030], [.012, .016, .013]);
+      if (index === 0 || index === slots) {
+        ironBrace(parent, dark, [x, high - .036, 0], [x + (index === 0 ? .202 : -.202), .079, 0], .027, .031);
+      }
+    }
   }
   for (const height of [.18, .41, high]) box(parent, height === high ? bronze : dark, length / 2, height, 0, length + .04, .027, .045);
 }
@@ -232,14 +275,68 @@ function crate(parent: Group) {
   }
 }
 
+function rope(parent: Group, points: Position[], radius: number, segments: number) {
+  const path = new CatmullRomCurve3(points.map(point => new Vector3(...point)));
+  parent.add(new Mesh(new TubeGeometry(path, segments, radius, 5, false), cloth));
+}
+
+function ironBrace(parent: Group, material: Paint, from: Position, to: Position, width: number, depth: number) {
+  const vector = new Vector3(...to).sub(new Vector3(...from));
+  const middle = new Vector3(...from).addScaledVector(vector, .5);
+  const brace = box(parent, material, middle.x, middle.y, middle.z, width, vector.length(), depth);
+  brace.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), vector.normalize());
+}
+
 function winch(parent: Group) {
-  box(parent, granite, 0, .065, 0, .66, .13, .66);
-  box(parent, dark, 0, .26, 0, .47, .27, .41);
+  box(parent, shale, 0, .028, 0, .65, .056, .60);
+  box(parent, granite, 0, .080, 0, .61, .054, .55);
+  box(parent, ashlar[1], 0, .112, 0, .56, .023, .50);
+  const axis = .426;
+  const axlePart = (material: Paint, position: number, radius: number, width: number) =>
+    put(parent, drum, material, [position, axis, 0], [radius, width, radius], 0, Math.PI / 2);
+
   for (const side of [-1, 1]) {
-    put(parent, drum, dark, [side * .205, .394, .021], [.179, .054, .179], 0, Math.PI / 2);
-    put(parent, drum, bronze, [side * .242, .394, .021], [.087, .042, .087], 0, Math.PI / 2);
+    const x = side * .229;
+    box(parent, dark, x, .146, 0, .114, .043, .437);
+    box(parent, patina, x, .213, 0, .069, .079, .337);
+    for (const edge of [-1, 1]) {
+      const z = edge * .163;
+      ironBrace(parent, dark, [x, .178, z], [x, axis, 0], .055, .071);
+      put(parent, boltHead, bronze, [x + side * .027, .176, z], [.029, .025, .029]);
+    }
+    axlePart(dark, x, .085, .081);
+    axlePart(patina, x + side * .046, .070, .032);
+    axlePart(bronze, x + side * .064, .043, .022);
+    axlePart(shale, side * .155, .126, .038);
+    axlePart(patina, side * .178, .112, .020);
   }
-  for (const y of [-.098, -.061, -.024, .013, .05, .087]) put(parent, drum, bright, [y, .398, .023], [.091, .028, .091], 0, Math.PI / 2);
+  axlePart(dark, 0, .032, .634);
+  axlePart(timber, 0, .081, .296);
+  const cable: Position[] = [];
+  const turns = 9;
+  for (let segment = 0; segment <= turns * 10; segment++) {
+    const progress = segment / (turns * 10);
+    const angle = 2 * Math.PI * turns * progress;
+    cable.push([-.138 + progress * .276, axis + Math.sin(angle) * .091, Math.cos(angle) * .091]);
+  }
+  cable.push([.148, .476, .110], [.112, .466, .158], [.034, .343, .184], [.011, .139, .188]);
+  rope(parent, cable, .016, 102);
+
+  const wheelX = -.318;
+  put(parent, rim, dark, [wheelX, axis, 0], [.147, .147, .12], 0).rotation.y = Math.PI / 2;
+  for (let spoke = 0; spoke < 5; spoke++) {
+    const angle = spoke * Math.PI * 2 / 5;
+    ironBrace(parent, dark, [wheelX, axis, 0], [wheelX, axis + Math.cos(angle) * .136, Math.sin(angle) * .136], .024, .025);
+  }
+  axlePart(bronze, wheelX, .041, .045);
+  for (let tooth = 0; tooth < 12; tooth++) {
+    const angle = tooth * Math.PI / 6;
+    put(parent, cube, dark, [.292, axis + Math.cos(angle) * .106, Math.sin(angle) * .106], [.040, .019, .029], angle);
+  }
+  axlePart(patina, .292, .103, .039);
+  axlePart(bronze, .323, .034, .022);
+  ironBrace(parent, bronze, [.28, .588, .064], [.294, .535, .029], .022, .028);
+  ironBrace(parent, dark, [.229, .456, .030], [.28, .588, .064], .021, .028);
 }
 
 function streetPedestal(parent: Group, x: number, z: number) {
@@ -476,15 +573,124 @@ function clockStand(parent: Group) {
   }
   put(parent, drum, bronze, [0, 1.354, 0], [.071, .111, .071]);
   put(parent, drum, dark, [0, 1.627, 0], [.254, .153, .254], Math.PI / 2);
-  put(parent, drum, bronze, [0, 1.627, .084], [.222, .036, .222], Math.PI / 2);
-  put(parent, drum, bright, [0, 1.627, .104], [.186, .013, .186], Math.PI / 2);
-  for (let hour = 0; hour < 12; hour++) {
-    const turn = hour * Math.PI / 6;
-    box(parent, dark, Math.sin(turn) * .154, 1.627 + Math.cos(turn) * .154, .113, .012, hour % 3 === 0 ? .03 : .017, .008, -turn);
+  for (const side of [-1, 1]) {
+    const face = place(parent, 0, 0, side < 0 ? Math.PI : 0);
+    put(face, drum, bronze, [0, 1.627, .084], [.230, .036, .230], Math.PI / 2);
+    put(face, drum, civicStone, [0, 1.627, .104], [.203, .013, .203], Math.PI / 2);
+    for (let hour = 0; hour < 12; hour++) {
+      const turn = hour * Math.PI / 6;
+      box(face, dark, Math.sin(turn) * .171, 1.627 + Math.cos(turn) * .171, .113,
+        hour % 3 === 0 ? .018 : .011, hour % 3 === 0 ? .035 : .020, .008, -turn);
+    }
+    put(face, drum, bronze, [0, 1.627, .134], [.021, .019, .021], Math.PI / 2);
   }
-  box(parent, dark, .026, 1.669, .121, .015, .116, .011, -.53);
-  box(parent, oxblood, -.029, 1.604, .124, .014, .093, .009, -1.02);
   put(parent, dome, bronze, [0, 1.897, 0], [.075, .062, .076]);
+}
+
+function stationClockHands(anchor: Group) {
+  const dials = [-1, 1].map(side => {
+    const face = place(anchor, 0, 0, side < 0 ? Math.PI : 0);
+    const hour = place(face, 0, .121);
+    const minute = place(face, 0, .128);
+    hour.position.y = minute.position.y = 1.627;
+    box(hour, dark, 0, .048, 0, .024, .11, .008);
+    box(minute, oxblood, 0, .061, 0, .017, .161, .008);
+    return { hour, minute };
+  });
+  let lastMinute = -1;
+  return () => {
+    const minuteStamp = Math.floor(Date.now() / 60000);
+    if (minuteStamp === lastMinute) return;
+    lastMinute = minuteStamp;
+    const now = new Date(minuteStamp * 60000);
+    for (const dial of dials) {
+      dial.minute.rotation.z = -Math.PI * now.getMinutes() / 30;
+      dial.hour.rotation.z = -Math.PI * (now.getHours() % 12 + now.getMinutes() / 60) / 6;
+    }
+  };
+}
+
+function pumpMechanism(anchor: Group) {
+  const wheelParts = new Group();
+  put(wheelParts, rim, dark, [0, 0, 0], [.215, .215, .185]);
+  for (let spoke = 0; spoke < 3; spoke++) box(wheelParts, bronze, 0, 0, 0, .398, .026, .026, spoke * Math.PI / 3);
+  put(wheelParts, drum, bronze, [0, 0, 0], [.061, .13, .061], Math.PI / 2);
+  put(wheelParts, drum, timber, [.152, .122, .062], [.022, .126, .022], Math.PI / 2);
+  const wheel = fixedBatch(wheelParts, false);
+  wheel.position.set(.46, .647, .147);
+  anchor.add(wheel);
+
+  const surface = .374;
+  const outlet = .647;
+  const water = new MeshStandardMaterial({ color: 0xb6dfd9, roughness: .22, transparent: true, opacity: .82, depthWrite: false });
+  const jet = put(anchor, drum, water, [-.22, outlet, 0], [.021, .001, .021]);
+  const rings = [0, 1].map(() => put(anchor, rim, water, [-.22, surface + .006, 0], [.01, .01, .01], Math.PI / 2));
+  jet.visible = false;
+  rings.forEach(ring => { ring.visible = false; });
+  let active = false;
+  return (elapsed?: number) => {
+    if (elapsed === undefined && !active) return;
+    active = elapsed !== undefined;
+    const t = elapsed ?? 3.6;
+    const turn = Math.min(1, t / 2.12);
+    wheel.rotation.z = -4 * Math.PI * turn * turn * (3 - 2 * turn);
+    const start = Math.max(0, Math.min(1, (t - .24) / .24));
+    const drain = Math.max(0, Math.min(1, (t - 2.08) / .27));
+    // The leading drop accelerates from the spout. The tail drains into the trough.
+    const top = outlet - (outlet - surface) * drain ** 2;
+    const bottom = outlet - (outlet - surface) * start ** 2;
+    jet.visible = top - bottom > .002;
+    jet.position.y = (top + bottom) / 2;
+    jet.scale.set(.020 + .004 * Math.sin(t * 15), Math.max(.001, top - bottom), .022);
+    rings.forEach((ring, index) => {
+      const first = .48 + index * .35;
+      const lastPulse = Math.floor((Math.min(t, 2.32) - first) / .7);
+      const age = t - first - lastPulse * .7;
+      ring.visible = lastPulse >= 0 && age < .7;
+      const radius = .018 + .108 * Math.min(1, age / .7);
+      ring.scale.set(radius, radius * .82, .013);
+    });
+  };
+}
+
+function saltMonument(parent: Group) {
+  box(parent, granite, 0, .044, 0, .76, .088, .46);
+  box(parent, ashlar[3], 0, .11, 0, .68, .064, .40);
+  box(parent, civicStone, 0, .17, 0, .57, .056, .34);
+  box(parent, limestone, 0, .37, 0, .47, .36, .30);
+  const canvas = document.createElement('canvas');
+  canvas.width = 192;
+  canvas.height = 112;
+  const ink = canvas.getContext('2d')!;
+  ink.fillStyle = '#394844';
+  ink.fillRect(0, 0, 192, 112);
+  ink.strokeStyle = '#ae9471';
+  ink.lineWidth = 3;
+  ink.strokeRect(5, 5, 182, 102);
+  ink.textAlign = 'center';
+  ink.fillStyle = '#e4cd99';
+  ink.font = 'bold 42px Georgia, serif';
+  ink.fillText('SALT', 96, 55);
+  ink.font = 'bold 21px Georgia, serif';
+  ink.fillText('EXCHANGE', 96, 86);
+  const map = new CanvasTexture(canvas);
+  map.colorSpace = SRGBColorSpace;
+  map.anisotropy = 4;
+  const plate = new MeshStandardMaterial({ map, roughness: .52, metalness: .23 });
+  for (const side of [-1, 1]) {
+    const face = place(parent, 0, 0, side < 0 ? Math.PI : 0);
+    box(face, bronze, 0, .37, .152, .346, .204, .019);
+    box(face, plate, 0, .37, .166, .319, .181, .011);
+    for (const x of [-.147, .147]) for (const y of [.297, .442]) {
+      put(face, boltHead, bronze, [x, y, .176], [.009, .010, .009], Math.PI / 2);
+    }
+  }
+  box(parent, ashlar[0], 0, .559, 0, .52, .075, .359);
+  box(parent, civicStone, 0, .612, 0, .35, .038, .275);
+  const shaft = put(parent, taper, civicStone, [0, 1.191, 0], [.177, 1.12, .158]);
+  shaft.rotation.y = Math.PI / 4;
+  const cap = put(parent, pyramidion, bronze, [0, 1.826, 0], [.080, .15, .072]);
+  cap.rotation.y = shaft.rotation.y;
 }
 
 function courtFeature(court: CityCourtyard, polar: boolean) {
@@ -504,36 +710,20 @@ function courtFeature(court: CityCourtyard, polar: boolean) {
         box(at, limestone, 0, .201, 0, .054, .167, .043);
         box(at, granite, 0, .101, 0, .072, .061, .050);
       }
-      for (let stalk = 0; stalk < 26; stalk++) {
-        const angle = stalk * 2.399, radius = .11 + (stalk % 7) * .034;
-        const size = .071 + noise(stalk, 19, 105) * .061;
-        const up = .40 + size * .91;
-        const near = Math.sin(angle) * radius * 1.44, row = Math.cos(angle) * radius * .68;
-        const model = stalk % 3 === 0 ? rock : leaf;
-        put(center, model, leaves[stalk % leaves.length], [near, up, row], [size * 1.71, size * 1.48, size * .89], .53 * Math.sin(angle), angle * .67);
-        if (stalk % 3 === 1) put(center, leaf, blooms[stalk % blooms.length], [near, up + size * 1.06, row], [.034, .07, .029], .12, angle);
-      }
-      for (const [spray, at] of [-.39, -.208, .019, .166, .363].entries()) {
-        fernSpray(center, at, .377, .15 - .086 * (spray % 3), .147 + spray % 2 * .019, 68 + spray);
+      for (const [clump, at] of [-.30, -.11, .07, .27].entries()) {
+        for (let shoot = 0; shoot < 8; shoot++) {
+          const spread = .22 + .15 * noise(clump, shoot, 41);
+          const stem = place(center, at, (clump % 2 - .5) * .16, shoot * 2.4 + clump * .81);
+          put(stem, frond, fernLeaves[(clump + shoot) % fernLeaves.length], [0, .376, 0],
+            [spread, spread * 1.16, spread], -.14 - .55 * noise(shoot, clump, 78));
+        }
       }
       stoneSeat(center, -.94, 0);
       stoneSeat(center, .94, 0);
       break;
     }
     case 'market': {
-      box(center, granite, 0, .044, 0, .671, .088, .421);
-      box(center, ashlar[3], 0, .114, 0, .613, .075, .352);
-      box(center, civicStone, 0, .177, 0, .522, .059, .312);
-      box(center, limestone, 0, .357, 0, .403, .303, .272);
-      for (const face of [-1, 1]) {
-        box(center, bronze, 0, .366, face * .144, .181, .112, .014);
-        box(center, patina, 0, .366, face * .154, .146, .080, .010);
-        for (let line = 0; line < 3; line++) box(center, bright, 0, .389 - .021 * line, face * .161, .103 - line * .019, .004, .004);
-      }
-      box(center, ashlar[0], 0, .524, 0, .468, .072, .321);
-      box(center, civicStone, 0, .571, 0, .326, .034, .248);
-      put(center, taper, civicStone, [0, 1.18, 0], [.181, 1.185, .153]);
-      put(center, taper, patina, [0, 1.824, 0], [.077, .146, .061]);
+      saltMonument(center);
       break;
     }
     case 'station': {
@@ -556,13 +746,14 @@ function courtFeature(court: CityCourtyard, polar: boolean) {
       }
       for (const end of [-.935, .035]) box(center, civicStone, end, .414, 0, .075, .079, .395);
       put(center, drum, granite, [.471, .059, 0], [.182, .105, .168]);
-      put(center, drum, dark, [.471, .317, 0], [.098, .444, .097]);
-      put(center, drum, patina, [.471, .538, 0], [.155, .093, .143]);
-      put(center, rim, dark, [.466, .582, .057], [.158, .158, .158]);
-      for (let i = 0; i < 4; i++) box(center, bronze, .465, .582, .062, .289, .027, .026, i * Math.PI / 4);
-      box(center, bronze, .227, .560, 0, .361, .044, .055);
-      put(center, drum, patina, [.086, .508, 0], [.068, .136, .061]);
-      box(center, satin, .086, .440, 0, .023, .074, .022);
+      put(center, drum, dark, [.46, .418, 0], [.107, .662, .107]);
+      for (const h of [.138, .526, .731]) put(center, drum, patina, [.46, h, 0], [.135, .051, .129]);
+      put(center, dome, dark, [.46, .757, 0], [.125, .076, .125]);
+      put(center, drum, bronze, [.46, .647, .090], [.073, .142, .073], Math.PI / 2);
+      const elbow = new CatmullRomCurve3([new Vector3(.42,.694,0), new Vector3(.20,.733,0),
+        new Vector3(-.13,.739,0), new Vector3(-.205,.721,0), new Vector3(-.22,.661,0)]);
+      center.add(new Mesh(new TubeGeometry(elbow, 14, .036, 8, false), bronze));
+      put(center, drum, patina, [-.22, .659, 0], [.045, .024, .045]);
       const materials = place(center, .974, .071, -.12);
       timberStack(materials, .545, .333, 31);
       cargoDrum(materials, .316, -.042, .112, .317, timber);
@@ -572,7 +763,11 @@ function courtFeature(court: CityCourtyard, polar: boolean) {
   }
   const merged = fixedBatch(root, false);
   merged.name = `Courtyard landmark · ${court.id}`;
-  return merged;
+  merged.userData.survey = court.kind;
+  let update: ((elapsed?: number) => void) | undefined;
+  if (court.kind === 'wharf') update = pumpMechanism(streetAnchor(merged, x, z, polar));
+  if (court.kind === 'station') update = stationClockHands(streetAnchor(merged, x, z, polar));
+  return { group: merged, update };
 }
 
 function bondedWall(wall: Group, span: number, metre: number, across: number, height: number, brick: boolean, seed: number) {
@@ -818,19 +1013,50 @@ function promenadeBays(root: Group, glass: MeshStandardMaterial, lamps: CityLamp
 }
 
 function mooringBay(root: Group, withRope: boolean) {
-  const rail = place(root, 0, .031);
-  yardFence(rail, 1.48, 1, 1, .369);
-  for (const x of [-.91, .91]) {
-    box(root, ashlar[1], x, .081, 0, .245, .159, .225);
-    put(root, drum, dark, [x, .235, -.035], [.086, .159, .084]);
-    put(root, drum, bronze, [x, .305, -.035], [.113, .038, .091]);
+  const railZ = .059;
+  box(root, granite, 0, .037, railZ, 1.62, .070, .181);
+  for (const y of [.146, .386, .449]) {
+    box(root, y > .44 ? patina : dark, 0, y, railZ, 1.507, .021, y > .44 ? .052 : .028);
+  }
+  for (const x of [-.731, .731]) {
+    box(root, dark, x, .254, railZ, .039, .365, .044);
+    box(root, patina, x, .091, railZ, .078, .038, .081);
+    put(root, boltHead, bronze, [x, .147, railZ], [.032, .034, .031]);
+    put(root, taper, dark, [x, .466, railZ], [.041, .061, .038]).rotation.y = Math.PI / 4;
+    ironBrace(root, dark, [x, .428, railZ], [x - Math.sign(x) * .183, .091, railZ], .026, .034);
+  }
+  for (let baluster = 1; baluster < 10; baluster++) {
+    const x = (baluster - 5) * .149;
+    box(root, dark, x, .276, railZ, .017, .344, .024);
+    put(root, taper, dark, [x, .467, railZ], [.017, .045, .019]).rotation.y = Math.PI / 4;
+    if (baluster % 2) box(root, patina, x, .231, railZ, .035, .035, .030, Math.PI / 4);
+  }
+  for (const x of [-.940, .940]) {
+    const z = -.035;
+    box(root, ashlar[1], x, .061, 0, .263, .119, .250);
+    box(root, limestone, x, .124, 0, .243, .025, .219);
+    put(root, drum, dark, [x, .150, z], [.106, .029, .088]);
+    for (const bolt of [-.068, .068]) put(root, boltHead, bronze, [x + bolt, .174, z + .022], [.020, .026, .020]);
+    put(root, drum, patina, [x, .229, z], [.071, .134, .070]);
+    put(root, drum, dark, [x, .299, z], [.091, .028, .086]);
+    for (const side of [-1, 1]) {
+      ironBrace(root, dark, [x, .294, z], [x + side * .115, .349, z], .054, .063);
+      put(root, dome, patina, [x + side * .112, .354, z], [.031, .035, .029]);
+    }
   }
   if (withRope) {
-    for (let loop = 0; loop < 3; loop++) {
-      put(root, rim, loop % 2 ? cloth : bright, [-.909 + loop * .073, .193 + loop * .019, -.060],
-        [.116, .052, .094], -Math.PI / 2 + .21 * loop, .19 * loop);
+    const cable: Position[] = [];
+    for (let point = 0; point <= 22; point++) {
+      const turn = point * Math.PI / 6;
+      cable.push([-.94 + Math.cos(turn) * .075, .283 - point * .0031, -.035 + Math.sin(turn) * .075]);
     }
-    box(root, timber, .056, .089, -.036, .492, .119, .147, -.03);
+    cable.push([-.835, .161, -.149], [-.760, .075, -.160], [-.691, .022, -.115]);
+    for (let point = 0; point <= 24; point++) {
+      const theta = Math.PI + point * Math.PI / 8;
+      const extent = 1 - point / 36;
+      cable.push([-.550 + Math.cos(theta) * .124 * extent, .022, -.116 + Math.sin(theta) * .066 * extent]);
+    }
+    rope(root, cable, .014, 64);
   }
 }
 
@@ -959,8 +1185,8 @@ export function buildCityStreet(polar = false) {
     for (let i = 0; i < 5; i++) box(cabinet, dark, 0, .609 - i * .042, .197, .232, .019, .018);
     box(cabinet, bright, .135, .362, .207, .044, .124, .023);
   }
-  railing(place(staged, 2.13, 7.10), 3.75, .48);
-  railing(place(staged, 2.12, 8.76, Math.PI / 2), 1.65, .48);
+  railing(place(staged, 2.13, 7.10), 3.75, .48, true);
+  railing(place(staged, 2.12, 8.76, Math.PI / 2), 1.65, .48, true);
   flowerBed(place(staged, 33.86, 7.62), .151, 3);
   flowerBed(place(staged, 33.88, 9.42), .165, 4);
   guidepost(place(staged, 7.20, 11.08, -.13), '← FERRY');
@@ -974,7 +1200,8 @@ export function buildCityStreet(polar = false) {
   const group = fixedBatch(staged, polar);
   group.name = 'City street fixtures';
   const boundaries = cityAlleyBarriers.map(spec => enclosure(spec, polar));
-  const features = cityCourtyards.map(court => courtFeature(court, polar));
+  const courts = cityCourtyards.map(court => courtFeature(court, polar));
+  const features = courts.map(court => court.group);
   for (const [index, spec] of cityAlleyBarriers.entries()) {
     if (index % 2 || spec.kind === 'hedge') continue;
     sconce(native, spec.x + (spec.width > 1 ? .29 : .56), spec.z + .52, glass, lamps, polar);
@@ -1033,7 +1260,8 @@ export function buildCityStreet(polar = false) {
   return {
     group, lamps: polar ? lamps.map(({x,z,height}) => ({ ...ringPosition(x,z), height })) : lamps,
     occluders: [...boundaries, ...features],
-    update(time: number, night: number) {
+    update(time: number, night: number, pumpElapsed?: number) {
+      for (const court of courts) court.update?.(pumpElapsed);
       const stamp = time / 1000;
       ripples.uniforms.clock.value = stamp;
       ripples.uniforms.darkness.value = night;

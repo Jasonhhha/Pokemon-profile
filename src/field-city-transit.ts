@@ -22,6 +22,7 @@ const lightFront = new MeshStandardMaterial({ color: 0xf4d29a, emissive: 0xffcf8
 const cube = new BoxGeometry(1, 1, 1);
 const round = new CylinderGeometry(1, 1, 1, 10);
 const cap = new SphereGeometry(1, 12, 8);
+export const ringCarriageDimensions = { bogieOffset: .63, wheelRadius: .116, axleHeight: .127, halfGauge: .208 } as const;
 type Palette = Material;
 type Point = readonly [number, number, number];
 
@@ -108,7 +109,20 @@ function destinationPlate() {
   return new MeshBasicMaterial({ map, toneMapped: false });
 }
 
-function carriage(root: Group, offset: number, destination: Palette) {
+function bogie(group: Group, x: number, halfGauge: number) {
+  const { axleHeight, wheelRadius } = ringCarriageDimensions;
+  box(group, iron, x, .17, 0, .63, .24, .61);
+  for (const offset of [-.19, .19]) {
+    const axleX = x + offset;
+    part(group, round, steel, [axleX, axleHeight, 0], [.034, halfGauge * 2 + .04, .034], 0, Math.PI / 2);
+    for (const sign of [-1, 1]) {
+      part(group, round, darkIron, [axleX, axleHeight, sign * halfGauge], [wheelRadius, .092, wheelRadius], 0, Math.PI / 2);
+      part(group, round, steel, [axleX, axleHeight, sign * (halfGauge + .050)], [.05, .018, .05], 0, Math.PI / 2);
+    }
+  }
+}
+
+function carriage(root: Group, offset: number, destination: Palette, fixedBogies = true) {
   const group = new Group();
   group.position.x = offset;
   root.add(group);
@@ -120,15 +134,7 @@ function carriage(root: Group, offset: number, destination: Palette) {
   box(group, steel, 0, .871, 0, 2.47, .058, .61);
   box(group, darkIron, -.27, .934, 0, .42, .092, .29);
   box(group, iron, .44, .94, 0, .46, .105, .29);
-  for (const change of [-.56, .7]) {
-    box(group, iron, change, .17, 0, .63, .24, .61);
-    for (const sign of [-1, 1]) {
-      for (const wheelX of [-.19, .19]) {
-        part(group, round, darkIron, [change + wheelX, .127, sign * .236], [.116, .092, .116], 0, Math.PI / 2);
-        part(group, round, steel, [change + wheelX, .127, sign * .286], [.050, .018, .050], 0, Math.PI / 2);
-      }
-    }
-  }
+  if (fixedBogies) for (const x of [-.56, .7]) bogie(group, x, .236);
   for (const sign of [-1, 1]) {
     for (const x of [-.99, -.64, -.28, .15, .48, .83, 1.10]) {
       const door = x === .15;
@@ -156,21 +162,46 @@ function carriage(root: Group, offset: number, destination: Palette) {
 
 export function buildCityCarriages() {
   const destination = destinationPlate();
-  const cars = [0, 1].map(() => {
+  const { halfGauge, axleHeight, wheelRadius } = ringCarriageDimensions;
+  const assemblies = [0, 1].map(() => {
+    const source = new Group();
+    carriage(source, 0, destination, false);
+    const body = batchStaticMeshes(source, false);
+    const bogies = [-1, 1].map(() => {
+      const frame = new Group();
+      bogie(frame, 0, halfGauge);
+      for (const side of [-1, 1]) {
+        box(frame, darkIron, 0, .176, side * .310, .491, .070, .047);
+        box(frame, steel, 0, .210, side * .331, .170, .028, .019);
+        box(frame, rivet, 0, .169, side * .339, .084, .033, .014);
+        for (const x of [-.19, .19]) {
+          part(frame, round, steel, [x, axleHeight, side * (halfGauge - .039)],
+            [wheelRadius + .011, .010, wheelRadius + .011], 0, Math.PI / 2);
+          box(frame, darkIron, x, .237, side * .315, .12, .106, .085);
+        }
+      }
+      return batchStaticMeshes(frame, false);
+    });
     const model = new Group();
-    carriage(model, 0, destination);
-    return batchStaticMeshes(model, false);
+    model.add(body, ...bogies);
+    return { model, body, bogies };
   });
+  const cars = assemblies.map(({ model }) => model);
   const shellLight = new Color(0x5d96a0);
   const windowLight = new Color(0xa49a73);
   const warm = new Color(0xffcf81);
   return {
-    cars,
+    cars, assemblies,
     lighting(night: number) {
       lightGlass.color.copy(shellLight).lerp(windowLight, night * .76);
       lightGlass.emissiveIntensity = night * .45;
       lightFront.emissive.copy(warm);
       lightFront.emissiveIntensity = .30 + night * .89;
+    },
+    dispose() {
+      cars.forEach(car => car.traverse(object => { if (object instanceof Mesh) object.geometry.dispose(); }));
+      destination.map?.dispose();
+      destination.dispose();
     },
   };
 }

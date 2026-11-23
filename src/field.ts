@@ -4,6 +4,7 @@ import { maps, TILE, type FieldMap } from './field-art';
 import type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
 import { rooms } from './field-rooms';
 import { cityObstacles } from './field-city-layout';
+import { surveyAt, surveyStops, type CityStop, type SurveyId } from './field-city-walks';
 import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
 import type { Footing } from './sound';
@@ -28,6 +29,7 @@ interface FieldOptions {
   onHint: (hint: string) => void;
   onEvent: (event: FieldEvent) => void;
   onEncounter: (area: FieldArea, kind: EncounterKind) => void;
+  onSurvey: (id: SurveyId) => void;
   onReady?: () => void;
   onOverview?: (active: boolean) => void;
   onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter', surface?: Footing) => void;
@@ -45,6 +47,7 @@ export interface FieldControls {
   setBeaconLit: (lit: boolean) => void;
   setCovered: (covered: boolean) => void;
   travel: (area: FieldArea) => void;
+  walkToStop: (stop: CityStop) => boolean;
   leaveRoom: () => void;
   getLocation: () => FieldLocation;
   destroy: () => void;
@@ -83,34 +86,48 @@ const intersect = (point: TilePoint, map: FieldMap) => Number.isInteger(point.x)
 const walkable = (point: TilePoint, map: FieldMap) => intersect(point, map) && !map.npcs.some(npc => npc.solid && sameTile(npc, point));
 const mapAt = (location: FieldLocation) => location.room ? rooms[location.room].map : maps[location.area];
 
-function findPath(start: TilePoint, targets: TilePoint[], map: FieldMap): TilePoint[] | undefined {
+function findPath(start: TilePoint, targets: TilePoint[], map: FieldMap, preferPavement = false): TilePoint[] | undefined {
   if (!targets.length) return;
-  const queue = [start];
   const index = (point: TilePoint) => point.y * map.width + point.x;
   const goals = new Set(targets.map(index));
-  const previous = new Map<number, TilePoint | null>([[index(start), null]]);
-  for (let head = 0; head < queue.length; head++) {
-    const point = queue[head];
-    if (goals.has(index(point))) {
-      const path: TilePoint[] = [];
-      let current = point;
-      let parent = previous.get(index(current));
-      while (parent) {
-        path.unshift(current);
-        current = parent;
-        parent = previous.get(index(current));
+  // Any simple route takes fewer steps than there are tiles. One grass tile
+  // therefore costs more than the longest pavement detour when using the atlas.
+  const grassCost = preferPavement ? map.width * map.height : 0;
+  const frontier: TilePoint[][] = [[start]];
+  const previous = new Map<number, { parent?: TilePoint; cost: number }>([[index(start), { cost: 0 }]]);
+  for (let cost = 0; cost < frontier.length; cost++) {
+    const bucket = frontier[cost];
+    if (!bucket) continue;
+    for (const point of bucket) {
+      const key = index(point);
+      if (previous.get(key)!.cost !== cost) continue;
+      if (goals.has(key)) {
+        const path: TilePoint[] = [];
+        let current = point;
+        for (let parent = previous.get(key)?.parent; parent; parent = previous.get(index(current))?.parent) {
+          path.push(current);
+          current = parent;
+        }
+        return path.reverse();
       }
-      return path;
-    }
-    for (const direction of stepDirections) {
-      const next = neighbor(point, direction, map.wrapX);
-      if (walkable(next, map) && !previous.has(index(next))) {
-        if (map.exits.some(exit => sameTile(exit, next)) && !goals.has(index(next))) continue;
-        previous.set(index(next), point);
-        queue.push(next);
+      for (const direction of stepDirections) {
+        const next = neighbor(point, direction, map.wrapX);
+        if (!walkable(next, map)) continue;
+        const nextKey = index(next);
+        const nextCost = cost + 1 + (map.grass[next.y][next.x] ? grassCost : 0);
+        if ((previous.get(nextKey)?.cost ?? Infinity) <= nextCost) continue;
+        if (!goals.has(nextKey) && map.exits.some(exit => sameTile(exit, next))) continue;
+        previous.set(nextKey, { parent: point, cost: nextCost });
+        (frontier[nextCost] ??= []).push(next);
       }
     }
   }
+}
+
+export function planCityWalk(start: FieldLocation, stop: CityStop) {
+  if (start.area !== 'harbor' || start.room) return;
+  const map = maps.harbor;
+  return findPath(start, stop.approaches, map, true);
 }
 
 function initialLocation(initial?: FieldLocation): FieldLocation {
@@ -152,6 +169,7 @@ export function createField(options: FieldOptions): FieldControls {
   let queued: Direction | null = null;
   let streetInput: { screen: Direction; travel: Direction; at: number } | undefined;
   let path: TilePoint[] = [];
+  let walkingTo: CityStop | undefined;
   let onArrival: (() => void) | undefined;
   let step: WalkStep | undefined;
   let lastFootfall = -Infinity;
@@ -164,6 +182,8 @@ export function createField(options: FieldOptions): FieldControls {
   let beaconLit = false;
   let interactQueued = false;
   let fadedAt = -fieldFadeDuration;
+  let pumpStarted = -Infinity;
+  let surveyFocus: CityStop | undefined;
   let paused = false;
   let grassSteps = 0;
   let encounterAfter = 3;
@@ -200,6 +220,7 @@ export function createField(options: FieldOptions): FieldControls {
 
   function refreshHint() {
     if (overview) return hint('拖动环视 · 点击街道进入');
+    if (walkingTo) return hint(`步行前往${walkingTo.name} · 手动移动可中断`);
     const actor = nearby();
     if (actor) {
       const room = entrance(actor.event);
@@ -207,6 +228,8 @@ export function createField(options: FieldOptions): FieldControls {
     }
     const map = mapAt(location);
     if (location.room) return hint('与室内人物交谈，或从南侧门口离开。');
+    const stop = location.area === 'harbor' && surveyAt(location);
+    if (stop) return hint(`观察${stop.subject} · 互动记录街区手记`);
     const guide = map.npcs.find(npc => npc.event === 'guide');
     if (guide && !guideMet && distance(guide, location, map.wrapX) === 2) return hint(`沿环城大道去找${guide.name}`);
     const exit = map.exits.find(gate => (gate.side === 'bottom' ? 'down' : gate.side) === facing && distance(gate, location, map.wrapX) <= 3);
@@ -220,6 +243,7 @@ export function createField(options: FieldOptions): FieldControls {
   function stopRouting() {
     path = [];
     onArrival = undefined;
+    walkingTo = undefined;
   }
 
   function clearInput() {
@@ -257,6 +281,7 @@ export function createField(options: FieldOptions): FieldControls {
     strides = 0;
     rustle = undefined;
     fadedAt = time;
+    pumpStarted = -Infinity;
     options.onSound?.('area');
     options.onLocation({ ...location });
     refreshHint();
@@ -329,11 +354,7 @@ export function createField(options: FieldOptions): FieldControls {
     refreshHint();
     if (interactQueued) {
       interactQueued = false;
-      const actor = nearby();
-      if (actor) {
-        talk(actor);
-        return;
-      }
+      if (interactNearby()) return;
     }
     if (!path.length && onArrival) {
       const callback = onArrival;
@@ -367,9 +388,27 @@ export function createField(options: FieldOptions): FieldControls {
       interactQueued = true;
       return;
     }
+    if (!interactNearby()) refreshHint();
+  }
+
+  function interactNearby() {
     const actor = nearby();
-    if (actor) talk(actor);
-    else refreshHint();
+    if (actor) { talk(actor); return true; }
+    const site = location.area === 'harbor' && !location.room && surveyAt(location);
+    if (!site) return false;
+    setOverview(false);
+    surveyFocus = site;
+    renderer.resetCamera();
+    const dx = site.position.x - (location.x + .5);
+    const dy = site.position.y - (location.y + .5);
+    facing = Math.abs(dx) >= Math.abs(dy) ? dx > 0 ? 'right' : 'left' : dy > 0 ? 'down' : 'up';
+    stopRouting();
+    clearInput();
+    refreshHint();
+    if (site.survey === 'wharf') pumpStarted = performance.now();
+    options.onSound?.('interact');
+    options.onSurvey(site.survey);
+    return true;
   }
 
   function move(direction: Direction) {
@@ -401,19 +440,33 @@ export function createField(options: FieldOptions): FieldControls {
     if (held) move(held);
   }
 
-  function route(targets: TilePoint[], callback?: () => void) {
-    const map = mapAt(location);
-    const next = findPath(step?.to ?? location, targets.filter(point => walkable(point, map)), map);
-    if (!next) return false;
+  function startRoute(next: TilePoint[], callback?: () => void, stop?: CityStop) {
     setOverview(false);
     clearInput();
+    walkingTo = stop;
     path = next;
     onArrival = callback;
+    refreshHint();
     if (!step && path.length === 0) {
       onArrival = undefined;
       callback?.();
     }
     return true;
+  }
+
+  function route(targets: TilePoint[], callback?: () => void) {
+    const map = mapAt(location);
+    const next = findPath(step?.to ?? location, targets.filter(point => walkable(point, map)), map);
+    return next !== undefined && startRoute(next, callback);
+  }
+
+  function walkToStop(stop: CityStop, inspect = false) {
+    if (paused) return false;
+    const next = planCityWalk({ ...location, ...step?.to }, stop);
+    return next !== undefined && startRoute(next, () => {
+      walkingTo = undefined;
+      if (!inspect || !interactNearby()) refreshHint();
+    }, stop);
   }
 
   function tapField(event: PointerEvent) {
@@ -425,6 +478,13 @@ export function createField(options: FieldOptions): FieldControls {
     if (actor) {
       route(stepDirections.map(direction => neighbor(actor, direction, mapAt(location).wrapX)), () => talk(actor));
       return;
+    }
+    if (location.area === 'harbor' && !location.room) {
+      const survey = renderer.hitSurvey(screenX, screenY);
+      if (survey) {
+        const stop = surveyStops.find(candidate => candidate.survey === survey);
+        if (stop && walkToStop(stop, true)) return;
+      }
     }
     const point = renderer.pointInWorld(screenX, screenY);
     if (!point || !route([{ x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) }])) hint('这里无法通行，请沿路探索');
@@ -510,7 +570,8 @@ export function createField(options: FieldOptions): FieldControls {
     const activeNpc = nearby();
     const map = mapAt(location);
     renderer.draw(time, {
-      location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc,
+      location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc, surveyFocus,
+      pumpElapsed: time - pumpStarted < 3600 ? (reducedMotion.matches ? 1 : Math.max(0, time - pumpStarted) / 1000) : undefined,
       activeNpcFacing: activeNpc && !sameTile(activeNpc, location) ? directionTo(activeNpc, location, map.wrapX) : undefined,
       companionImage: companion ? creatureArt.get(companion) : undefined, companionId: companion ?? undefined, sylveon, night, beaconLit, fadedAt,
     });
@@ -574,11 +635,16 @@ export function createField(options: FieldOptions): FieldControls {
     move: direction => move(streetDirection(direction)), hold, interact,
     setPaused(value) {
       paused = value;
+      if (!value && surveyFocus) {
+        surveyFocus = undefined;
+        renderer.resetCamera();
+      }
       if (value) {
         clearOrbitGesture();
         stopRouting();
         clearInput();
         step = undefined;
+        refreshHint();
       }
     },
     setCompanion,
@@ -590,6 +656,7 @@ export function createField(options: FieldOptions): FieldControls {
       if (covered && !value) renderer.resetCamera();
       covered = value;
     },
+    walkToStop,
     travel(area) {
       if (paused || (!location.room && area === location.area && sameTile(location, maps[area].spawn))) return;
       clearInput();

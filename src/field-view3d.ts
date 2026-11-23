@@ -1,11 +1,14 @@
 import {
-  ACESFilmicToneMapping, AdditiveBlending, Box3, CanvasTexture, Color, DirectionalLight, FogExp2, Group, HemisphereLight,
-  Mesh, MeshBasicMaterial, OrthographicCamera, PCFShadowMap, PerspectiveCamera, Plane, PlaneGeometry, PointLight, Ray, Raycaster,
-  RingGeometry, Scene, Sprite, SpriteMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderer, type Intersection, type Object3D,
+  ACESFilmicToneMapping, AdditiveBlending, Box3, CanvasTexture, Color, DirectionalLight, EqualStencilFunc, FogExp2,
+  GreaterDepth, Group, HemisphereLight, IncrementStencilOp, Mesh, MeshBasicMaterial, OrthographicCamera,
+  PCFShadowMap, PerspectiveCamera, Plane, PlaneGeometry, PointLight, Ray, Raycaster, ReplaceStencilOp,
+  RingGeometry, Scene, Sprite, SpriteMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderer,
+  type Intersection, type Material, type Object3D,
 } from 'three';
 import { props, TILE, type FieldArea } from './field-layout';
 import { cityLighthouseSite, harborHeight } from './field-city-layout';
 import { updateCityArchitecture } from './field-city-models';
+import type { SurveyId } from './field-city-walks';
 import { buildRingArchitecture } from './field-ring-architecture';
 import { buildRingGates } from './field-ring-gates';
 import { buildRingGround } from './field-ring-ground';
@@ -70,7 +73,8 @@ const atmospheres = {
 };
 
 type SceneKey = keyof typeof atmospheres;
-type SceneModel = ReturnType<typeof buildFieldTerrain> & {
+type SceneModel = Omit<ReturnType<typeof buildFieldTerrain>, 'update'> & {
+  update: (time: number, night: number, pumpElapsed?: number) => void;
   lamps?: CityLamp[];
   optics?: ReturnType<typeof buildCityLight>;
   crowd?: ReturnType<typeof buildCityCrowd>;
@@ -149,14 +153,60 @@ function visibilityTexture() {
   return texture;
 }
 
+function hiddenTraveler(model: Group) {
+  const silhouette = new MeshBasicMaterial({
+    color: 0xd7ece6, transparent: true, toneMapped: false, fog: false,
+    depthWrite: false, depthFunc: GreaterDepth,
+    stencilWrite: true, stencilFunc: EqualStencilFunc, stencilRef: 0, stencilZPass: IncrementStencilOp,
+  });
+  const parts: Mesh[] = [];
+  model.traverse(object => { if (object instanceof Mesh) parts.push(object); });
+  const markedMaterials = new Map<Material, Material>();
+  const overlays: Mesh[] = [];
+  for (const part of parts) {
+    if (Array.isArray(part.material)) continue;
+    let marked = markedMaterials.get(part.material);
+    if (!marked) {
+      marked = part.material.clone();
+      marked.stencilRef = 1;
+      marked.stencilZPass = ReplaceStencilOp;
+      markedMaterials.set(part.material, marked);
+    }
+    part.material = marked;
+    // World geometry must fill the depth buffer before the visible body marks its pixels.
+    part.renderOrder = 5;
+    const overlay = new Mesh(part.geometry, silhouette);
+    overlay.visible = false;
+    overlay.renderOrder = 18;
+    part.add(overlay);
+    overlays.push(overlay);
+  }
+  let visible = false;
+  return {
+    show(opacity: number) {
+      silhouette.opacity = opacity * .55;
+      const active = opacity > .06;
+      if (visible === active) return;
+      visible = active;
+      overlays.forEach(part => { part.visible = active; });
+      markedMaterials.forEach(material => { material.stencilWrite = active; });
+    },
+    dispose() {
+      silhouette.dispose();
+      markedMaterials.forEach(material => material.dispose());
+    },
+  };
+}
+
 export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: MediaQueryList) {
   const surface = document.createElement('canvas');
-  const context = surface.getContext('webgl2', { alpha: false, antialias: true, depth: true });
+  const context = surface.getContext('webgl2', { alpha: false, antialias: true, depth: true, stencil: true });
   const displayContext = canvas.getContext('2d', { alpha: false });
   if (!context || !displayContext) return;
   const display = displayContext;
 
-  const renderer = new WebGLRenderer({ canvas: surface, context, alpha: false, antialias: true });
+  const stencil = context.getParameter(context.STENCIL_BITS) > 0;
+  const renderer = new WebGLRenderer({ canvas: surface, context, alpha: false, antialias: true, stencil });
   renderer.setClearColor(0x70979b);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
@@ -211,6 +261,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   }
 
   const hero = createTraveler('player');
+  const silhouette = stencil ? hiddenTraveler(hero.model) : undefined;
   const player = new Group();
   player.add(hero.model);
   contact(player);
@@ -385,13 +436,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const civic = column >= 12 && column <= 13 && row >= 11 && row <= 13;
     const salt = column >= 23 && column <= 24 && row >= 34 && row <= 35;
     const close = !farSubject && (civic || salt);
+    const fallbackPitch = stencil && row <= 6 ? 1.05 : 1.445;
     const result = (close ? choose([[civic ? .57 : -.57, .44 - pitch]], compact ? 6.6 : 7.45, 0, civic ? -1.19 : 1.19) : undefined)
       ?? choose(alleyAngles.slice(0, 7), radius)
       ?? (row > 22 ? choose(nearAlleyAngles, radius * .73, 1.42) : undefined)
       ?? choose(alleyAngles.slice(7), radius)
       ?? (row > 22 ? choose(steepAlleyAngles, radius) : undefined)
       ?? partial
-      ?? { yaw: 0, pitch: 1.445 - pitch, distance: radius, inset: 0, lateral: 0 };
+      ?? { yaw: 0, pitch: fallbackPitch - pitch, distance: radius, inset: 0, lateral: 0 };
     alleyView.set(tile, result);
     return result;
   }
@@ -440,10 +492,10 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
           group: ground.group,
           lamps: street.lamps,
           optics, crowd, occluders, reflections,
-          dispose() { ferry.dispose(); gateways.dispose(); },
-          update(time, night) {
+          dispose() { ferry.dispose(); gateways.dispose(); transit.dispose(); },
+          update(time, night, pumpElapsed) {
             ground.update(time, night, aerialAmount);
-            street.update(time, night);
+            street.update(time, night, pumpElapsed);
             transit.update(time, night);
             ferry.update(time, night);
             optics.update(night, time);
@@ -576,7 +628,8 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const aspect = width / height;
     const tour = harborAerialCamera(aspect, mobile, view.orbitTilt);
     const outward = polar && ringStreetLooksOutward(view.location.x, view.location.y);
-    const rustle = polar && !panorama ? view.rustle : undefined;
+    const focus = polar && !panorama ? view.surveyFocus : undefined;
+    const rustle = polar && !panorama && !focus ? view.rustle : undefined;
     const reveal = rustle && Math.abs(ringXDelta(x, rustle.x + .5)) + Math.abs(z - rustle.y - .5) < 7.8
       ? ringPosition(rustle.x + .5, rustle.y + .5) : undefined;
     aerialAmount += ((panorama ? 1 : 0) - aerialAmount) * lens;
@@ -586,10 +639,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       : polar ? ringAngle(x) + (outward ? Math.PI - .26 : .27) - .08 * depth : room ? .12 : .33 - .16 * depth;
     let pitch = panorama ? tour.pitch
       : polar ? streetPitch(z, outward) - .045 * depth : room ? .92 : .79 - .08 * depth;
-    const bias = !panorama && polar ? alleyCamera(view.location.x, view.location.y, mobile, Boolean(reveal)) : undefined;
+    const bias = !panorama && polar && !focus ? alleyCamera(view.location.x, view.location.y, mobile, Boolean(reveal)) : undefined;
     if (bias) {
       yaw += bias.yaw;
       pitch += bias.pitch;
+    }
+    if (focus) {
+      yaw = ringAngle(focus.position.x) + (focus.id === 'station' ? Math.PI - .28 : .29);
+      pitch = focus.id === 'garden' ? .82 : .60;
     }
     const turn = Math.atan2(Math.sin(yaw - viewYaw), Math.cos(yaw - viewYaw));
     viewYaw += turn * lens;
@@ -599,21 +656,25 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       ? streetCenter(x, z, mobile, outward, bias?.inset, bias?.lateral)
       : room ? { x: x * .42 + 12.1 * .58, z: z * .26 + 8.85 * .74 }
       : { x: x - 1.03, z: z - (mobile ? 1.61 : 2.48) };
-    if (reveal) {
+    if (focus) {
+      const subject = ringPosition(focus.position.x, focus.position.y);
+      center.x = subject.x;
+      center.z = subject.z;
+    } else if (reveal) {
       center.x += (reveal.x - center.x) * .24;
       center.z += (reveal.z - center.z) * .24;
     }
     aimX += (center.x - aimX) * pan;
     aimZ += (center.z - aimZ) * pan;
 
-    const goalSpan = panorama ? tour.span
+    const goalSpan = focus ? (mobile ? 3.85 : 3.65) : panorama ? tour.span
       : polar ? (mobile ? 7.45 : 8.56) + 1.70 * depth + .62 * alley
       : room ? (mobile ? 10.7 : 12.0)
       : (mobile ? 10.45 : aspect > 2.6 ? 10.8 : 12.85) + depth * 2.92;
-    const elevation = panorama ? tour.elevation : polar ? .78 : 0;
+    const elevation = focus ? (focus.id === 'station' || focus.id === 'market' ? .50 : .18) : panorama ? tour.elevation : polar ? .78 : 0;
     span += (goalSpan - span) * lens;
     viewElevation += (elevation - viewElevation) * lens;
-    const distance = panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
+    const distance = focus ? 5.2 : panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
     viewDistance += (distance - viewDistance) * lens;
     const radius = viewDistance;
     if (reveal) {
@@ -755,13 +816,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         if (city) light.position.y -= .34;
       }
     });
-    model.update(reduced ? 0 : time, darkness);
+    model.update(reduced ? 0 : time, darkness, view.pumpElapsed);
     model.crowd?.update(time, x, z, reduced, cssWidth < 545, view.overview);
     effects.update(time, view, heroPosition.x, heroPosition.z, progress, darkness, width / cssWidth, reduced);
     const obscured = model.occluders && !view.overview &&
       hiddenFrom(camera.position, heroPosition.x, heroPosition.z) ? 1 : 0;
     pinVisibility = reduced ? obscured : pinVisibility + (obscured - pinVisibility) * .27;
-    pin.visible = pinVisibility > .06;
+    silhouette?.show(view.overview ? 0 : pinVisibility);
+    pin.visible = !silhouette && pinVisibility > .06;
     pin.material.opacity = pinVisibility * .9;
     const guide = location.room ? undefined : view.map.npcs.find(npc => npc.event === 'guide');
     const visibleTarget = activeNpc ? pointAt(activeNpc.x + .5, activeNpc.y + .875) : heroPosition;
@@ -807,6 +869,24 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     if (!ray.intersectPlane(ground, planeHit) || cityBlocksRay(ray, ray.origin.distanceTo(planeHit) - .02)) return;
     const point = key === 'harbor' ? ringCoordinates(planeHit.x, planeHit.z) : { x: planeHit.x, z: planeHit.z };
     return { x: point.x * TILE, y: point.z * TILE };
+  }
+
+  function hitSurvey(x: number, y: number): SurveyId | undefined {
+    if (key !== 'harbor' || previousOverview || !width || !height) return;
+    const ray = screenRay(x, y);
+    let nearest: SurveyId | undefined;
+    let distance = camera.far;
+    for (const { object, bounds } of cache.get(key)?.occluders ?? []) {
+      const survey = object.userData.survey as SurveyId | undefined;
+      if (!survey || !ray.intersectsBox(bounds)) continue;
+      hits.length = 0;
+      const hit = raycaster.intersectObject(object, true, hits)[0];
+      if (hit && hit.distance < distance) {
+        nearest = survey;
+        distance = hit.distance;
+      }
+    }
+    if (nearest && !cityBlocksRay(ray, distance - .025)) return nearest;
   }
 
   function hitActor(x: number, y: number, candidates: FieldView['map']['npcs'], doorway: (actor: FieldView['map']['npcs'][number]) => boolean) {
@@ -858,6 +938,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     for (const { sprite } of lamps) sprite.material.dispose();
     partner.dispose();
     sylveon.dispose();
+    silhouette?.dispose();
     hero.dispose();
     effects.dispose();
     for (const { traveler } of locals) traveler.dispose();
@@ -880,7 +961,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   }
 
   return {
-    surface, draw, resize, projectPoint, pointInWorld, hitActor, destroy,
+    surface, draw, resize, projectPoint, pointInWorld, hitSurvey, hitActor, destroy,
     resetCamera: () => { previousTime = 0; needsFrame = true; },
     hasStreetFrame: () => key === 'harbor' && !previousOverview && width > 0 && height > 0,
     getCamera: () => ({ x: aimX * TILE, y: aimZ * TILE, scale: height / (span * TILE), depth, width, height }),

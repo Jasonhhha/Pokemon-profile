@@ -4,6 +4,7 @@ import {
 } from './field-city-layout';
 import { maps, tileAt, type FieldLocation, type Tile } from './field-layout';
 import { RING_PERIOD, ringAngle, ringPosition, ringRadius } from './field-ring-coordinates';
+import type { StreetPoint } from './field-city-walks';
 
 export const cityChartSize = { width: 560, height: 410 };
 export const ringPlanExtent = ringRadius(harborHeight + 4.4);
@@ -142,14 +143,18 @@ export function paintRingPlan(ctx: CanvasRenderingContext2D, cx: number, cy: num
   }
 }
 
-export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLocation) {
+export function cityChartPoint(x: number, z: number) {
+  const { width, height } = cityChartSize;
+  const scale = (height - 48) / (ringPlanExtent * 2);
+  const position = ringPosition(x, z);
+  return [width / 2 + position.x * scale, height / 2 + position.z * scale] as const;
+}
+
+export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLocation, walk?: { path?: StreetPoint[] }) {
   const { width, height } = cityChartSize;
   const cx = width * .5, cy = height * .50;
   const scale = (height - 48) / (ringPlanExtent * 2);
-  const point = (x: number, z: number) => {
-    const position = ringPosition(x,z);
-    return [cx + position.x * scale, cy + position.z * scale] as const;
-  };
+  const point = cityChartPoint;
   paintRingPlan(ctx, cx, cy, scale);
 
   for (const lot of cityParcels) {
@@ -226,7 +231,7 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
     [29.8, 10.35, '中央车站'], [37.65, 18, '东渡口'], ...cityCourtyards.map(court => [
       court.x + court.width / 2, court.z + court.depth / 2, court.label,
     ] as const)] as const;
-  for (const [mapX, mapZ, text] of labels) {
+  for (const [mapX, mapZ, text] of walk ? [] : labels) {
     const [x, y] = point(mapX, mapZ);
     const w = ctx.measureText(text).width + 13;
     ctx.fillStyle = '#203743c9';
@@ -236,7 +241,7 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
   }
   ctx.textAlign = 'left';
   ctx.font = '600 14px system-ui, sans-serif';
-  for (const court of cityForecourts) {
+  for (const court of walk ? [] : cityForecourts) {
     const [x, y] = point(court.x + court.width / 2, court.z + court.depth / 2);
     const [labelX, labelY] = court.id === 'sailmakers-forecourt' ? [369, 346] : [466, 179];
     ctx.beginPath();
@@ -276,6 +281,21 @@ export function drawCityChart(ctx: CanvasRenderingContext2D, location?: FieldLoc
     ctx.fillText(name, 51, y);
   }
 
+  if (walk?.path?.length && location) {
+    ctx.beginPath();
+    ctx.moveTo(...point(location.x + .5, location.y + .5));
+    for (const tile of walk.path) ctx.lineTo(...point(tile.x + .5, tile.y + .5));
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 5.6;
+    ctx.strokeStyle = '#202c33';
+    ctx.stroke();
+    ctx.lineWidth = 2.8;
+    ctx.strokeStyle = '#f7d189';
+    ctx.stroke();
+    ctx.restore();
+  }
   if (location) {
     const [x,y] = point(location.x + .5, location.y + .54);
     ctx.beginPath();

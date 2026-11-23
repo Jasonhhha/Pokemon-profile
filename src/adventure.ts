@@ -1,6 +1,7 @@
 import { creatures, initialBattleProgress, makeMember, migrateBattleProgress, type BattleProgress, type CreatureId } from './creatures';
 import type { EncounterKind, FieldArea, FieldLocation } from './field';
 import { rooms } from './field-rooms';
+import { courtNotes, surveyStops, type SurveyId } from './field-city-walks';
 
 export const areas = ['harbor', 'grove', 'summit'] as const;
 export const entrance: FieldLocation = { area: 'harbor', x: 12, y: 12 };
@@ -11,6 +12,7 @@ export type AdventureSave = {
   visited: FieldArea[];
   greeted: boolean;
   sparWon: boolean;
+  courtVisits: SurveyId[];
   seen: CreatureId[];
   battle: BattleProgress;
 };
@@ -60,9 +62,18 @@ export function addSeen(save: AdventureSave, id: CreatureId): AdventureSave {
   return save.seen.includes(id) ? save : { ...save, seen: [...save.seen, id] };
 }
 
+export function recordCourt(save: AdventureSave, court: SurveyId): AdventureSave {
+  if (save.courtVisits.includes(court)) return save;
+  const courtVisits = [...save.courtVisits, court];
+  const battle = courtVisits.length === surveyStops.length
+    ? { ...save.battle, medicine: Math.min(Number.MAX_SAFE_INTEGER, save.battle.medicine + 2) }
+    : save.battle;
+  return { ...save, courtVisits, battle };
+}
+
 export function loadAdventure(): AdventureSave {
   const battle = initialBattleProgress();
-  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, seen: battle.team.map(member => member.id), battle };
+  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], seen: battle.team.map(member => member.id), battle };
   try {
     const stored = localStorage.getItem(saveKey);
     if (stored === null) {
@@ -82,6 +93,7 @@ export function loadAdventure(): AdventureSave {
       visited: [...new Set<FieldArea>(['harbor', ...visited, validLocation ? location.area : 'harbor'])],
       greeted: saved?.greeted === true,
       sparWon: saved?.sparWon === true,
+      courtVisits: [...new Set(Array.isArray(saved?.courtVisits) ? saved.courtVisits.filter(id => typeof id === 'string' && Object.hasOwn(courtNotes, id)) : [])],
       seen: [...new Set([...seen, ...progress.team.map(member => member.id)])],
       battle: progress,
     };

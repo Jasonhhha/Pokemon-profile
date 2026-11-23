@@ -246,6 +246,73 @@ test('the outer quay has a walkable dogleg into the lock courtyard', async ({ pa
   await expect(page.locator('.map-district')).toHaveText('西闸仓院');
 });
 
+test('the ring atlas walks to the courtyards and records observations only at the landmarks', async ({ page }) => {
+  test.setTimeout(95000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await ready(page);
+  await page.locator('.field-dock-run').click();
+  for (const [index, [site, subject]] of [
+    ['西闸仓院', '手摇水泵'], ['蕨园内院', '石砌蕨床'], ['盐市中庭', '盐市方尖碑'], ['信号场', '信号场站钟'],
+  ].entries()) {
+    await page.getByRole('button', { name: /街区手记/ }).click();
+    const map = page.getByRole('region', { name: '环城步行图' });
+    await map.getByRole('button', { name: site, exact: true }).click();
+    await expect(map).toContainText(/实线路线 · \d+ 步/);
+    await map.getByRole('button', { name: '沿街步行' }).click();
+    await expect(page.locator('.game-hint')).toContainText(`观察${subject}`, { timeout: 23000 });
+    await expect(page.locator('.map-district')).toHaveText(site);
+    await expect(page.locator('.journal-map-link b')).toHaveText(`${index} / 4`);
+    await field(page).press('e');
+    await expect(page.locator('.field-dialogue strong')).toHaveText(subject);
+    await expect(page.locator('.journal-map-link b')).toHaveText(`${index + 1} / 4`);
+    await page.getByRole('button', { name: '结束' }).click();
+  }
+  const supplies = () => page.locator('.field-supplies b').first();
+  await expect(supplies()).toHaveText('5');
+  await page.reload();
+  await expect(page.locator('.journal-map-link b')).toHaveText('4 / 4');
+  await page.getByRole('button', { name: '返回街道' }).click();
+  await field(page).press('e');
+  await expect(page.locator('.field-dialogue strong')).toHaveText('信号场站钟');
+  await expect(supplies()).toHaveText('5');
+});
+
+test('touch can take over an atlas walk and visit the ferry without boarding', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 740 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+  try {
+    const page = await context.newPage();
+    await ready(page);
+    await page.getByRole('button', { name: '群岛航线' }).tap();
+    const atlas = page.getByRole('region', { name: '环城步行图' });
+    await atlas.getByLabel('步行目的地').selectOption('ferry');
+    await atlas.getByRole('button', { name: '沿街步行' }).tap();
+    await expect.poll(() => position(page)).not.toEqual({ area: 'harbor', x: 12, y: 12 });
+    await page.getByRole('button', { name: '向下移动' }).tap();
+    await expect(page.locator('.game-hint')).not.toContainText('步行前往');
+    await page.getByRole('button', { name: '群岛航线' }).tap();
+    await atlas.getByLabel('步行目的地').selectOption('ferry');
+    await atlas.getByRole('button', { name: '沿街步行' }).tap();
+    await expect.poll(() => position(page), { timeout: 18000 }).toEqual({ area: 'harbor', x: 37, y: 15 });
+    await expect(page.locator('.game-viewport')).toHaveAttribute('data-area', 'harbor');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally { await context.close(); }
+});
+
+test('the greenway itinerary takes the shortest detour with the fewest wild-grass steps', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => localStorage.setItem('tidebound-save-v1', JSON.stringify({
+    location: { area: 'harbor', x: 18, y: 15 },
+  })));
+  await ready(page);
+  await page.getByRole('button', { name: '群岛航线' }).click();
+  const atlas = page.getByRole('region', { name: '环城步行图' });
+  await atlas.getByLabel('步行目的地').selectOption('greenway');
+  await expect(atlas).toContainText('16 步 · 途经 1 格高草');
+  await atlas.getByRole('button', { name: '沿街步行' }).click();
+  await expect.poll(() => position(page), { timeout: 12000 }).toEqual({ area: 'harbor', x: 29, y: 14 });
+  await expect(page.getByRole('region', { name: '野外战斗' })).toHaveCount(0);
+});
+
 test('street controls follow the view inside an outward-facing shop court', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.addInitScript(() => {
@@ -676,4 +743,52 @@ test('expanded landscape touch play keeps direction, action and menu controls re
   await expect(expanded).toHaveCount(0);
   expect(errors).toEqual([]);
   await context.close();
+});
+
+test('touching the salt monument records the courtyard only from a clear street view', async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 320, height: 760 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, reducedMotion: 'reduce',
+  });
+  try {
+    for (const [row, visible] of [[34, false], [39, true]] as const) {
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', error => errors.push(error.message));
+      const start = { area: 'harbor', x: 24, y: row };
+      await page.addInitScript(initial => {
+        Math.random = () => .99;
+        localStorage.setItem('tidebound-save-v1', JSON.stringify({ greeted: true, location: initial }));
+      }, start);
+      await ready(page);
+      const canvas = field(page).locator('canvas');
+      test.skip(await canvas.getAttribute('data-renderer') !== 'webgl', 'This browser has no available WebGL context');
+      const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);
+      await page.getByRole('button', { name: '返回街道', exact: true }).tap();
+      await page.waitForFunction(scale => (window as FieldWindow).__field!.getCamera().scale > scale * 1.6, overviewScale);
+      const monument = await canvas.evaluate(element => {
+        const camera = (window as FieldWindow).__field!;
+        const { width, height, scale } = camera.getCamera();
+        const point = camera.projectPoint(25.5 * 16, 38.5 * 16);
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.left + bounds.width * point.x / width, y: bounds.top + bounds.height * (point.y - 9 * scale) / height };
+      });
+      await page.touchscreen.tap(monument.x, monument.y);
+      const dialog = page.getByRole('group', { name: '与盐市方尖碑的对话' });
+      const visits = () => page.evaluate(() => JSON.parse(localStorage.getItem('tidebound-save-v1') ?? '{}').courtVisits ?? []);
+      if (visible) {
+        await expect(dialog).toBeVisible();
+        await expect.poll(visits).toEqual(['market']);
+        expect([{ area: 'harbor', x: 24, y: 38 }, { area: 'harbor', x: 25, y: 39 }]).toContainEqual(await position(page));
+      } else {
+        await expect(page.locator('.game-hint')).toContainText('这里无法通行');
+        await expect(dialog).toHaveCount(0);
+        expect(await visits()).toEqual([]);
+        expect(await position(page)).toEqual(start);
+      }
+      expect(errors).toEqual([]);
+      await page.close();
+    }
+  } finally {
+    await context.close();
+  }
 });

@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { BookOpen, Building2, Check, Compass, Cross, Leaf, LocateFixed, Mountain } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Anchor, BookOpen, Building2, Check, Clock3, Compass, Cross, Footprints, Landmark, Leaf, LocateFixed, Mountain, Sailboat, Sprout } from 'lucide-react';
 import { areas, speciesIn, type AdventureSave } from './adventure';
 import { CreatureSprite } from './creature-art';
 import { ailmentLabels, creatures, maxHp, maxLevel, moves, movePP, typeLabels, xpToNext, type BattleProgress, type CreatureId } from './creatures';
-import { fieldAreas, type FieldArea, type FieldLocation } from './field';
+import { fieldAreas, planCityWalk, type FieldArea, type FieldLocation } from './field';
 import { maps } from './field-art';
 import { tileAt, type Tile } from './field-layout';
 import { rooms } from './field-rooms';
-import { cityChartSize, drawCityChart } from './field-city-chart';
+import { cityChartPoint, cityChartSize, drawCityChart } from './field-city-chart';
+import { cityStops, courtNotes, surveyStops, type CityStop, type CityStopId, type StreetPoint } from './field-city-walks';
 
 export const areaIcons = { harbor: Building2, grove: Leaf, summit: Mountain } as const;
 
@@ -21,14 +22,14 @@ const chartInk: Readonly<Record<Tile, string>> = {
   water: '#345a72', dock: '#b99a70', stone: '#9e9ab1', quay: '#aaa495', drop: '#4b4e68',
 };
 
-function LocationPreview({ area, location }: { area: FieldArea; location?: FieldLocation }) {
+function LocationPreview({ area, location, walk }: { area: FieldArea; location?: FieldLocation; walk?: { path?: StreetPoint[] } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const map = maps[area];
   const unit = 4;
   useEffect(() => {
     const ctx = canvas.current?.getContext('2d');
     if (!ctx) return;
-    if (area === 'harbor') { drawCityChart(ctx, location); return; }
+    if (area === 'harbor') { drawCityChart(ctx, location, walk); return; }
     ctx.fillStyle = '#17262c';
     ctx.fillRect(0, 0, map.width * unit, map.height * unit);
     map.walkable.forEach((row, y) => row.forEach((passable, x) => {
@@ -57,13 +58,73 @@ function LocationPreview({ area, location }: { area: FieldArea; location?: Field
       ctx.fillRect(x - 2, y + 1, unit + 4, 2);
       ctx.fillRect(x + 1, y - 2, 2, unit + 4);
     }
-  }, [area, location, map]);
+  }, [area, location, map, walk]);
   const size = area === 'harbor' ? cityChartSize : { width: map.width * unit, height: map.height * unit };
   return <canvas className="route-preview" ref={canvas} width={size.width} height={size.height}
     role="img" aria-label={`${fieldAreas[area].name}地形图${location ? '，十字标记为当前位置' : ''}`} />;
 }
 
-export function RouteAtlas({ save, travel }: { save: AdventureSave; travel: (area: FieldArea) => void }) {
+const stopIcons = {
+  wharf: Anchor, garden: Sprout, market: Landmark, station: Clock3,
+  archive: BookOpen, clinic: Cross, greenway: Leaf, ferry: Sailboat,
+};
+
+type CityWalkProps = { save: AdventureSave; lastStop?: CityStopId; walkTo: (stop: CityStop) => boolean };
+
+function CityWalkMap({ save, walkTo, lastStop }: CityWalkProps) {
+  const [id, select] = useState<CityStopId>(() => lastStop ?? surveyStops.find(stop => !save.courtVisits.includes(stop.survey))?.id ?? 'archive');
+  const [routeFailed, setRouteFailed] = useState(false);
+  const selected = cityStops.find(stop => stop.id === id)!;
+  const local = save.location.area === 'harbor' && !save.location.room;
+  const room = save.location.room && rooms[save.location.room];
+  const pin = local ? save.location : room?.area === 'harbor'
+    ? { area: room.area, x: room.exterior.x, y: room.exterior.y + 1 } : undefined;
+  const route = useMemo(() => {
+    const path = planCityWalk(save.location, selected);
+    return { path, grass: path?.filter(tile => maps.harbor.grass[tile.y][tile.x]).length ?? 0 };
+  }, [save.location, selected]);
+  const recorded = selected.survey && save.courtVisits.includes(selected.survey);
+  function choose(next: CityStopId) { select(next); setRouteFailed(false); }
+
+  return <section className="city-walk-map" aria-label="环城步行图">
+    <div className="city-chart-wrap">
+      <LocationPreview area="harbor" location={pin} walk={route} />
+      {cityStops.map(stop => {
+        const Icon = stopIcons[stop.id];
+        const [x, y] = cityChartPoint(stop.position.x, stop.position.y);
+        const visited = stop.survey && save.courtVisits.includes(stop.survey);
+        return <button type="button" key={stop.id} className="city-chart-pin" aria-label={stop.name} title={stop.name}
+          aria-pressed={id === stop.id} data-survey={Boolean(stop.survey)} data-visited={visited || undefined}
+          style={{ left: `${100 * x / cityChartSize.width}%`, top: `${100 * y / cityChartSize.height}%` }}
+          onClick={() => choose(stop.id)}><Icon size={15} aria-hidden="true" /></button>;
+      })}
+    </div>
+    <div className="city-walk-picker">
+      <label>步行目的地<select value={id} onChange={event => choose(event.target.value as CityStopId)}>
+        <optgroup label="院落考察">{surveyStops.map(stop => <option value={stop.id} key={stop.id}>
+          {stop.name}{save.courtVisits.includes(stop.survey) ? ' · 已记录' : ''}
+        </option>)}</optgroup>
+        <optgroup label="城内设施">{cityStops.filter(stop => !stop.survey).map(stop =>
+          <option value={stop.id} key={stop.id}>{stop.name}</option>)}</optgroup>
+      </select></label>
+      {local && <button type="button" className="city-walk-start" disabled={!route.path} onClick={() => setRouteFailed(!walkTo(selected))}>
+        <Footprints size={16} />{route.path?.length === 0 ? '返回现场' : '沿街步行'}
+      </button>}
+    </div>
+    <div className="city-stop-detail" aria-live="polite">
+      <p>{selected.survey ? recorded ? courtNotes[selected.survey].note : `走到${selected.subject}旁，按互动键观察。` : selected.subject}</p>
+      <small>{routeFailed ? '路线已变化，请重新选择目的地。' : local && route.path
+        ? route.path.length ? `实线路线 · ${route.path.length} 步` : '已在目的地旁'
+        : '在环城街面可开始步行'}{route.grass > 0 && ` · 途经 ${route.grass} 格高草，可能遇敌`}</small>
+    </div>
+    <div className="city-notebook">
+      <BookOpen size={15} /><strong>街区手记</strong><span>{save.courtVisits.length} / {surveyStops.length}</span>
+      <small>{save.courtVisits.length === surveyStops.length ? '考察完成 · 补给已领取' : '记下四处院落，可领两份伤药'}</small>
+    </div>
+  </section>;
+}
+
+export function RouteAtlas({ save, travel, walkTo, lastStop }: CityWalkProps & { travel: (area: FieldArea) => void }) {
   return <div className="route-list">
     {areas.map((id, index) => {
       const Icon = areaIcons[id];
@@ -80,7 +141,7 @@ export function RouteAtlas({ save, travel }: { save: AdventureSave; travel: (are
           {visited && native.length > 0 && <div className="route-native">{native.map(species => <span key={species}>{creatures[species].name}</span>)}</div>}
           {current ? <span className="route-state"><LocateFixed size={13} />{room ? room.name : '当前位置'}</span> : visited ? <button type="button" className="subtle-button" onClick={() => travel(id)}>前往</button> : <span className="route-state">尚未抵达</span>}
         </div>
-        {visited && <LocationPreview area={id} location={current ? position : undefined} />}
+        {id === 'harbor' ? <CityWalkMap save={save} walkTo={walkTo} lastStop={lastStop} /> : visited && <LocationPreview area={id} location={current ? position : undefined} />}
       </article>;
     })}
     <div className="route-legend" aria-label="航线图例">

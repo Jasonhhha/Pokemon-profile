@@ -3,7 +3,7 @@ import {
   type Material,
 } from 'three';
 import { cityTransit, cityViaductPiers } from './field-city-layout';
-import { buildCityCarriages } from './field-city-transit';
+import { buildCityCarriages, ringCarriageDimensions } from './field-city-transit';
 import { batchStaticMeshes } from './field-mesh-batch';
 import { RING_PERIOD, ringAngle, ringPosition, ringRadius } from './field-ring-space';
 
@@ -17,6 +17,7 @@ const column = new MeshStandardMaterial({ color: 0xb9aa91, roughness: .88 });
 const coping = new MeshStandardMaterial({ color: 0xd8c7a5, roughness: .78 });
 const tile = new BoxGeometry(1, 1, 1);
 const cylinder = new CylinderGeometry(1, 1, 1, 12);
+const railhead = .05;
 const up = new Vector3(0, 1, 0);
 const arrow = new Vector3();
 
@@ -88,8 +89,8 @@ function structure() {
     ribbon(base, railHeight - .033, radius + side * .405, .183, upper);
     fascia(base, radius + side * .549, railHeight - .193, .305, dark);
     ribbon(base, railHeight - .084, radius + side * .512, .062, brass);
-    ribbon(base, railHeight + .05, radius + side * .208, .055, steel);
-    fascia(base, radius + side * .208, railHeight + .016, .052, dark);
+    ribbon(base, railHeight + railhead, radius + side * ringCarriageDimensions.halfGauge, .055, steel);
+    fascia(base, radius + side * ringCarriageDimensions.halfGauge, railHeight + .016, .052, dark);
     fascia(base, radius + side * .49, railHeight + .163, .031, steel);
   }
   for (let i = 0; i < 156; i++) {
@@ -149,7 +150,31 @@ export function buildRingTransit() {
   const group = new Group();
   const rail = structure();
   const train = buildCityCarriages();
+  const { railZ, railHeight } = cityTransit;
+  const { axleHeight, bogieOffset, wheelRadius } = ringCarriageDimensions;
+  const radius = ringRadius(railZ);
+  const anglePerColumn = Math.PI * 2 / RING_PERIOD;
+  const bogieAngle = Math.asin(bogieOffset / radius);
+  const carRadius = radius * Math.cos(bogieAngle);
+  const bufferReach = 1.50;
+  const gap = .154;
+  const halfCouplingAngle = Math.atan(bufferReach / carRadius) + Math.asin(gap / (2 * Math.hypot(carRadius, bufferReach)));
+  const separation = halfCouplingAngle / anglePerColumn;
+  const drawbarRadius = carRadius * Math.cos(halfCouplingAngle) + bufferReach * Math.sin(halfCouplingAngle);
+  const carHeight = railHeight + railhead - axleHeight + wheelRadius;
   group.add(rail, ...train.cars);
+  for (const { bogies } of train.assemblies) {
+    for (const [index, bogie] of bogies.entries()) {
+      const side = index ? 1 : -1;
+      bogie.position.x = side * bogieOffset;
+      bogie.rotation.y = side * bogieAngle;
+    }
+  }
+  const coupler = new Group();
+  piece(coupler, { x: 0, z: 0 }, 0, [gap + .045, .055, .082], dark);
+  piece(coupler, { x: 0, z: 0 }, .009, [.093, .074, .089], paintedIron);
+  piece(coupler, { x: 0, z: 0 }, .053, [.034, .025, .034], brass, 0, true);
+  group.add(coupler);
   return {
     group, structure: rail,
     update(time: number, night: number) {
@@ -161,14 +186,22 @@ export function buildRingTransit() {
       const ease = phase < edge ? phase * phase / (2 * edge)
         : phase > 1 - edge ? 1 - edge - (1 - phase) ** 2 / (2 * edge) : phase - edge * .50;
       const center = from.x + (to.x - from.x) * ease / (1 - edge);
-      const gauge = ringRadius(cityTransit.railZ) * Math.PI * 2 / RING_PERIOD;
-      for (const [index, car] of train.cars.entries()) {
-        const x = center + (index ? 1.47 : -1.47) / gauge;
-        const point = ringPosition(x, cityTransit.railZ);
-        car.position.set(point.x, cityTransit.railHeight + .03, point.z);
-        car.rotation.set(time ? Math.sin(x * 10) * .009 : 0, ringAngle(x), 0);
+      const speed = time && to.x !== from.x ? Math.min(1, phase / edge, (1 - phase) / edge) : 0;
+      for (const [index, { model, body }] of train.assemblies.entries()) {
+        const angle = ringAngle(center + (index ? separation : -separation));
+        // The chassis follows the chord between the two rail-aligned bogies.
+        model.position.set(Math.sin(angle) * carRadius, carHeight, Math.cos(angle) * carRadius);
+        model.rotation.y = angle;
+        body.rotation.x = -.019 * speed ** 2;
       }
+      const heading = ringAngle(center);
+      coupler.position.set(Math.sin(heading) * drawbarRadius, carHeight + .199, Math.cos(heading) * drawbarRadius);
+      coupler.rotation.y = heading;
       train.lighting(night);
+    },
+    dispose() {
+      train.dispose();
+      rail.traverse(object => { if (object instanceof Mesh) object.geometry.dispose(); });
     },
   };
 }

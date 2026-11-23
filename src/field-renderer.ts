@@ -4,6 +4,7 @@ import { drawRoomEffects, makeRoomArt } from './field-rooms';
 import { RING_PERIOD, ringRadius, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import type { Direction, WalkStep } from './field';
 import type { CreatureId } from './creatures';
+import type { CityStop } from './field-city-walks';
 
 type Point = { x: number; y: number };
 type SceneArt = ReturnType<typeof makeMapArt> & { padding: number };
@@ -26,6 +27,8 @@ export type FieldView = {
   sylveon?: HTMLCanvasElement;
   night: boolean;
   beaconLit: boolean;
+  pumpElapsed?: number;
+  surveyFocus?: CityStop;
   fadedAt: number;
 };
 
@@ -50,6 +53,13 @@ function ringWalkLength(from: Point, to: Point) {
   return Math.hypot(across, outer - inner);
 }
 
+function ringWalkPosition(from: Point, to: Point, fraction: number): Point {
+  return {
+    x: from.x + ringXDelta(from.x, to.x) * fraction,
+    y: from.y + (to.y - from.y) * fraction,
+  };
+}
+
 export function companionPosition({ location, trail, step, map, companionId }: FieldView, progress: number) {
   const tileUnderFeet = (x: number, y: number) => {
     const column = Math.floor(x + .5);
@@ -64,31 +74,31 @@ export function companionPosition({ location, trail, step, map, companionId }: F
     return { x: location.x - .32, y: location.y - .38 };
   };
   const previous = trail ?? startingPoint();
-  const across = map.wrapX ? ringXDelta(previous.x, location.x) : location.x - previous.x;
-  const along = location.y - previous.y;
-  const x = previous.x + across * progress;
-  const y = previous.y + along * progress;
   const origin = trail ?? tileUnderFeet(previous.x, previous.y);
   const passing = step && origin.x === step.to.x && origin.y === step.to.y;
-  if (!passing) {
-    if (map.wrapX) {
-      const spacing = companionId === 'drifloon' ? 1.34 : step?.running ? 1.19 : 1.05;
-      const length = step ? ringWalkLength(location, step.to) : 0;
-      const traveled = length * progress;
-      if (step && traveled > spacing) {
-        const at = (traveled - spacing) / length;
-        return {
-          x: location.x + ringXDelta(location.x, step.to.x) * at,
-          y: location.y + (step.to.y - location.y) * at,
-          passing: 0,
-        };
-      }
-      const previousLength = ringWalkLength(previous, location);
-      const at = Math.max(0, 1 - (spacing - traveled) / Math.max(.04, previousLength));
-      return { x: previous.x + across * at, y: previous.y + along * at, passing: 0 };
+  let point: Point;
+  if (map.wrapX) {
+    const spacing = companionId === 'drifloon' ? 1.34 : 1.05;
+    const previousLength = ringWalkLength(previous, location);
+    const tail = Math.min(spacing, previousLength);
+    const start = ringWalkPosition(previous, location, 1 - tail / Math.max(.001, previousLength));
+    if (!step) return { ...start, passing: 0 };
+    const nextLength = ringWalkLength(location, step.to);
+    const lead = Math.max(0, nextLength - spacing);
+    const end = ringWalkPosition(location, step.to, lead / Math.max(.001, nextLength));
+    if (passing) {
+      point = ringWalkPosition(start, end, progress);
+    } else {
+      // Follow both street segments so starts, corners, and stops share the same resting spot.
+      const distance = (tail + lead) * progress;
+      point = distance <= tail
+        ? ringWalkPosition(start, location, distance / Math.max(.001, tail))
+        : ringWalkPosition(location, end, (distance - tail) / lead);
     }
-    return { x, y, passing: 0 };
+  } else {
+    point = { x: previous.x + (location.x - previous.x) * progress, y: previous.y + (location.y - previous.y) * progress };
   }
+  if (!passing) return { ...point, passing: 0 };
 
   const roomBeside = (dx: number, dy: number) => [origin, location].every(point => {
     const column = map.wrapX ? wrapRingX(point.x + dx) : point.x + dx;
@@ -96,14 +106,14 @@ export function companionPosition({ location, trail, step, map, companionId }: F
   });
   const dodge = Math.sin(progress * Math.PI) ** 1.15;
   // The companion keeps to the pavement as it yields to a trainer doubling back.
-  if (across) {
+  if (origin.x !== location.x || !map.wrapX && previous.x !== location.x) {
     const openOutside = roomBeside(0, 1);
     const outside = map.wrapX ? (companionId === 'drifloon' ? 1.08 : .93) : .54;
     const side = openOutside ? outside : roomBeside(0, -1) ? -.70 : map.wrapX ? -.39 : -.58;
-    return { x, y: y + side * dodge, passing: dodge };
+    return { x: point.x, y: point.y + side * dodge, passing: dodge };
   }
   const side = roomBeside(1, 0) || !roomBeside(-1, 0) ? 1 : -1;
-  return { x: x + (map.wrapX ? .39 : .45) * dodge * side, y, passing: dodge };
+  return { x: point.x + (map.wrapX ? .39 : .45) * dodge * side, y: point.y, passing: dodge };
 }
 
 export function createFieldRenderer(canvas: HTMLCanvasElement, reducedMotion: MediaQueryList) {

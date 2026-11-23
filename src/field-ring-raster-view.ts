@@ -1,9 +1,10 @@
 import { drawFieldActor } from './field-actors';
 import { paintRingPlan, ringPlanExtent, ringSeaColor } from './field-city-chart';
+import type { SurveyId } from './field-city-walks';
 import { creatureGaits, type FieldCreature } from './field-creature-motion';
 import {
   cityAlleyBarriers, cityCourtyards, cityForecourts, cityFountainSite, cityGateSites, cityLighthouseSite, cityParcels, cityStreet, cityTerraces,
-  cityTransit, cityViaductPiers, harborHeight, ringBreakwaterSpans,
+  cityTransit, cityViaductPiers, harborHeight, ringBreakwaterSpans, type CityCourtyard,
 } from './field-city-layout';
 import { props, TILE, tileAt } from './field-layout';
 import { companionPosition, type FieldView } from './field-renderer';
@@ -29,6 +30,7 @@ type RasterLayer = {
   volume?: Volume;
   picks?: readonly WorldPoint[][];
   entrance?: readonly WorldPoint[];
+  survey?: SurveyId;
   draw: () => void;
 };
 const stoneTrim = '#dfc9a3';
@@ -164,15 +166,21 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
   let orbitTilt = 0;
   let street = false;
   let night = false;
+  let pumpElapsed: number | undefined;
   let sine = Math.sin(angle), cosine = Math.cos(angle);
   let flatten = Math.sin(pitch), lift = Math.cos(pitch);
+  let paintedLayers: RasterLayer[] = [];
   const nightSprites = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
 
   function resize(w: number, h: number) {
     if (w <= 0 || h <= 0) return;
     const ratio = Math.min(1, 690 / w, 480 / h);
     const width = Math.max(1, Math.round(w * ratio)), height = Math.max(1, Math.round(h * ratio));
-    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+      paintedLayers = [];
+    }
   }
 
   function project(world: World, y = 0): Point {
@@ -565,6 +573,205 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     };
   }
 
+  function courtLandmark({ feature, kind }: CityCourtyard): RasterLayer {
+    const column = feature.x + feature.width / 2;
+    const point = ringPosition(column, feature.z + feature.depth / 2);
+    const angle = ringAngle(column);
+    const across = Math.cos(angle), along = Math.sin(angle);
+    const at = (x: number, z: number): World => ({ x: point.x + x * across + z * along, z: point.z - x * along + z * across });
+    const profile = (x: number, z: number, width: number, depth: number) => [at(x - width / 2, z - depth / 2),
+      at(x + width / 2, z - depth / 2), at(x + width / 2, z + depth / 2), at(x - width / 2, z + depth / 2)];
+    const oval = (x: number, z: number, radius: number, narrow: number) => Array.from({ length: 16 }, (_, index) => {
+      const theta = index * Math.PI / 8;
+      return at(x + Math.cos(theta) * radius, z + Math.sin(theta) * narrow);
+    });
+    const stone = ['#b9a68b', '#8e806e', '#d2c0a2'] as const;
+    const stoneBase = ['#8f8577', '#746e64', '#b6ac99'] as const;
+    const iron = ['#415957', '#2e4148', '#677871'] as const;
+    const picks: WorldPoint[][] = [];
+    const solids: (() => void)[] = [];
+    function solid(corners: World[], bottom: number, top: number, colors: readonly [string, string, string] = stone) {
+      const cap = corners.map((corner): WorldPoint => [corner, top]);
+      picks.push(cap);
+      for (const [index, corner] of corners.entries()) {
+        const next = corners[(index + 1) % corners.length];
+        picks.push([[corner, bottom], [next, bottom], [next, top], [corner, top]]);
+      }
+      solids.push(() => extrude(corners, bottom, top, ...colors));
+    }
+    function line(points: readonly WorldPoint[], color: string, width: number, illuminated = false) {
+      target.save();
+      target.beginPath();
+      for (const [index, [world, y]] of points.entries()) {
+        const p = project(world, y);
+        if (index) target.lineTo(p.x, p.y);
+        else target.moveTo(p.x, p.y);
+      }
+      target.strokeStyle = night && !illuminated ? tone(color, .56, 1.31) : color;
+      target.lineWidth = Math.max(.70, width * canvas.height / span);
+      target.lineJoin = target.lineCap = 'round';
+      target.stroke();
+      target.restore();
+    }
+    const crossSection = (centerX: number, centerY: number, z: number, radius: number) => Array.from({ length: 18 }, (_, index): WorldPoint => {
+      const theta = index * Math.PI / 9;
+      return [at(centerX + Math.cos(theta) * radius, z), centerY + Math.sin(theta) * radius];
+    });
+    const paintSolids = () => solids.forEach(draw => draw());
+    if (kind === 'garden') {
+      solid(oval(0, 0, .597, .393), 0, .104, stoneBase);
+      solid(oval(0, 0, .533, .327), .104, .297);
+      solid(oval(0, 0, .583, .375), .297, .365);
+      const earth = oval(0, 0, .511, .313).map((p): WorldPoint => [p, .366]);
+      for (const x of [-.94, .94]) {
+        for (const foot of [-.29, .29]) solid(profile(x + foot, 0, .134, .243), 0, .279);
+        solid(profile(x, 0, .83, .339), .277, .364);
+      }
+      const fronds = Array.from({ length: 24 }, (_, index) => {
+        const theta = index * 2.399, reach = .09 + (index % 5) * .057;
+        const x = Math.cos(theta) * reach, z = Math.sin(theta) * reach * .592;
+        const spread = .048 + (index * 3 % 8) * .006;
+        return { point: at(x, z), color: ['#618363', '#79926a', '#57795d', '#89a176'][index % 4], face: [
+          [at(x * .61, z * .55), .364], [at(x - spread, z), .512],
+          [at(x + Math.cos(theta) * .17, z + Math.sin(theta) * .093), .568 + spread],
+          [at(x + spread, z), .487],
+        ] as WorldPoint[] };
+      });
+      picks.push(...fronds.map(frond => frond.face));
+      return { point, radius: 1.53, top: .72, picks, draw() {
+        paintSolids();
+        paint(earth, '#594a3d');
+        fronds.slice().sort((a, b) => depthAt(a.point) - depthAt(b.point)).forEach(frond => paint(frond.face, frond.color));
+      } };
+    }
+    if (kind === 'market') {
+      solid(profile(0, 0, .67, .421), 0, .088, stoneBase);
+      solid(profile(0, 0, .612, .351), .088, .153);
+      solid(profile(0, 0, .522, .312), .153, .209);
+      solid(profile(0, 0, .402, .273), .209, .505);
+      solid(profile(0, 0, .467, .317), .496, .554);
+      solid(profile(0, 0, .326, .246), .554, .591);
+      const foot = profile(0, 0, .335, .295), top = profile(0, 0, .171, .139), finial = profile(0, 0, .075, .064);
+      const sides = foot.map((p, index): WorldPoint[] => [[p, .591], [foot[(index + 1) % 4], .591], [top[(index + 1) % 4], 1.763], [top[index], 1.763]]);
+      const cap = top.map((p, index): WorldPoint[] => [[p, 1.763], [top[(index + 1) % 4], 1.763], [finial[(index + 1) % 4], 1.897], [finial[index], 1.897]]);
+      picks.push(...sides, ...cap);
+      return { point, radius: .60, top: 1.897, picks, draw() {
+        paintSolids();
+        for (const [index, face] of sides.entries()) {
+          if (depthAt(face[0][0]) + depthAt(face[1][0]) < depthAt(point) * 2) continue;
+          paint(face, index % 2 ? '#b8a387' : '#d5bb94');
+          paint(cap[index], index % 2 ? '#536b63' : '#71847a');
+        }
+        for (const z of [-.140, .140]) {
+          if (depthAt(at(0, z)) < depthAt(point)) continue;
+          paint([[at(-.094, z), .307], [at(.094, z), .307], [at(.094, z), .424], [at(-.094, z), .424]], '#a58a62');
+          for (const y of [.338, .362, .384]) line([[at(-.058, z), y], [at(.058, z), y]], '#dfc294', .009);
+        }
+      } };
+    }
+    if (kind === 'station') {
+      solid(oval(0, 0, .21, .19), 0, .076, stoneBase);
+      solid(oval(0, 0, .173, .155), .076, .133);
+      solid(oval(0, 0, .135, .121), .133, .259, iron);
+      solid(oval(0, 0, .055, .05), .254, 1.386, iron);
+      solid(profile(.55, -.015, .339, .273), 0, .108, stoneBase);
+      solid(profile(.55, -.015, .290, .224), .108, .402, iron);
+      solid(profile(.55, -.015, .329, .255), .402, .445, iron);
+      solid(oval(0, 0, .060, .053), 1.860, 1.941, ['#a08262', '#756956', '#d2ad7b']);
+      const disk = [-.076, .076].map(z => crossSection(0, 1.624, z, .25));
+      const sides = disk[0].map((p, index): WorldPoint[] => [p, disk[0][(index + 1) % 18], disk[1][(index + 1) % 18], disk[1][index]]);
+      picks.push(...disk, ...sides);
+      return { point, radius: .88, top: 1.947, picks, draw() {
+        paintSolids();
+        const facing = depthAt(at(0, .08)) > depthAt(point) ? 1 : -1;
+        paint(disk[facing > 0 ? 0 : 1], '#303f44');
+        for (const face of sides) paint(face, '#485a58');
+        paint(disk[facing > 0 ? 1 : 0], '#344b50');
+        paint(crossSection(0, 1.624, facing * .087, .225), '#9a8057');
+        paint(crossSection(0, 1.624, facing * .094, .183), night ? '#b5a07b' : '#e2cba1', true);
+        for (let hour = 0; hour < 12; hour++) {
+          const dial = hour * Math.PI / 6;
+          const index = (r: number): WorldPoint => [at(Math.sin(dial) * r * facing, facing * .102), 1.624 + Math.cos(dial) * r];
+          line([index(hour % 3 === 0 ? .131 : .148), index(.166)], '#39494b', .012, true);
+        }
+        const now = new Date();
+        const minute = now.getMinutes() * Math.PI / 30;
+        const hour = (now.getHours() % 12 + now.getMinutes() / 60) * Math.PI / 6;
+        const hub: WorldPoint = [at(0, facing * .107), 1.624];
+        const hand = (angle: number, reach: number): WorldPoint =>
+          [at(Math.sin(angle) * reach * facing, facing * .107), 1.624 + Math.cos(angle) * reach];
+        line([hub, hand(hour, .103)], '#39494b', .018, true);
+        line([hub, hand(minute, .157)], '#8b4d40', .012, true);
+      } };
+    }
+
+    solid(profile(-.45, 0, 1.16, .473), 0, .107, stoneBase);
+    solid(profile(-.45, 0, .994, .414), .107, .351);
+    const basin = profile(-.45, 0, .833, .291).map((p): WorldPoint => [p, .371]);
+    solids.push(() => paint(basin, '#638f92'));
+    for (const z of [-.181, .181]) {
+      for (let block = 0; block < 4; block++) solid(profile(-.793 + block * .229, z, .223, .068), .351, .447);
+    }
+    for (const end of [-.935, .035]) solid(profile(end, 0, .074, .398), .350, .446);
+    solid(oval(.47, 0, .181, .167), 0, .112, stoneBase);
+    solid(oval(.47, 0, .096, .094), .112, .519, iron);
+    solid(oval(.47, 0, .152, .137), .499, .582, iron);
+    const wheelX = .46, wheelY = .647, wheelZ = .147;
+    const pipeProfile = [[.463, .560], [.261, .647], [-.182, .683], [-.220, .647]];
+    const pipe = pipeProfile.map(([x, y]): WorldPoint => [at(x, 0), y]);
+    for (let segment = 1; segment < pipeProfile.length; segment++) {
+      const [ax, ay] = pipeProfile[segment - 1], [bx, by] = pipeProfile[segment];
+      const width = .044 / Math.hypot(bx - ax, by - ay);
+      const dx = (by - ay) * width, dy = (ax - bx) * width;
+      picks.push([[at(ax + dx, 0), ay + dy], [at(bx + dx, 0), by + dy],
+        [at(bx - dx, 0), by - dy], [at(ax - dx, 0), ay - dy]]);
+    }
+    const wheel = crossSection(wheelX, wheelY, wheelZ, .215);
+    const wheelOuter = crossSection(wheelX, wheelY, wheelZ, .235);
+    const wheelInner = crossSection(wheelX, wheelY, wheelZ, .195);
+    const hub = crossSection(wheelX, wheelY, wheelZ, .047);
+    for (let index = 0; index < wheelOuter.length; index++) {
+      const next = (index + 1) % wheelOuter.length;
+      picks.push([wheelOuter[index], wheelOuter[next], wheelInner[next], wheelInner[index]]);
+    }
+    picks.push(hub);
+    for (let spoke = 0; spoke < 6; spoke++) {
+      const direction = spoke * Math.PI / 3;
+      const x = Math.cos(direction), y = Math.sin(direction);
+      picks.push([[at(wheelX - y * .017, wheelZ), wheelY + x * .017],
+        [at(wheelX + x * .2 - y * .017, wheelZ), wheelY + y * .2 + x * .017],
+        [at(wheelX + x * .2 + y * .017, wheelZ), wheelY + y * .2 - x * .017],
+        [at(wheelX + y * .017, wheelZ), wheelY - x * .017]]);
+    }
+    return { point, radius: 1.15, top: .898, picks, draw() {
+      paintSolids();
+      line(pipe, '#a48154', .087);
+      line([...wheel, wheel[0]], '#31494d', .032);
+      const time = pumpElapsed ?? 0;
+      const turn = Math.min(1, time / 2.12);
+      const spin = -4 * Math.PI * turn * turn * (3 - 2 * turn);
+      for (let spoke = 0; spoke < 6; spoke++) {
+        const direction = spin + spoke * Math.PI / 3;
+        line([[at(wheelX, wheelZ), wheelY],
+          [at(wheelX + Math.cos(direction) * .20, wheelZ), wheelY + Math.sin(direction) * .20]], '#b98f62', .022);
+      }
+      paint(hub, '#a48154');
+      if (pumpElapsed === undefined) return;
+      const start = Math.max(0, Math.min(1, (time - .24) / .24));
+      const drain = Math.max(0, Math.min(1, (time - 2.08) / .27));
+      const top = .647 - .273 * drain * drain, bottom = .647 - .273 * start * start;
+      if (top - bottom > .002) line([[at(-.22, 0), top], [at(-.22, 0), bottom]], night ? '#9dcccf' : '#bedbd3', .024, true);
+      for (const first of [.48, .83]) {
+        const pulse = Math.floor((Math.min(time, 2.32) - first) / .7);
+        const age = time - first - pulse * .7;
+        if (pulse < 0 || age >= .7) continue;
+        const radius = .018 + .108 * age / .7;
+        const crest = oval(-.220, 0, radius, radius * .82).map((p): WorldPoint => [p, .375]);
+        line([...crest, crest[0]], '#c0d8d0', .010, true);
+      }
+    } };
+  }
+
   function gate(column: number, row: number, id: typeof cityGateSites[number]['id']): RasterLayer {
     const centerAngle = ringAngle(column + .5);
     const point = ringPosition(column + .5, row + .5);
@@ -670,7 +877,7 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
       });
     }),
     ...cityAlleyBarriers.map(({ x, z, width, depth, kind }) => wallBlock(x, z, width, depth, kind)),
-    ...cityCourtyards.map(({ feature: { x, z, width, depth }, kind }) => wallBlock(x, z, width, depth, kind === 'garden' ? 'hedge' : 'stone')),
+    ...cityCourtyards.map(court => ({ ...courtLandmark(court), survey: court.kind })),
     ...cityGateSites.map(({x,z,id})=>gate(x,z,id)),
   ];
   const cylindrical = (radius: number, center = { x: 0, z: 0 }) => Array.from({ length: 12 }, (_, side) => ({
@@ -1050,6 +1257,7 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
 
   function draw(time: number, view: FieldView) {
     const calm = reduced.matches;
+    pumpElapsed = view.pumpElapsed;
     const step = view.step;
     const progress = step ? Math.min(1, Math.max(0, (time - step.startedAt) / step.duration)) : 0;
     const px = (step ? step.from.x + ringXDelta(step.from.x, step.to.x) * progress : view.location.x) + .5;
@@ -1059,18 +1267,21 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     const overview = view.overview;
     street = !overview;
     const outward = ringStreetLooksOutward(view.location.x, view.location.y);
-    const camera = overview ? { x: 0, z: 0 } : ringPosition(px + (outward ? -.25 : .37), pz + (outward ? 1.31 : -1.37));
+    const focus = overview ? undefined : view.surveyFocus;
+    const camera = focus ? ringPosition(focus.position.x, focus.position.y) : overview ? { x: 0, z: 0 }
+      : ringPosition(px + (outward ? -.25 : .37), pz + (outward ? 1.31 : -1.37));
     const aspect = canvas.width / canvas.height;
     const tour = overview ? ringOverviewCamera(aspect, canvas.clientWidth < 545, view.orbitTilt) : undefined;
-    const rustle = street ? view.rustle : undefined;
+    const rustle = street && !focus ? view.rustle : undefined;
     const reveal = rustle && Math.abs(ringXDelta(px, rustle.x + .5)) + Math.abs(pz - rustle.y - .5) < 7.8
       ? ringPosition(rustle.x + .5, rustle.y + .5) : undefined;
     if (reveal) {
       camera.x += (reveal.x - camera.x) * .24;
       camera.z += (reveal.z - camera.z) * .24;
     }
-    const yaw = overview ? harborOverviewYaw + view.orbitOffset + (calm ? 0 : Math.sin(time / 8300) * .09)
-      : ringAngle(px) + (outward ? Math.PI - .26 : .28);
+    const yaw = focus ? ringAngle(focus.position.x) + (focus.id === 'station' ? Math.PI - .28 : .29)
+      : overview ? harborOverviewYaw + view.orbitOffset + (calm ? 0 : Math.sin(time / 8300) * .09)
+        : ringAngle(px) + (outward ? Math.PI - .26 : .28);
     if (overview && (view.orbitOffset !== orbitOffset || view.orbitTilt !== orbitTilt)) orbitChangedAt = time;
     orbitOffset = view.orbitOffset;
     orbitTilt = view.orbitTilt;
@@ -1081,9 +1292,10 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     angle += turn * delta;
     x += (camera.x - x) * delta;
     z += (camera.z - z) * delta;
-    height += ((tour?.elevation ?? .67) - height) * delta;
-    pitch += ((tour?.pitch ?? .805) - pitch) * delta;
-    span += ((tour?.span ?? 9.7) - span) * delta;
+    const closeHeight = focus?.id === 'station' || focus?.id === 'market' ? .50 : .18;
+    height += ((focus ? closeHeight : tour?.elevation ?? .67) - height) * delta;
+    pitch += ((focus ? (focus.id === 'garden' ? .82 : .60) : tour?.pitch ?? .805) - pitch) * delta;
+    span += ((focus ? (canvas.clientWidth < 545 ? 3.85 : 3.65) : tour?.span ?? 9.7) - span) * delta;
     if (reveal) {
       const markerSpan = frameStreetSubject(reveal.x - x, reveal.z - z, -height, angle, pitch, aspect);
       const playerSpan = frameStreetSubject(now.x - x, now.z - z, .70 - height, angle, pitch, aspect);
@@ -1130,7 +1342,8 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     }
     for (const gate of view.map.exits) mark(gate.x + .5, gate.y + .29, .21, '#dec29a');
 
-    const visible = architecture.filter(layer => visibleInFrame(layer, size));
+    const visible = architecture.filter(layer => visibleInFrame(layer, size)
+      && (!focus || depthAt(layer.point) - depthAt(camera) < 4.0));
     const ship = ferry(time, calm);
     if (visibleInFrame(ship, size)) visible.push(ship);
     const trainX = calm ? 12.4 : (time / 850 + 11.7) % RING_PERIOD;
@@ -1179,16 +1392,37 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
       const stride = step && !calm ? Math.sin(progress * Math.PI) * ((step.from.x + step.from.y) % 2 ? -1 : 1) * (step.running ? 1.27 : 1) : 0;
       visible.push({ point, draw: () => sprite(art, point, id, calm ? 0 : time, flip, stride, calm ? 0 : pet.passing) });
     }
-    visible.sort((a, b) => depthAt(a.point) - depthAt(b.point)).forEach(item => item.draw());
+    paintedLayers = visible.sort((a, b) => depthAt(a.point) - depthAt(b.point));
+    paintedLayers.forEach(item => item.draw());
   }
 
   function projectPoint(x: number, y: number) {
     return { ...project(ringPosition(x / TILE, y / TILE)), scale: canvas.height / (span * TILE) };
   }
 
+  function hitsFace(face: readonly WorldPoint[], x: number, y: number) {
+    return contains(face.map(([point, altitude]) => project(point, altitude)), x, y);
+  }
+
+  function layerCovers(layer: RasterLayer, x: number, y: number) {
+    return (layer.volume !== undefined && covers(layer.volume, x, y)) || layer.picks?.some(face => hitsFace(face, x, y));
+  }
+
+  function hitSurvey(x: number, y: number): SurveyId | undefined {
+    if (!street) return;
+    for (let index = paintedLayers.length - 1; index >= 0; index--) {
+      const layer = paintedLayers[index];
+      if (!layer.survey || !layerCovers(layer, x, y)) continue;
+      for (let front = index + 1; front < paintedLayers.length; front++) {
+        if (layerCovers(paintedLayers[front], x, y)) return;
+      }
+      return layer.survey;
+    }
+  }
+
   function pointInWorld(px: number, py: number) {
     if (occluders.some(volume => covers(volume, px, py)) ||
-      structurePicks.some(faces => faces.some(face => contains(face.map(([point, altitude]) => project(point, altitude)), px, py)))) return;
+      structurePicks.some(faces => faces.some(face => hitsFace(face, px, py)))) return;
     const scale = canvas.height / span;
     const rx = (px - canvas.width * .5) / scale;
     const rz = ((py - canvas.height * .5) / scale - height * lift) / flatten;
@@ -1200,9 +1434,7 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     const size = canvas.height / (span * TILE);
     const inFront = (point: World) => {
       const depth = depthAt(point);
-      return !architecture.some(layer => depthAt(layer.point) > depth &&
-        (layer.volume && covers(layer.volume, x, y) || layer.picks?.some(face =>
-          contains(face.map(([point, altitude]) => project(point, altitude)), x, y))));
+      return !architecture.some(layer => depthAt(layer.point) > depth && layerCovers(layer, x, y));
     };
     const nearby = actors.map(actor => ({ actor, point: ringPosition(actor.x + .5, actor.y + .875) }))
       .sort((a, b) => depthAt(b.point) - depthAt(a.point));
@@ -1220,7 +1452,7 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
   }
 
   return {
-    draw, resize, projectPoint, pointInWorld, hitActor,
+    draw, resize, projectPoint, pointInWorld, hitActor, hitSurvey,
     resetCamera: () => { previous = 0; },
     hasStreetFrame: () => street && canvas.width > 0 && canvas.height > 0,
     getCamera: () => ({ x, y:z, depth: 0, scale: canvas.height / (span * TILE), width: canvas.width, height: canvas.height }),

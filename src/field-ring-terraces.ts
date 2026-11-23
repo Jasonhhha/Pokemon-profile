@@ -369,7 +369,8 @@ class TerraceBuilder {
       geometry.computeVertexNormals();
       geometry.computeBoundingSphere();
       const mesh = new Mesh(geometry, materials[name]);
-      mesh.castShadow = name === 'brick' || name === 'ashlar' || name === 'slate' || name === 'tile';
+      mesh.castShadow = name === 'brick' || name === 'ashlar' || name === 'slate' || name === 'tile' ||
+        (this.lot.id === 'dockgate-house' && name === 'trim');
       mesh.receiveShadow = true;
       group.add(mesh);
     }
@@ -895,7 +896,7 @@ function castBalcony(builder: TerraceBuilder, side: Side, left: number, right: n
 }
 
 function endElevation(builder: TerraceBuilder, edge: number, outside: -1 | 1, front: number, back: number, eave: number,
-  style: CityTerrace['style'], masonry: Finish, wall: Color, outer: boolean, vendor?: ShopName) {
+  style: CityTerrace['style'], masonry: Finish, wall: Color, outer: boolean, vendor?: ShopName, loadingBay = false) {
   const surface = (relief: number) => edge + outside * relief / builder.tangent;
   const depth = back - front;
   const middle = (back + front) / 2;
@@ -948,15 +949,19 @@ function endElevation(builder: TerraceBuilder, edge: number, outside: -1 | 1, fr
     const d = surface(-inset + .007);
     builder.quad([d, top - .063, inner.from], [d, top - .120, inner.from], [d, top - .163, inner.to],
       [d, top - .230, inner.to], finish, warm ? tint(honey, .77) : tint(skyReflection, .63), 'side');
-    if (warm) {
+    if (warm && !loadingBay) {
       const fold = (inner.to - inner.from) * .18;
       panel(inner.from, inner.from + fold, inner.bottom, inner.top, -inset + .010, 'trim', oldIvory);
       panel(inner.to - fold, inner.to, inner.bottom, inner.top, -inset + .010, 'trim', oldIvory);
     }
-    panel(center - .023, center + .023, inner.bottom, inner.top, -inset + .029, 'trim', cream);
-    for (const fraction of [.04, .44, .96]) {
+    const frame = loadingBay ? tint(iron, 1.48) : cream;
+    for (const fraction of loadingBay ? [.33, .67] : [.5]) {
+      const post = inner.from + (inner.to - inner.from) * fraction;
+      panel(post - .023, post + .023, inner.bottom, inner.top, -inset + .029, 'trim', frame);
+    }
+    for (const fraction of loadingBay ? [.04, .33, .67, .96] : [.04, .44, .96]) {
       const bar = inner.bottom + (inner.top - inner.bottom) * fraction;
-      panel(inner.from, inner.to, bar, bar + .021, -inset + .034, 'trim', cream);
+      panel(inner.from, inner.to, bar, bar + .021, -inset + .034, 'trim', frame);
     }
     if (arched) {
       const outer = surface(.142), throat = surface(.026);
@@ -975,12 +980,44 @@ function endElevation(builder: TerraceBuilder, edge: number, outside: -1 | 1, fr
       }
     }
   };
+  const relievingArch = (at: number, width: number, spring: number) => {
+    const archPoint = (angle: number, inset: number, raised: boolean): Point => [
+      surface(inset), spring + Math.sin(angle) * (raised ? .237 : .083),
+      at + Math.cos(angle) * (width * .5 + (raised ? .255 : .035)),
+    ];
+    for (let stone = 0; stone < 11; stone++) {
+      const a = stone * Math.PI / 11 + .014;
+      const b = (stone + 1) * Math.PI / 11 - .014;
+      const keystone = stone === 5;
+      const inset = keystone ? .095 : .061;
+      const shade = keystone ? tint(cream, .90) : tint(wall, 1.02 + .20 * noise(stone, Math.round(spring * 100)));
+      const innerA = archPoint(a, inset, false), innerB = archPoint(b, inset, false);
+      builder.quad(archPoint(a, inset, true), innerA, archPoint(b, inset, true), innerB, keystone ? 'ashlar' : 'brick', shade, 'side');
+      builder.quad(innerA, archPoint(a, .009, false), innerB, archPoint(b, .009, false), 'trim', tint(shade, .73), 'side');
+    }
+  };
+  const hoistMember = (from: [number, number], to: [number, number], at: number, thickness: number, width: number, paint: Color) => {
+    const [start, base] = from, [tip, top] = to;
+    const length = Math.hypot(tip - start, top - base);
+    const radial = (base - top) / length * thickness * .5;
+    const vertical = (tip - start) / length * thickness * .5;
+    const corners = (reach: number, height: number): Point[] => [
+      [surface(reach + radial), height + vertical, at - width * .5], [surface(reach - radial), height - vertical, at - width * .5],
+      [surface(reach + radial), height + vertical, at + width * .5], [surface(reach - radial), height - vertical, at + width * .5],
+    ];
+    const a = corners(start, base), b = corners(tip, top);
+    for (const [i, j, light] of [[0, 2, 1.20], [2, 3, .81], [3, 1, .72], [1, 0, 1.0]]) {
+      builder.quad(a[i], a[j], b[i], b[j], 'trim', tint(paint, light), 'side');
+    }
+    builder.quad(b[0], b[1], b[2], b[3], 'trim', tint(paint, .87), 'side');
+  };
   if (freight) {
     const center = middle - depth * .092;
     const span = Math.min(depth * .51, 3.57);
     const inner = recess(center, span, .122, 1.267, .175);
     const value = inner.to - inner.from;
-    panel(inner.from, inner.to, .136, 1.24, -.173, 'trim', tint(iron, 1.22));
+    const door = loadingBay ? new Color('#546456') : tint(iron, 1.22);
+    panel(inner.from, inner.to, .136, 1.24, -.173, 'trim', door);
     for (let i = 1; i < 10; i++) {
       const at = inner.from + value * i * .1;
       panel(at, at + .029, .136, 1.234, -.167, 'trim', tint(iron, 1.75));
@@ -997,7 +1034,67 @@ function endElevation(builder: TerraceBuilder, edge: number, outside: -1 | 1, fr
     }
     lip(inner.from - .153, inner.to + .153, 0, .07, .167, damp);
     lip(inner.from - .105, inner.to + .105, .067, .129, .107, sand);
-    if (outer) {
+    if (loadingBay) {
+      relievingArch(center, span, 1.275);
+      const upperSpan = span * .77;
+      const top = Math.min(2.473, eave - .49);
+      const shutter = recess(center, upperSpan, 1.632, top, .225);
+      panel(shutter.from, shutter.to, shutter.bottom, shutter.top, -.223, 'trim', tint(iron, .88));
+      const plank = (shutter.to - shutter.from) / 10;
+      for (let index = 0; index < 10; index++) {
+        panel(shutter.from + index * plank, shutter.from + (index + 1) * plank - .025,
+          shutter.bottom, shutter.top, -.219, 'trim', tint(door, .88 + noise(index, 59) * .32));
+      }
+      for (const y of [shutter.bottom + .14, shutter.top - .16]) {
+        panel(shutter.from, shutter.to, y, y + .051, -.179, 'trim', iron);
+        for (const inset of [.10, .35, .65, .90]) {
+          const bolt = shutter.from + (shutter.to - shutter.from) * inset;
+          panel(bolt - .029, bolt + .029, y + .014, y + .039, -.169, 'trim', sand);
+        }
+      }
+      panel(center - .035, center + .035, shutter.bottom, shutter.top, -.142, 'trim', iron);
+      for (const sign of [-1, 1]) {
+        const handle = center + sign * .152;
+        panel(handle - .057, handle + .057, 1.971, 2.025, -.135, 'trim', brass);
+      }
+      relievingArch(center, upperSpan, top + .021);
+      lip(shutter.from - .164, shutter.to + .164, 1.562, 1.625, .117, sand);
+      for (const [window, width] of [[front + depth * .177, 1.58], [back - depth * .174, 1.83]]) {
+        opening(window, width, .587, 1.131, true);
+        opening(window, width, 1.766, 2.397, false);
+      }
+
+      const peak = eave + .425;
+      for (const [width, base, rise] of [[1.28, -.127, .132], [.88, .129, .269], [.51, .266, .425]]) {
+        const left = center - span * width * .5, right = center + span * width * .5;
+        builder.box(surface(.134), surface(-.27), eave + base, eave + rise, left, right, 'brick', tint(wall, .92));
+        builder.box(surface(.166), surface(-.291), eave + rise - .018, eave + rise + .038, left - .072, right + .072, 'trim', sand);
+      }
+      panel(center - .306, center + .306, eave + .310, peak - .051, .145, 'trim', tint(wall, .50));
+      for (let slat = -2; slat <= 2; slat++) {
+        const at = center + .104 * slat;
+        panel(at - .018, at + .018, eave + .321, peak - .06, .157, 'trim', tint(iron, 1.24));
+      }
+
+      const arm = eave - .086;
+      for (const at of [center - .244, center + .244]) {
+        const paint = tint(iron, 1.23);
+        panel(at - .132, at + .132, arm - .372, arm + .030, .088, 'trim', iron);
+        hoistMember([.075, arm], [.790, arm + .048], at, .083, .145, paint);
+        hoistMember([.094, arm - .337], [.699, arm + .044], at, .058, .128, paint);
+        for (const bolt of [arm - .289, arm - .061]) {
+          panel(at - .047, at + .047, bolt - .026, bolt + .026, .097, 'trim', sand);
+        }
+      }
+      const tip = center;
+      builder.box(surface(.807), surface(.689), arm - .055, arm + .083, tip - .338, tip + .338, 'trim', iron);
+      builder.box(surface(.813), surface(.685), arm - .104, arm -.039, tip - .105, tip + .105, 'trim', tint(brass, .83));
+      const hook = Math.max(2.04, arm - .608);
+      hoistMember([.753, arm - .104], [.753, hook + .075], tip, .022, .047, tint(iron, 1.09));
+      hoistMember([.753, hook + .082], [.792, hook], tip, .033, .085, iron);
+      hoistMember([.790, hook], [.873, hook + .019], tip, .030, .085, iron);
+      hoistMember([.871, hook + .019], [.877, hook + .085], tip, .030, .085, iron);
+    } else if (outer) {
       opening(center, span * .59, 1.556, 2.424, false);
       const top = surface(.367);
       builder.quad([edge, 2.610, center - .049], [edge, 2.663, center - .049],
@@ -1163,7 +1260,7 @@ function house(builder: TerraceBuilder, lot: CityTerrace, index: number) {
     builder.wall(left - .018, right + .018, .171, { ...side, at: surfacePoint(side, .031) }, 'trim', damp);
   }
   const cornerVendor = featured && lot.sideFront ? vendor : undefined;
-  if (index === 0) endElevation(builder, left, -1, facade, back, eave, lot.style, masonry, wall, outer, cornerVendor);
+  if (index === 0) endElevation(builder, left, -1, facade, back, eave, lot.style, masonry, wall, outer, cornerVendor, lot.id === 'dockgate-house');
   if (index === lot.homes - 1) endElevation(builder, right, 1, facade, back, eave, lot.style, masonry, wall, outer);
 }
 

@@ -105,6 +105,10 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     },
     projectPoint: (x: number, y: number) => (world ?? raster).projectPoint(x, y),
     pointInWorld: (x: number, y: number) => (world ?? raster).pointInWorld(x, y),
+    hitSurvey(x: number, y: number) {
+      if (world) return world.hitSurvey(x, y);
+      if (ring && raster === ring) return ring.hitSurvey(x, y);
+    },
     hitActor(x: number, y: number, candidates: FieldView['map']['npcs'], doorway: (actor: FieldView['map']['npcs'][number]) => boolean) {
       if (world) return world.hitActor(x, y, candidates, doorway);
       if (ring && raster === ring) return ring.hitActor(x, y, candidates, doorway);

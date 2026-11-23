@@ -4,10 +4,11 @@ import { createField, fieldAreas, type Direction, type EncounterKind, type Field
 import { BattleOverlay, type BattleEncounter, type BattleResult } from './battle';
 import { CreatureSprite } from './creature-art';
 import { creatures, givePotion, healTeam, maxHp, potionHp, type CreatureId } from './creatures';
-import { addSeen, areas, chooseEncounter, entrance, loadAdventure, saveKey } from './adventure';
+import { addSeen, areas, chooseEncounter, entrance, loadAdventure, recordCourt, saveKey } from './adventure';
 import { areaIcons, HpBar, Pokedex, RouteAtlas, TeamPanel } from './adventure-menu';
 import { rooms } from './field-rooms';
 import { cityDistrict } from './field-city-layout';
+import { courtNotes, surveyStops, type CityStop, type CityStopId, type SurveyId } from './field-city-walks';
 import { FieldDialogue } from './field-dialogue';
 import { FieldEncounterTransition } from './field-encounter-transition';
 import { About, Contact, Panel, ProfileForm, Research, loadProfile, type Profile } from './portfolio';
@@ -49,6 +50,7 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [arrival, setArrival] = useState<{ key: string; name: string; english: string } | null>(null);
   const [dexEntry, setDexEntry] = useState<CreatureId>();
+  const [atlasStop, setAtlasStop] = useState<CityStopId>();
   const [hint, setHint] = useState('');
   const [ready, setReady] = useState(false);
   const canvas = useRef<HTMLDivElement>(null);
@@ -153,6 +155,19 @@ export default function App() {
     startEncounter(chooseEncounter(nextArea, firstPartner, nightNow.current, kind));
   }, [say, sound.play, startEncounter]);
 
+  const inspectCourt = useCallback((id: SurveyId) => {
+    if (locked.current) return;
+    const note = courtNotes[id];
+    const visited = current.current.courtVisits;
+    const first = !visited.includes(id);
+    if (first) setSave(previous => recordCourt(previous, id));
+    setAtlasStop(previous => previous === id ? undefined : previous);
+    const finish = first && visited.length + 1 === surveyStops.length;
+    const clock = id === 'station' ? `钟面指向 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}。` : '';
+    const reward = finish ? ' 四处院落已全部记入手记，背包里添了两份伤药。' : '';
+    say(note.subject, `${clock}${note.note}${reward}`);
+  }, [say]);
+
   useEffect(() => {
     if (!canvas.current) return;
     const field = createField({
@@ -173,6 +188,7 @@ export default function App() {
       onHint: setHint,
       onEvent: openFromField,
       onEncounter: encounterIn,
+      onSurvey: inspectCourt,
       onSound: (cue, surface) => { if (cue !== 'encounter') sound.play(cue, surface); },
     });
     controller.current = field;
@@ -185,7 +201,7 @@ export default function App() {
       }
     });
     return () => { cancelAnimationFrame(frame); field.destroy(); controller.current = null; };
-  }, [encounterIn, openFromField, sound.play]);
+  }, [encounterIn, inspectCourt, openFromField, sound.play]);
 
   useEffect(() => {
     locked.current = paused;
@@ -332,6 +348,23 @@ export default function App() {
     controller.current?.setPaused(false);
     controller.current?.travel(next);
     focusField();
+  }
+
+  function walkTo(stop: CityStop) {
+    const field = controller.current;
+    if (!field) return false;
+    field.setPaused(false);
+    if (!field.walkToStop(stop)) { field.setPaused(true); return false; }
+    setAtlasStop(stop.id);
+    setPanel(null);
+    requestAnimationFrame(() => {
+      const surface = canvas.current;
+      if (!surface) return;
+      surface.focus({ preventScroll: true });
+      const rect = surface.getBoundingClientRect();
+      if (rect.bottom > innerHeight || rect.top < 0) surface.scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+    return true;
   }
 
   function giveMedicine(id: CreatureId) {
@@ -486,6 +519,9 @@ export default function App() {
                 <div><strong>{task.label}</strong><small>{task.description}</small></div>
               </li>)}
             </ol>
+            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}>
+              <BookOpen size={14} /><span>街区手记</span><b>{save.courtVisits.length} / {surveyStops.length}</b><ArrowUpRight size={13} />
+            </button>
           </section>
 
           <section className="side-card companion">
@@ -519,7 +555,7 @@ export default function App() {
       {panel === 'projects' && <Research />}
       {panel === 'contact' && <Contact profile={profile} edit={() => setPanel('edit')} />}
       {panel === 'edit' && <ProfileForm profile={profile} save={storeProfile} />}
-      {panel === 'map' && <RouteAtlas save={save} travel={fastTravel} />}
+      {panel === 'map' && <RouteAtlas save={save} travel={fastTravel} walkTo={walkTo} lastStop={atlasStop} />}
       {panel === 'dex' && <Pokedex save={save} entry={dexEntry} />}
       {panel === 'pack' && <TeamPanel progress={progress} heal={giveMedicine} inspect={openDex}
         setLead={id => setSave(previous => ({ ...previous, battle: { ...previous.battle, lead: id } }))} />}

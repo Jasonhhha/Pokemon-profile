@@ -146,7 +146,7 @@ export function createFieldPokemon(shadowMap: Texture) {
       const floating = profile.airborne > 0;
       const fly = !reduced && (floating || position.id === 'starly' && position.sprint);
       const baseline = floating ? profile.airborne : 0;
-      const loft = reduced ? 0 : Math.sin(idle * (floating ? 1.16 : 1.82)) * (floating ? .152 : .020);
+      const loft = !reduced && floating ? Math.sin(idle * 1.16) * .152 : 0;
       const climb = (position.passing ?? 0) * (floating ? .60 : fly ? .19 : 0);
       const liftEase = 1 - Math.exp(-elapsed / (climb > passingLift ? 20 : 75));
       passingLift = snap ? 0 : passingLift + (climb - passingLift) * liftEase;
@@ -154,7 +154,7 @@ export function createFieldPokemon(shadowMap: Texture) {
       const lift = Math.abs(Math.sin(angle)) ** 1.42 * energy * profile.bounce * (position.sprint ? 1.34 : 1);
 
       root.position.set(x, 0, z);
-      sprite.position.y = .054 + Math.max(-.017, airborne + lift);
+      sprite.position.y = .036 + airborne + lift;
       sprite.quaternion.copy(camera.quaternion);
       if (position.lighting) {
         planeNormal.set(0, 0, 1).applyQuaternion(camera.quaternion);
