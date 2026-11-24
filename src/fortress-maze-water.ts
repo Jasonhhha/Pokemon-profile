@@ -30,7 +30,7 @@ export function outfalls(sources: Outfall[]) {
         const shoulder = 1 - Math.pow(2 * Math.abs(u), 2.2) * 0.11;
         const forward = Math.sin(t * 1.24) * reach * shoulder;
         const w = (1 + 0.32 * t) * width * u;
-        positions.push(x + dx * forward + dz * w, y - (y + 0.326) * Math.pow(t, 1.7), z + dz * forward - dx * w);
+        positions.push(x + dx * forward + dz * w, y - (y + 1.02) * Math.pow(t, 1.7), z + dz * forward - dx * w);
         uv.push(u + 0.5, t);
         if (row < 14 && col < 6) {
           const v = start + row * 7 + col;
@@ -43,19 +43,21 @@ export function outfalls(sources: Outfall[]) {
   geometry.setAttribute('uv', new Float32BufferAttribute(uv, 2));
   geometry.setIndex(indices);
   const material = new ShaderMaterial({
-    uniforms: { clock: { value: 0 } },
+    uniforms: { clock: { value: 0 }, volume: { value: 1 }, arrival: { value: 1 } },
     side: DoubleSide,
     transparent: true,
     depthWrite: false,
-    vertexShader: `varying vec2 fall;varying vec3 world;uniform float clock;
+    vertexShader: `varying vec2 fall;varying vec3 world;uniform float clock, volume;
       void main(){fall=uv;world=position;
         vec3 p=position;p.y+=.012*sin(uv.x*69.+uv.y*20.-clock*10.+p.x*2.)*uv.y;
         gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);}`,
-    fragmentShader: `varying vec2 fall;varying vec3 world;uniform float clock;
+    fragmentShader: `varying vec2 fall;varying vec3 world;uniform float clock, volume, arrival;
       float hash(vec2 p){return fract(sin(dot(p,vec2(19.1,75.6)))*41328.113);}
       float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
         return mix(mix(hash(i),hash(i+vec2(1.,0)),f.x),mix(hash(i+vec2(0,1.)),hash(i+1.),f.x),f.y);}
       void main(){
+        float flow=mix(volume,arrival,pow(fall.y,.85));
+        if(abs((fall.x-.5)*2.) > .19+.81*sqrt(flow)) discard;
         float id=world.x*.21+world.z*.29;
         float v=n(vec2(fall.x*15.+id,fall.y*2.-clock*4.45));
         float seam=smoothstep(.52,.88,v);
@@ -93,22 +95,28 @@ export function channelSurface(room: MazeRoom) {
       }
     }
   const res = 144,
-    distances = new Uint8Array(res * res);
-  for (let j = 0; j < res; j++)
-    for (let i = 0; i < res; i++) {
-      const x = ((i + 0.5) * width) / res,
-        z = ((j + 0.5) * height) / res;
-      let sq = 5.76;
-      for (const edge of edges) {
-        const dx = x - edge.x,
-          dz = z - edge.y;
+    radius = 2.4,
+    squared = new Float32Array(res * res).fill(radius * radius);
+  // A texel more than 2.4 tiles from an edge already carries the saturated deep-water value.
+  // Rasterize only the edge's radius, preserving its exact segment distance at every affected texel.
+  for (const edge of edges) {
+    const left = Math.max(0, Math.ceil(((edge.x - radius) * res) / width - 0.5));
+    const right = Math.min(res - 1, Math.floor(((edge.x + edge.dx + radius) * res) / width - 0.5));
+    const top = Math.max(0, Math.ceil(((edge.y - radius) * res) / height - 0.5));
+    const bottom = Math.min(res - 1, Math.floor(((edge.y + edge.dy + radius) * res) / height - 0.5));
+    for (let j = top; j <= bottom; j++) {
+      const dz = ((j + 0.5) * height) / res - edge.y;
+      for (let i = left; i <= right; i++) {
+        const dx = ((i + 0.5) * width) / res - edge.x;
         const along = Math.max(0, Math.min(1, dx * edge.dx + dz * edge.dy));
         const a = dx - along * edge.dx,
-          b = dz - along * edge.dy;
-        sq = Math.min(sq, a * a + b * b);
+          b = dz - along * edge.dy,
+          id = j * res + i;
+        squared[id] = Math.min(squared[id], a * a + b * b);
       }
-      distances[j * res + i] = Math.round((Math.sqrt(sq) * 255) / 2.4);
     }
+  }
+  const distances = Uint8Array.from(squared, (s) => Math.min(255, Math.round((Math.sqrt(s) * 255) / radius)));
   const shore = new DataTexture(distances, res, res, RedFormat);
   shore.minFilter = shore.magFilter = LinearFilter;
   shore.needsUpdate = true;
@@ -120,6 +128,7 @@ export function channelSurface(room: MazeRoom) {
       clock: { value: 0 },
       wheel: { value: new Vector2() },
       shore: { value: shore },
+      flow: { value: new Vector4(0.62, 0.12, 0.12, 0.62) },
       release: { value: Array.from({ length: 4 }, () => new Vector2(-60, -60)) },
       wake: { value: Array.from({ length: 4 }, () => new Vector4(0, 0, 5, 0)) },
     },
@@ -127,12 +136,12 @@ export function channelSurface(room: MazeRoom) {
       surface=(modelMatrix*vec4(position,1.)).xyz;
       gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
     }`,
-    fragmentShader: `varying vec3 surface;uniform float clock;uniform sampler2D shore;uniform vec2 release[4],wheel;uniform vec4 wake[4];
+    fragmentShader: `varying vec3 surface;uniform float clock;uniform sampler2D shore;uniform vec2 release[4],wheel;uniform vec4 wake[4],flow;
       float hash(vec2 p){return fract(sin(dot(p,vec2(23.7,79.2)))*47214.74);}
       float noise(vec2 p){vec2 i=floor(p),v=fract(p);v=v*v*(3.-2.*v);
         return mix(mix(hash(i),hash(i+vec2(1,0)),v.x),mix(hash(i+vec2(0,1)),hash(i+1.),v.x),v.y);}
       void main(){
-        vec2 p=surface.xz;float bank=texture2D(shore,p/23.).r*2.4;
+        vec2 p=surface.xz;float bank=texture2D(shore,p/vec2(${width.toFixed(1)},${height.toFixed(1)})).r*2.4;
         #if FROZEN_BED == 1
           vec2 slate=p*vec2(.72,1.03)+vec2(.52*noise(p*.47),.43*noise(p*.63));
           vec2 cell=floor(slate),within=fract(slate); float nearest=6.,second=6.;
@@ -168,7 +177,11 @@ export function channelSurface(room: MazeRoom) {
         float contact=(1.-smoothstep(.01,.069,abs(bank-.073-.016*sin(swell))))*(.35+.65*noise(p*8.));
         vec3 water=base+vec3(.10,.17,.15)*(caustic*.10+crest*.17+contact*.43)+vec3(.13,.21,.20)*(glint*.69+fresco);
         water*=.61+.39*smoothstep(.0,.22,bank);
-          float froth=0.;
+          vec2 discharge=vec2(min(abs(p.x-18.),abs(p.x-31.)),p.y-3.78);
+          float tail=length(discharge*vec2(.80,1.61));
+          float spray=noise(p*19.+vec2(t*1.8,-t));
+          float curl=smoothstep(.57,.97,.5+.5*cos(tail*18.-t*5.8+2.*spray));
+          float froth=exp(-tail*2.42)*(.58+.68*spray)+.30*exp(-tail*1.18)*curl;
           vec2 race=p-wheel;
           for(int side=0;side<2;side++){
             vec2 dist=race-vec2(side==1?.63:-.63,0.);
@@ -179,7 +192,7 @@ export function channelSurface(room: MazeRoom) {
             vec2 delta=(p-release[i])*vec2(1.,1.22);
             float radius=length(delta);
             float ring=smoothstep(.55,.97,.5+.5*cos(26.*radius-3.7*t+noise(delta*7.)*1.7));
-            froth+=exp(-radius*5.1)*(.48+.77*noise(p*28.+t))+.29*ring*exp(-radius*1.96);
+            froth+=flow[i]*(exp(-radius*5.1)*(.48+.77*noise(p*28.+t))+.29*ring*exp(-radius*1.96));
           }
           water+=vec3(.46,.57,.53)*min(.83,froth);
           for(int i=0;i<4;i++){
@@ -198,7 +211,7 @@ export function channelSurface(room: MazeRoom) {
   });
   const mesh = new Mesh(new PlaneGeometry(width, height), shader);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(width / 2, frost ? -1.12 : -0.33, height / 2);
+  mesh.position.set(width / 2, frost ? -1.12 : -1.02, height / 2);
   mesh.renderOrder = 2;
   return mesh;
 }
@@ -213,7 +226,7 @@ export function cisternMirror(channel: ReturnType<typeof channelSurface>, clock:
     multisample: 0,
   });
   mirror.rotation.x = -Math.PI / 2;
-  mirror.position.set(width * 0.5, -0.34, height * 0.5);
+  mirror.position.set(width * 0.5, -1.03, height * 0.5);
   const optics = mirror.material as ShaderMaterial;
   optics.onBeforeCompile = (shader) => {
     shader.uniforms.current = channel.material.uniforms.clock;

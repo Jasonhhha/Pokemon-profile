@@ -428,11 +428,14 @@ function readCast(arena: HTMLElement): ArenaCast | undefined {
     const actor = arena.querySelector<HTMLElement>(`.battle-combatant--${side}`);
     const pose = actor?.querySelector<HTMLElement>('.battle-pose');
     if (!actor || !pose) return;
-    const size = actor.offsetWidth;
-    const feet = { x: actor.offsetLeft + size / 2, y: actor.offsetTop - size * .035 };
+    const width = actor.offsetWidth;
+    const height = pose.offsetHeight;
+    const size = Math.max(width * .55, Math.min(width, height * 1.06));
+    const feet = { x: actor.offsetLeft + width / 2, y: actor.offsetTop };
     const stance = actor.dataset.stance as Stance;
     const ailment = actor.dataset.ailment as Ailment | undefined;
-    return { feet, center: { x: feet.x, y: feet.y - size * .45 }, size, pose, shadow: actor.querySelector('.battle-pedestal'), stance, ailment };
+    return { feet, center: { x: feet.x, y: feet.y - height * (stance === 'hover' ? .65 : .5) }, size,
+      pose, shadow: actor.querySelector('.battle-pedestal'), stance, ailment };
   };
   const ally = get('ally'), enemy = get('enemy');
   if (ally && enemy) return { ally, enemy };

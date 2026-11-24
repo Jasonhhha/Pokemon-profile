@@ -192,7 +192,10 @@ export function FieldEncounterTransition({ children, kind = 'wild', night = fals
   }, []);
 
   useLayoutEffect(() => {
-    if (phase === 'open') stage.current?.querySelector<HTMLElement>('.battle-overlay')?.focus({ preventScroll: true });
+    if (phase !== 'open') return;
+    const target = stage.current?.querySelector<HTMLElement>('.battle-party-option, .battle-finish button')
+      ?? stage.current?.querySelector<HTMLElement>('.battle-overlay');
+    target?.focus({ preventScroll: true });
   }, [phase]);
 
   return <>

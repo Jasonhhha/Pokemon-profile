@@ -1,7 +1,10 @@
+import { drawPowerCore } from './fortress-power-core-2d';
+import { sealVolume } from './fortress-portals';
 import { kyuremTiming, type FortressInteriorFrame } from './field-fortress-state';
 import { clamp, loop, noise, tau, type RasterPaint, type Screen, type Vertex } from './fortress-raster-space';
 
-const cx=8.5,cz=6.5, radius=4.74, depth=4.55, height=5.65, iceLevel=-.60;
+const {x:cx, z:cz, width:radius, depth, height} = sealVolume;
+const iceLevel=-.60;
 const frames=[0,0.12,0.24,0.32,0.38,0.42,0.46,0.49,0.52,0.55,0.58,0.62,0.67,0.72,0.78,0.86,0.97,1.1,1.25,1.43,1.61,1.79,2.03,2.46];
 // Muzzle and skinned sole contacts projected from the pose rig, in thousandths of its atlas tile.
 const tracks=[
@@ -41,6 +44,18 @@ const tracks=[
   [[72,660],[393,793],[761,932]],
   [[66,650],[391,793],[759,933]],
   [[59,654],[389,792],[756,934]],
+] as const;
+// Ice-crystal contact points measured on the two shoulder projections in each baked pose.
+const crystalTracks = [
+  [304,287,580,321], [301,291,585,340], [301,302,599,373], [301,306,605,381],
+  [301,306,605,381], [301,306,605,381], [301,302,599,373], [301,299,591,354],
+  [301,291,580,332], [304,284,568,306], [307,276,557,280], [312,269,545,250],
+  [318,261,537,228], [321,261,537,220], [321,261,537,220], [321,261,537,220],
+  [321,261,537,224], [321,261,537,228], [321,261,537,231], [318,265,545,250],
+  [312,276,557,295], [307,284,574,325], [307,287,582,336], [307,284,585,336],
+  [312,269,585,317], [310,276,582,317], [307,284,580,317], [304,287,580,317],
+  [304,291,582,317], [304,291,588,317], [304,287,597,317], [307,284,605,317],
+  [310,280,611,317], [312,276,614,317], [312,272,611,317], [312,272,605,317]
 ] as const;
 type KyuremArt={poses:HTMLImageElement;started:number;portrait?:HTMLImageElement;sprite?:HTMLImageElement};
 let artwork:KyuremArt|undefined;
@@ -183,12 +198,22 @@ export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
     if(Math.sin(a)<.05)drawShard(cx+Math.cos(a)*5.41,cz+Math.sin(a)*4.27,.25+noise(i)*.18,.60+noise(i+19)*.84,a);
   }
 
+  const pose = sealPose(age, interacting, gentle, t, p);
+  drawPowerCore(frame, p, pose?.crystals);
   drawLattice(false);
   const bottom=point(cx,cz,iceLevel),crown=point(cx,cz,iceLevel+height);
   const volume=ctx.createLinearGradient(crown.x,crown.y,bottom.x,bottom.y);
   volume.addColorStop(0,'#d3f5ff27');volume.addColorStop(.38,'#8fb6dd13');volume.addColorStop(1,'#83dbe525');
   traceHull();ctx.fillStyle=volume;ctx.fill();
-  const muzzle=paintKyurem(age,interacting,gentle,t,charged,p);
+  const muzzle=paintKyurem(pose, charged, p);
+  if (pose) for (const crystal of pose.crystals) {
+    const radius = Math.max(1.4, pose.width * .029);
+    const contact = ctx.createRadialGradient(crystal.x, crystal.y, 0, crystal.x, crystal.y, radius);
+    contact.addColorStop(0, `rgba(209,255,246,${(frame.power?.source ?? .82) * .77})`);
+    contact.addColorStop(1, 'rgba(104,241,226,0)');
+    ctx.fillStyle = contact;
+    ctx.fillRect(crystal.x - radius, crystal.y - radius, radius * 2, radius * 2);
+  }
   if(!interacting){
     // Frost condenses on the exhale; the jaw position follows the animation frame.
     const exhale=gentle ? .040:Math.max(0,Math.sin(t*1.18-.65))**1.6*.23;
@@ -317,21 +342,31 @@ export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
   }
 }
 
-function paintKyurem(age:number,active:boolean,gentle:boolean,time:number,charge:number,p:RasterPaint){
-  const images=warmIceSeal2D(),{poses}=images;
+function sealPose(age: number, active: boolean, gentle: boolean, time: number, p: RasterPaint) {
+  const art = warmIceSeal2D().poses;
+  if (!art.complete || !art.naturalWidth) return;
+  const foot = p.point(cx, cz, iceLevel + .09);
+  const width = Math.abs(p.point(cx + 3.36, cz).x - p.point(cx - 3.36, cz).x);
+  const sw = art.naturalWidth / 6, sh = art.naturalHeight / 6, drawH = width * sh / sw;
+  const idle = Math.round(time * 1.18 / tau * 12) % 12;
+  let index = active ? 0 : frames.length + (gentle ? 0 : idle);
+  if (active && gentle) index = age > kyuremTiming.voice && age < 1.83 ? 10 : 0;
+  else if (active) {
+    for (let i = 1; i < frames.length; i++) if (Math.abs(frames[i] - age) < Math.abs(frames[index] - age)) index = i;
+  }
+  const left = foot.x - width * .508136, upper = foot.y - drawH * .898517;
+  const [lx, ly, rx, ry] = crystalTracks[index];
+  const crystals = [{ x: left + width * lx / 1000, y: upper + drawH * ly / 1000 },
+    { x: left + width * rx / 1000, y: upper + drawH * ry / 1000 }];
+  return { art, index, sw, sh, width, drawH, left, upper, crystals };
+}
+
+function paintKyurem(pose: ReturnType<typeof sealPose>, charge: number, p: RasterPaint) {
   const {ctx,point,groundGlow}=p;
   groundGlow(cx+.12,cz+.08,3.08,1.35,'#213b57ab',iceLevel+.045);
-  const foot=point(cx,cz,iceLevel+.09);
-  const width=Math.abs(point(cx+3.36,cz).x-point(cx-3.36,cz).x);
   let muzzle=point(cx-2.87,cz+.59,1.69);
-  const art=poses.complete&&poses.naturalWidth>0?poses:undefined;
-  if(art){
-    const sw=art.naturalWidth/6,sh=art.naturalHeight/6,height=width*sh/sw;
-    const idleFrame=Math.round(time*1.18/tau*12)%12;
-    let index=active?0:frames.length+(gentle?0:idleFrame);
-    if(active&&gentle)index=age>kyuremTiming.voice&&age<1.83?10 : 0;
-    else if(active)for(let i=1;i<frames.length;i++){if(Math.abs(frames[i]-age)<Math.abs(frames[index]-age))index=i;}
-    const left=foot.x-width*0.508136,upper=foot.y-height*0.898517,drawH=height;
+  if (pose) {
+    const { art, index, sw, sh, width, drawH, left, upper } = pose;
     const [jaw,...feet]=tracks[index];
     muzzle={x:left+width*jaw[0]/1000,y:upper+drawH*jaw[1]/1000};
     for(const toe of feet){
@@ -345,6 +380,9 @@ function paintKyurem(age:number,active:boolean,gentle:boolean,time:number,charge
     ctx.drawImage(art,(index%6)*sw,Math.floor(index/6)*sh,sw,sh,left,upper,width,drawH);
     ctx.restore();
   }else{
+    const images = warmIceSeal2D(), { poses } = images;
+    const foot = point(cx, cz, iceLevel + .09);
+    const width = Math.abs(point(cx + 3.36, cz).x - point(cx - 3.36, cz).x);
     // The 1.4 kB BW sprite can stand in on the first visit. Fetch the full HOME image only if the pose sheet stalls.
     images.sprite??=texture('kyurem-bw.png');
     if(poses.complete||performance.now()-images.started>=2200)images.portrait??=texture('kyurem.png');

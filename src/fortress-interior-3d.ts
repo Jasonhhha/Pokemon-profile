@@ -1,3 +1,8 @@
+import { palaceOverlook } from './palace-overlook';
+import {palaceView} from './fortress-palace-camera';
+import { buildPalaceGatehouse } from './fortress-palace-gatehouse-3d';
+import { buildPalaceRisers } from './fortress-risers-3d';
+import { palaceFloorRay } from './fortress-palace-picking';
 import {
   AdditiveBlending,
   CanvasTexture,
@@ -29,9 +34,10 @@ import { fortressMaps, type FortressRoom, type FortressInteriorFrame } from './f
 import { buildFortressStonework } from './fortress-stonework';
 import { createKyuremActor } from './fortress-kyurem';
 import { createIcePrison } from './fortress-ice-prison';
-import { isMazeRoom, mazeFieldMap } from './fortress-maze';
+import { isMazeRoom, palaceElevation } from './fortress-maze';
 import { buildMazeRoom3D } from './fortress-maze-3d';
 import { buildFortressWater } from './fortress-water';
+import { hallSupport, pickPalacePortal } from './fortress-portals';
 
 function radialTexture(shadow: boolean) {
   const sheet = document.createElement('canvas');
@@ -59,13 +65,15 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   if (isMazeRoom(room)) return buildMazeRoom3D(room, glow);
   const scene = new Scene();
   const seal = room === 'seal';
-  const ambient = seal ? 0x172934 : 0x152320;
+  const ambient = seal ? 0x172934 : 0x23373b;
   scene.background = new Color(ambient);
-  scene.fog = new FogExp2(ambient, seal ? 0.037 : 0.039);
+  scene.fog = new FogExp2(ambient, seal ? 0.037 : 0.024);
   const stone = buildFortressStonework(room);
-  const water = buildFortressWater(room, stone.puddles);
+  const water = buildFortressWater(room);
   scene.add(stone.group, water.group);
-  scene.add(new HemisphereLight(seal ? 0xcce6f0 : 0xcbd7c9, seal ? 0x657a88 : 0x45534b, seal ? 1.2 : 0.84));
+  const gatehouse = room === 'sluice' ? buildPalaceGatehouse() : undefined;
+  if (gatehouse) scene.add(gatehouse.group);
+  scene.add(new HemisphereLight(seal ? 0xcce6f0 : 0xcbd7c9, seal ? 0x657a88 : 0x45534b, seal ? 1.2 : 1.04));
   const key = new DirectionalLight(seal ? 0xf1eddc : 0xffdfa9, seal ? 1.7 : 1.51);
   key.position.set(2.8, 12.8, 13.3);
   key.castShadow = true;
@@ -76,7 +84,7 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   key.shadow.camera.updateProjectionMatrix();
   key.target.position.set(9, 0, 5);
   scene.add(key, key.target);
-  const rim = new DirectionalLight(seal ? 0xa8d6ee : 0x8aaea0, seal ? 1.19 : 0.84);
+  const rim = new DirectionalLight(seal ? 0xa8d6ee : 0xa8c7bd, seal ? 1.19 : 1.04);
   rim.position.set(14, 8, -4);
   rim.target.position.set(7, 0, 11);
   scene.add(rim, rim.target);
@@ -106,6 +114,11 @@ function buildRoom(room: FortressRoom, glow: Texture) {
     const stairLamp = new PointLight(0xf2b873, 27, 8, 2);
     stairLamp.position.set(8.4, 0.75, -0.86);
     scene.add(stairLamp);
+    for (const x of [5.45, 11.55]) {
+      const galleryLamp = new PointLight(0xffd39c, 21, 11, 2);
+      galleryLamp.position.set(x, 6.9, 9.3);
+      scene.add(galleryLamp);
+    }
   }
   const monster = seal ? createKyuremActor() : undefined;
   const prison = seal ? createIcePrison() : undefined;
@@ -117,23 +130,25 @@ function buildRoom(room: FortressRoom, glow: Texture) {
     scene,
     landmarkAt(ray: Raycaster) { return prison?.landmarkAt(ray); },
     handwheel(frame: FortressInteriorFrame) { return prison?.handwheel(frame); },
-    surfaceAt(_x: number, _z: number) {
-      return 0;
+    surfaceAt(x: number, z: number) {
+      return hallSupport(room, x, z);
     },
     update(t: number, w: number, h: number, frame: FortressInteriorFrame) {
       const resonance = frame.resonance ?? 0;
-      stone.update(resonance, t, frame.x, frame.y, frame.liftUnlocked);
-      point.intensity = (seal ? 39 : 19) + resonance * (seal ? 15 : 9);
+      gatehouse?.update(frame.power?.bus ?? .78);
+      stone.update(resonance, t, frame.x, frame.y, frame.liftUnlocked,frame.power?.bus,frame.power?.phase);
+      point.intensity = (seal ? 24 + (frame.power?.source ?? .82) * 19 : 14+(frame.power?.bus??.78)*7) + resonance * (seal ? 15 : 9);
       water.update(t, w, h, frame);
       if (monster && prison) {
         monster.update(t, frame.roarAge ?? Infinity, frame.reduced, frame);
-        prison.update(t, frame, h, monster.muzzle(muzzle), monster.footprints, monster.eyes(eyes));
+        prison.update(t, frame, h, monster.muzzle(muzzle), monster.footprints, monster.eyes(eyes), monster.crystals);
       }
     },
     dispose() {
       key.shadow.dispose();
       water.dispose();
       stone.dispose();
+      gatehouse?.dispose();
       glowMaterial.dispose();
       monster?.dispose();
       prison?.dispose();
@@ -158,16 +173,16 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
   const actorShadowGeometry = new PlaneGeometry(1.16, 0.88).rotateX(-Math.PI / 2);
   const actorShadowMaterial = new MeshBasicMaterial({ map: shadowMap, transparent: true, depthWrite: false });
   const actorShadow = new Mesh(actorShadowGeometry, actorShadowMaterial);
-  const camera = new PerspectiveCamera(44, 1, 0.1, 78);
+  const camera = new PerspectiveCamera(44, 1, 0.1, 240);
   const ray = new Raycaster();
   const mouse = new Vector2();
   const target = new Vector3();
   const floor = new Plane(new Vector3(0, 1, 0), 0);
+  const risers = new Map<FortressRoom, ReturnType<typeof buildPalaceRisers>>();
   const rooms = new Map<FortressRoom, ReturnType<typeof buildRoom>>();
   let width = 0,
     height = 0;
   let active: FortressRoom | undefined;
-  let shortcutOpen = false;
   let lastFrame = -Infinity;
   let closeBlend = 0;
   let entryTime = -Infinity;
@@ -188,9 +203,16 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       if (!room) {
         room = buildRoom(frame.room, glow);
         rooms.set(frame.room, room);
+        if (frame.room !== 'seal') {
+          const pair = buildPalaceRisers(frame.room);
+          risers.set(frame.room, pair);
+          room.scene.add(pair.group);
+        }
       }
       const entering = active !== frame.room;
       if (entering) {
+        camera.fov = frame.room === 'sluice' ? 53 : 44;
+        camera.updateProjectionMatrix();
         room.scene.add(traveler.model, companion.root, actorShadow);
         companion.reset();
         active = frame.room;
@@ -199,7 +221,6 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         entryZ = frame.y;
       }
       const isSeal = frame.room === 'seal';
-      shortcutOpen = frame.shortcutOpen;
       const requested = Number(isSeal && frame.inspecting);
       const elapsed = frame.now - lastFrame;
       if (entering || frame.reduced || elapsed < 0 || elapsed > 260) closeBlend = requested;
@@ -215,22 +236,22 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       const progress = Math.min(1, Math.max(0, (frame.now - entryTime) / 1000));
       const entry = 1 - progress * progress * (3 - 2 * progress);
       if (isMazeRoom(frame.room)) {
-        const fit = Math.max(1, 1.1 / camera.aspect);
-        const margin = Math.min(5.8, 3.55 * camera.aspect);
-        const focusX = Math.max(margin, Math.min(23 - margin, frame.x));
-        const focusZ = Math.max(4.52, Math.min(18.85, frame.y - 1.9));
-        camera.position.set(focusX + 1.15 * fit, 0.2 + 7.85 * fit, focusZ + 8.5 * fit);
-        camera.lookAt(focusX, 0.2, focusZ);
+        const reveal=entryZ>40 && Math.abs(entryX-24.5)<3 ? entry : 0;
+        const view=palaceView(frame.room,frame.x,frame.y,camera.aspect,reveal);
+        camera.position.set(...view.eye);camera.lookAt(...view.aim);
       } else {
         const dx = frame.x - 8.5;
         const sideWeight = isSeal ? Math.min(1, Math.max(0, (Math.abs(dx) - 1.05) / 3.6)) : 0;
         const wing = sideWeight * sideWeight * (3 - 2 * sideWeight) * (1 - closeBlend);
         const focusX = isSeal ? 8.5 + dx * (0.32 + 0.54 * wing) * (1 - closeBlend) : frame.x;
-        const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * (0.6 + 0.33 * wing) - 0.65 * wing : frame.y - 3.89;
+        // The outer landing is behind the processional view. Ease the camera back before the return steps leave the screen.
+        const south = Math.max(0, Math.min(1, (frame.y - 12.55) / 4.1));
+        const approach = south * south * (3 - 2 * south);
+        const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * (0.6 + 0.33 * wing) - 0.65 * wing : frame.y - 5.65 + .96 * approach;
         const focusZ = wideZ + (6.64 - wideZ) * closeBlend - entry * 0.58;
         const fit = Math.max(1, (isSeal ? 1.49 - 0.35 * wing : 1.2) / camera.aspect);
-        const eyeZ = isSeal ? 12.65 - 0.6 * closeBlend - 4.0 * wing : 11.0;
-        const eyeY = isSeal ? 8.6 - 1.7 * closeBlend + 0.87 * wing : 5.83;
+        const eyeZ = isSeal ? 12.65 - 0.6 * closeBlend - 4.0 * wing : 16.25 + 5.3 * approach;
+        const eyeY = isSeal ? 8.6 - 1.7 * closeBlend + 0.87 * wing : 6.13 + .58 * approach;
         let shakeX = 0,
           shakeY = 0;
         const since = (frame.roarAge ?? Infinity) - 0.78;
@@ -246,13 +267,19 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         );
         camera.lookAt(
           focusX + shakeX * 0.61,
-          (isSeal ? 1.11 + 0.46 * closeBlend : 0.71) + entry * 0.47 + shakeY * 0.61,
+          (isSeal ? 1.11 + 0.46 * closeBlend : 2.64 + 1.00 * approach) + entry * 0.65 + shakeY * 0.61,
           focusZ,
         );
+      }
+      if (frame.palaceView && isMazeRoom(frame.room)) {
+        const overlook = palaceOverlook(frame.palaceView, camera.aspect);
+        camera.position.set(...overlook.eye);
+        camera.lookAt(...overlook.aim);
       }
       camera.updateMatrixWorld();
       const time = frame.reduced ? 1.75 : frame.now / 1000;
       room.update(time, width, height, frame);
+      risers.get(frame.room)?.update(frame);
       const support = room.surfaceAt(frame.x, frame.y);
       traveler.model.position.set(frame.x, support, frame.y);
       actorShadow.position.set(frame.x, support + 0.02, frame.y);
@@ -279,29 +306,28 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       renderer.render(room.scene, camera);
     },
     projectPoint(worldX: number, worldY: number) {
-      target.set(worldX, 0, worldY).project(camera);
+      const y=active ? (isMazeRoom(active)?palaceElevation(active,worldX,worldY):hallSupport(active,worldX,worldY)) : 0;
+      target.set(worldX, y, worldY).project(camera);
       return { x: ((target.x + 1) * width) / 2, y: ((1 - target.y) * height) / 2 };
     },
     pointInWorld(px: number, py: number) {
       if (!active || !width || !height) return;
       mouse.set((px / width) * 2 - 1, 1 - (py / height) * 2);
       ray.setFromCamera(mouse, camera);
-      if (!ray.ray.intersectPlane(floor, target)) return;
-      const map = isMazeRoom(active) ? mazeFieldMap(active, shortcutOpen) : fortressMaps[active];
-      const tileX = Math.floor(target.x),
-        tileY = Math.floor(target.z);
-      const walkable = map.walkable[tileY]?.[tileX];
-      const room = rooms.get(active);
-      if (room) {
-        const sign = room.landmarkAt(ray);
-        if (sign && (active === 'seal' || !walkable || Math.abs(Math.floor(sign.x) - tileX) + Math.abs(Math.floor(sign.y) - tileY) >= 2))
-          return sign;
-      }
+      const sign = rooms.get(active)?.landmarkAt(ray);
+      if (sign) return sign;
+      if (isMazeRoom(active)) return palaceFloorRay(active,ray.ray.origin,ray.ray.direction);
+      const grounded = ray.ray.intersectPlane(floor, target);
+      const walkable = grounded && fortressMaps[active].walkable[Math.floor(target.z)]?.[Math.floor(target.x)];
+      const entrance = pickPalacePortal(active, ray.ray.origin, ray.ray.direction, Boolean(walkable));
+      if (entrance) return entrance;
       if (walkable) return { x: target.x, y: target.z };
     },
     dispose() {
       if (disposed) return;
       disposed = true;
+      for (const pair of risers.values()) pair.dispose();
+      risers.clear();
       for (const room of rooms.values()) room.dispose();
       rooms.clear();
       traveler.dispose();

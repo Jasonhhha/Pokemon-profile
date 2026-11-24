@@ -1,0 +1,19 @@
+Pokémon Black and White — battle sprites
+
+PokéAPI/sprites archives the Generation V front and back battle animations.
+Source revision c0542f7c51215d9672439012838c99f520596cbd
+https://github.com/PokeAPI/sprites/tree/c0542f7c51215d9672439012838c99f520596cbd/sprites/pokemon/versions/generation-v/black-white/animated
+
+393 Piplup    396 Starly    403 Shinx     418 Buizel
+425 Drifloon  443 Gible     447 Riolu     459 Snover
+
+The front and back GIFs are converted to lossless WebP with their original frame timing.
+Transparent padding aligns the sprites to the same battle scale. Each still PNG uses the first frame.
+Pokémon characters and artwork belong to their respective rights holders.
+
+PokéAPI/cries provides the legacy recordings for the same National Pokédex numbers.
+Source revision b3a9044bb839b5e3152aaa536c7b463a0fcf0140
+https://github.com/PokeAPI/cries/tree/b3a9044bb839b5e3152aaa536c7b463a0fcf0140/cries/pokemon/legacy
+
+The recordings are decoded to mono PCM WAV at their original sample rate for browser playback.
+Pokémon recordings belong to their respective rights holders.

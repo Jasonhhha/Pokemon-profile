@@ -1,9 +1,9 @@
 import { cityCourtyards, type CityCourtyard } from './field-city-layout';
-import { maps } from './field-layout';
+import { maps, type FieldEvent } from './field-layout';
 import { fortressPier } from './field-fortress-state';
 
 export type SurveyId = CityCourtyard['kind'];
-export type CityStopId = SurveyId | 'archive' | 'clinic' | 'greenway' | 'ferry' | 'fortress';
+export type CityStopId = SurveyId | 'archive' | 'clinic' | 'greenway' | 'trial' | 'practice' | 'research' | 'signal' | 'fortress';
 export type StreetPoint = { x: number; y: number };
 export type CityStop = {
   id: CityStopId;
@@ -12,6 +12,7 @@ export type CityStop = {
   position: StreetPoint;
   approaches: StreetPoint[];
   survey?: SurveyId;
+  actor?: FieldEvent;
 };
 
 export const courtNotes: Record<SurveyId, { subject: string; note: string }> = {
@@ -43,14 +44,23 @@ function serviceStop(id: CityStopId, name: string, subject: string, point: Stree
   return { id, name, subject, approaches: [point], position: { x: point.x + .5, y: point.y + .5 } };
 }
 
-const ferry = maps.harbor.exits[0];
+function actorStop(id: CityStopId, event: FieldEvent, name: string, subject: string, approach: -1 | 1 = 1): CityStop {
+  const actor = maps.harbor.npcs.find(npc => npc.event === event)!;
+  return { ...serviceStop(id, name, subject, { x: actor.x, y: actor.y + approach }), actor: event };
+}
+
+export const trialSignalSite = { x: 37.94, y: 15.57 } as const;
+
 export const cityStops: readonly CityStop[] = [
   ...surveyStops,
   serviceStop('fortress', '西栈桥升降井', '操作铜轮，唤起环城下方的潜航堡垒。', fortressPier),
-  serviceStop('archive', '潮汐档案屋', '在门口互动，进屋翻看档案。', { x: 10, y: 11 }),
-  serviceStop('clinic', '环城补给站', '与医师交谈，恢复体力和招式次数。', { x: 18, y: 11 }),
+  actorStop('archive', 'about', '潮汐档案屋', '在门口互动，进屋翻看档案。'),
+  actorStop('clinic', 'healer', '环城补给站', '与医师交谈，恢复体力和招式次数。'),
+  actorStop('research', 'projects', '市集研究室', '从市集正门进屋，向研究员调阅项目档案。'),
+  actorStop('signal', 'contact', '中央车站信号室', '从中央车站正门进屋，向信号员查询联系方式。'),
+  actorStop('practice', 'spar', '绿廊陪练', '在绿廊路口互动，可向陪练发起练习对战。', -1),
   serviceStop('greenway', '外环绿廊', '从路边进入高草，寻找野生宝可梦。', { x: 29, y: 14 }),
-  serviceStop('ferry', '东渡口', '从栈桥尽头再走一步，去往雾杉小径。', { x: ferry.x, y: ferry.y - 1 }),
+  actorStop('trial', 'trial', '东渡口试炼', '在栈桥上向守望员发起试炼。', -1),
 ];
 
 export function surveyAt(point: StreetPoint) {

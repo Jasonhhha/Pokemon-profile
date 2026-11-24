@@ -192,11 +192,12 @@ export function buildCityCarriages() {
   const warm = new Color(0xffcf81);
   return {
     cars, assemblies,
-    lighting(night: number) {
-      lightGlass.color.copy(shellLight).lerp(windowLight, night * .76);
-      lightGlass.emissiveIntensity = night * .45;
+    lighting(night: number, supply = .73) {
+      const current = Math.min(1.30, supply / .73);
+      lightGlass.color.copy(shellLight).lerp(windowLight, night * .76 * current);
+      lightGlass.emissiveIntensity = night * .52 * current;
       lightFront.emissive.copy(warm);
-      lightFront.emissiveIntensity = .30 + night * .89;
+      lightFront.emissiveIntensity = .18 + (.12 + night * .89) * current;
     },
     dispose() {
       cars.forEach(car => car.traverse(object => { if (object instanceof Mesh) object.geometry.dispose(); }));

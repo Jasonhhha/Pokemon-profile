@@ -1,3 +1,4 @@
+import {stairFace} from './fortress-palace-sign';
 import {
   BufferGeometry,
   CanvasTexture,
@@ -82,36 +83,6 @@ function workedStone(frost: boolean, paving: boolean) {
   return tex;
 }
 
-function timberGrain() {
-  const sheet = document.createElement('canvas');
-  sheet.width = 96;
-  sheet.height = 256;
-  const c = sheet.getContext('2d')!;
-  c.fillStyle = '#d2c2a1';
-  c.fillRect(0, 0, 96, 256);
-  for (let i = 0; i < 165; i++) {
-    const x = 96 * noise(i + 15),
-      y = 256 * noise(i + 85);
-    c.strokeStyle = i % 3 ? '#594d3a42' : '#f6dfb444';
-    c.lineWidth = 0.45 + noise(i + 13) * 1.1;
-    c.beginPath();
-    c.moveTo(x, y);
-    c.bezierCurveTo(x - 1.2, y + 11, x + 1.7, y + 25, x + 0.33, y + 44 * noise(i));
-    c.stroke();
-  }
-  for (let i = 0; i < 3; i++) {
-    c.beginPath();
-    c.ellipse(9 + noise(i + 27) * 71, 20 + noise(i + 52) * 209, 1.3, 6.2, 0.09, 0, tau);
-    c.strokeStyle = '#6957437a';
-    c.stroke();
-  }
-  const texture = new CanvasTexture(sheet);
-  texture.colorSpace = SRGBColorSpace;
-  texture.wrapS = texture.wrapT = RepeatWrapping;
-  texture.anisotropy = 4;
-  return texture;
-}
-
 function glacialCrust() {
   const sheet = document.createElement('canvas');
   sheet.width = sheet.height = 256;
@@ -183,25 +154,11 @@ function glacialCrust() {
   return tex;
 }
 
-export function stairSign(text: string, down: boolean) {
-  const sheet = document.createElement('canvas');
-  sheet.width = 256;
-  sheet.height = 100;
-  const c = sheet.getContext('2d')!;
-  c.fillStyle = '#182d32';
-  c.fillRect(0, 0, 256, 100);
-  c.strokeStyle = down ? '#8acfc4' : '#d6b97e';
-  c.lineWidth = 5;
-  c.strokeRect(5, 5, 246, 90);
-  c.fillStyle = down ? '#c4eee1' : '#edd4a2';
-  c.font = 'bold 42px system-ui, sans-serif';
-  c.textAlign = 'center';
-  c.textBaseline = 'middle';
-  c.fillText(text, 127, 51);
-  const tex = new CanvasTexture(sheet);
-  tex.colorSpace = SRGBColorSpace;
-  tex.anisotropy = 4;
-  return new MeshBasicMaterial({ map: tex });
+export function stairSign(text:string,down:boolean){
+  const tex=new CanvasTexture(stairFace(text,down));
+  tex.colorSpace=SRGBColorSpace;
+  tex.anisotropy=4;
+  return new MeshBasicMaterial({map:tex});
 }
 
 export function archStone() {
@@ -294,7 +251,6 @@ export function funeraryLid() {
 export function createMazeMaterials(frost: boolean) {
   const slabMap = workedStone(frost, true),
     masonryMap = workedStone(frost, false);
-  const timberMap = frost ? slabMap : timberGrain();
   const ground = new MeshStandardMaterial({ color: frost ? 0xb2c1c8 : 0xc2bd9f, map: slabMap, roughness: 0.67 });
   const face = new MeshStandardMaterial({ color: frost ? 0x72858c : 0x71867b, map: masonryMap, roughness: 0.67 });
   const chalk = new MeshStandardMaterial({ color: frost ? 0xc6dce0 : 0xd4c6a3, map: masonryMap, roughness: 0.72 });
@@ -308,7 +264,6 @@ export function createMazeMaterials(frost: boolean) {
     roughness: 0.39,
     metalness: 0.14,
   });
-  const wood = new MeshStandardMaterial({ color: 0xb3946a, map: timberMap, roughness: 0.71 });
   const jade = new MeshStandardMaterial({
     color: frost ? 0x83c7e2 : 0x6bb6ab,
     emissive: frost ? 0x367ca9 : 0x2f8a7c,
@@ -410,7 +365,6 @@ export function createMazeMaterials(frost: boolean) {
     wet,
     brass,
     iron,
-    wood,
     jade,
     ice,
     gem,
@@ -426,7 +380,6 @@ export function createMazeMaterials(frost: boolean) {
     iron,
     wallCap,
     wet,
-    wood,
     jade,
     ice,
     gem,
@@ -434,7 +387,7 @@ export function createMazeMaterials(frost: boolean) {
     amberGlass,
     mats,
     disposeMaps() {
-      for (const texture of new Set([slabMap, masonryMap, timberMap, frostMap])) texture.dispose();
+      for (const texture of new Set([slabMap, masonryMap, frostMap])) texture.dispose();
     },
   };
 }

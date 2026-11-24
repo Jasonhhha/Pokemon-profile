@@ -1,5 +1,10 @@
+import { drawPalaceGatehouse } from './fortress-palace-gatehouse-2d';
+import { addRiserLayers } from './fortress-risers-2d';
+import {sluiceConduits,sluiceCurrent} from './fortress-palace-current';
+import { hallStairs, hallSupport, pickPalacePortal, stairTread, viewingSteps } from './fortress-portals';
+import { drawWetGround2D } from './fortress-wet-ground-2d';
 import { fortressLiftStops, fortressMaps, type FortressInteriorFrame } from './field-fortress-state';
-import { isMazeRoom, mazeFloors } from './fortress-maze';
+import { isMazeRoom, mazeFloors, palaceElevation } from './fortress-maze';
 import { drawFortressMaze2D, pickFortressMaze2D } from './fortress-maze-2d';
 import { drawFrozenMasonry, drawIceBed2D, drawIceSeal2D, warmIceSeal2D } from './fortress-ice-seal-2d';
 import { drawFortressLift2D, tileSkin } from './fortress-raster-materials';
@@ -14,12 +19,19 @@ export function fortressInteriorPoint2D(ctx: Context, frame: FortressInteriorFra
   if (isMazeRoom(frame.room)) return pickFortressMaze2D(ctx,frame,px,py);
   const camera = projection(ctx, frame);
   const floor = camera.ground(px, py);
-  if (frame.room === 'seal' && !frame.inspecting) return pickWardPost(camera,px,py,floor) ?? floor;
+  const post = frame.room === 'seal' && !frame.inspecting && pickWardPost(camera,px,py,floor);
+  if (post) return post;
+  const near = camera.atHeight(px, py, 6), far = camera.atHeight(px, py, 0);
+  if (near && far) {
+    const walkable = fortressMaps[frame.room].walkable[Math.floor(far.y)]?.[Math.floor(far.x)];
+    const entrance = pickPalacePortal(frame.room, {x:near.x,y:6,z:near.y}, {x:far.x-near.x,y:-6,z:far.y-near.y}, Boolean(walkable), 1.12);
+    if (entrance) return entrance;
+  }
   return floor;
 }
 
 export function fortressInteriorProject2D(ctx: Context, frame: FortressInteriorFrame, x: number, y: number) {
-  return projection(ctx, frame).point(x, y);
+  return projection(ctx, frame).point(x, y, isMazeRoom(frame.room)?palaceElevation(frame.room,x,y):hallSupport(frame.room,x,y));
 }
 
 export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFrame) {
@@ -84,6 +96,16 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
     shade.addColorStop(0,'#0b1b27');shade.addColorStop(.65,seal?'#154454':'#23434b');shade.addColorStop(1,'#0c2734');
     ctx.fillStyle=shade;ctx.fillRect(0,0,width,height);
     if(seal)drawWardSideArcades(paint);
+    if(!seal)for(const side of [-1,1])for(const [offset,level,width] of [[9.25,2.76,2.55],[13.6,5.21,2.8]]){
+      const cx=8.5+side*offset,edge=cx-side*width/2;
+      for(let z=-7.5;z<19;z+=3.0){
+        plate(cx-.42,z,.84,.65,-.84,level-.33,'#b8b496','#6f8580','#46616a');
+        plate(cx-.72,z-.12,1.44,.9,level-.59,level-.34,'#adad98','#73837b','#536a6b');
+      }
+      plate(cx-width/2,-9.65,width,29.8,level-.44,level,'#a5ac97','#839388','#566e70');
+      for(let z=-8.5;z<=20;z+=1.65)plate(edge-.085,z,.17,.17,level,level+.64,'#c7ba99','#849084','#607674');
+      stroke([[edge,-9.64,level+.65],[edge,20.12,level+.65]],'#baa98c',.135);
+    }
     const waterTone=ctx.createLinearGradient(0,height*.13,0,height);
     waterTone.addColorStop(0,seal?'#536c81':'#133746');waterTone.addColorStop(.5,seal?'#526f82':'#28555b');waterTone.addColorStop(1,seal?'#233f52':'#102e3d');
     face([[.7,1,-.8],[16.3,1,-.8],[16.3,19.3,-.8],[.7,19.3,-.8]],waterTone);
@@ -105,7 +127,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       plate(cx-.38,1.63,.76,.44,3.35,3.6,'#9a9e8c','#647b79','#465d63');
       lamp(cx,2.02,2.00,seal);
     }
-    for(const x of [1.2,15.05]){
+    for(const x of seal?[1.2,15.05]:[-1.20,17.48]){
       const inside=x<8?x+.32:x+.39;
       face([[inside,1.4,-.65],[inside,19.5,-.65],[inside,19.5,3.55],[inside,1.4,3.55]],'#354e58');
       for(let row=0;row<9;row++){
@@ -184,6 +206,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       }
     }
   }
+  if (!seal) drawPalaceGatehouse(paint, frame.power?.bus ?? .78);
   const stones=seal?['#7b8d99','#899aa3','#8295a2','#91a2aa','#8396a3']:['#728582','#829087','#6b8083','#7b8d89','#8a948b'];
   for(let z=0;z<map.length;z++)for(let x=0;x<map[z].length;x++){
     if(!map[z][x])continue;
@@ -212,50 +235,46 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       }
     }
   }
+  if(!seal)for(const step of viewingSteps){
+    const left=step.x-step.width*.5;
+    for(let z=5;z<16;z++){
+      plate(left,z,step.width,1,.012,step.top,'#a8aa96','#78857e','#54686a');
+      stroke([[left+.017,z+.021,step.top+.01],[left+step.width-.017,z+.021,step.top+.01]],'#757f76',.018);
+    }
+    if(step.width<.3){
+      const nose=step.x-step.nose*(step.width*.5-.02);
+      stroke([[nose,5,step.top+.01],[nose,16,step.top+.01]],'#a58f64',.02);
+    }
+  }
   if(seal)drawWardDeck(paint);
-  // Residual pools span slab joints and mirror the lamps along the flooded walkway.
-  const pools=seal ? [[8.3,12.15,.58,1.0],[8.76,14.64,.94,.41],[5.64,16.1,1.15,.56],[10.1,16.44,1.65,.72],[7.7,17.4,.58,.27]]
-    : [[8.03,4.72,.68,.56],[9.05,7.64,.72,1.14],[7.71,10.05,.64,.46],[8.49,12.50,1.12,.55],[8.30,15.64,1.1,.80],
-       [7.66,17.07,.52,.39],[3.55,8.72,.40,1.24],[13.57,14.25,.41,1.48]];
-  for(const [i,[cx,cz,rx,rz]] of pools.entries()){
-    const n=i*1.62;
-    const outline:Vertex[]=Array.from({length:30},(_,j)=>{
-      const a=j*tau/30,r=.81+.13*Math.sin(3*a+n)+.075*Math.cos(a*5+n*2)+.05*Math.sin(a*8+n);
-      return [cx+Math.cos(a)*rx*r,cz+Math.sin(a)*rz*r,.025];
-    });
-    const p=point(cx-rx,cz),q=point(cx+rx,cz);
-    const sheen=ctx.createLinearGradient(p.x,p.y,q.x,q.y);
-    sheen.addColorStop(0,seal?'#698899a8':'#3b5f668c');sheen.addColorStop(.36,seal?'#8da9b4bf':'#567b7ca6');
-    sheen.addColorStop(.60,seal?'#c7d6d7b3':'#9ba99b98');sheen.addColorStop(1,seal?'#617f91ad':'#335661a3');
-    face(outline,sheen);
-    stroke(outline.slice(2,12),'#afc6bb8f',.019);
-    for(let j=0;j<4;j++){
-      const offset=(noise(i*7+j)-.5)*rz, glint=cx-rx*.16+j*.07;
-      stroke([[glint,cz+offset,.028],[glint+.08+noise(j+i)*.20,cz+offset,.028]],'#c2c7b06c',.017);
-    }
-    if(seal){
-      const joint:Vertex[]=[[cx-rx*.69,cz+rz*.32,.037],[cx-rx*.25,cz+rz*.13,.037],[cx-.04,cz+rz*.19,.037],[cx+rx*.31,cz-rz*.10,.037],[cx+rx*.56,cz-rz*.41,.037]];
-      stroke(joint,'#698195bb',.039);stroke([joint[2],[cx-rx*.10,cz-rz*.46,.037]],'#96aebaaa',.027);
-    }
+  if(!seal)for(const {x,z,w,d,band} of sluiceConduits){
+    const segment:Vertex[]=[[x-w/2,z-d/2,.042],[x+w/2,z+d/2,.042]];
+    stroke(segment,'#8f7553',.13);
+    const strength=sluiceCurrent(time,frame.power?.bus??.78,frame.power?.phase??.45,band);
+    stroke(segment,`rgb(${Math.round(36+102*strength)} ${Math.round(78+138*strength)} ${Math.round(79+117*strength)})`,.060);
   }
-  // Stair treads lead into the northern portal and up to the dry upper chamber.
   if(!seal)drawFortressLift2D(fortressLiftStops.sluice.x,fortressLiftStops.sluice.y,frame.liftUnlocked,paint);
-  const stairsZ = seal ? 17.32 : 3.10;
-  for(let i=0;i<7;i++){
-    const z=stairsZ+i*.17,h=seal?i*.068:(6-i)*.075;
-    plate(7.25,z,2.50,.173,0,h+.036,'#93a19b','#4a6267','#40585e');
-    stroke([[7.28,z+.163,h+.041],[9.72,z+.163,h+.041]],'#bfbea8',.025);
-  }
-  if(!seal){
-    top(7.20,1.83,2.6,1.34,.38,'#596d6c');
-    for(const x of [7.33,9.67])lamp(x,2.02,1.05);
-    for(let i=0;i<4;i++)stroke([[7.28,2.12+i*.26,.40],[9.72,2.12+i*.26,.40]],'#adb0a0',.03);
-    for(let i=0;i<6;i++){
-      const z=17.90+i*.19, h=.035+i*.072;
-      plate(7.28,z,2.44,.20,-.47,h,'#8a9a94','#4a6265','#374f56');
-      stroke([[7.31,z+.18,h+.013],[9.69,z+.18,h+.013]],'#aaa994',.026);
+  for (const stair of hallStairs[frame.room]) {
+    for (let i=0; i<stair.steps; i++) {
+      const {z, depth, y} = stairTread(stair, stair.depth < 0 ? stair.steps-1-i : i);
+      const x=stair.x-stair.half, width=stair.half*2;
+      plate(x,z,width,depth,Math.min(-.15,y-.14),y,'#95a49b','#526a6b','#40595d');
+      const nose = stair.rise < 0 ? z + depth - .022 : z + .022;
+      stroke([[x+.04,nose,y+.008],[x+width-.04,nose,y+.008]],seal?'#baab83':'#b7b8a5',.027);
+      if (seal) for (const side of [-1,1]) {
+        const edge=stair.x+side*(stair.half+.16)-.16;
+        plate(edge,z,.32,depth,-.15,y+.24,'#869a99','#4d636d','#385661');
+      }
     }
   }
+  if (seal) {
+    const stair=hallStairs.seal[0], last=stairTread(stair, stair.steps-1);
+    plate(stair.x-stair.half-.33,stair.z+stair.depth,stair.half*2+.66,.80,-.15,last.y,'#8e9d94','#4d6669','#405959');
+    for (const side of [-1,1]) lamp(stair.x+side*(stair.half+.18),stair.z+stair.depth+.16,last.y+.8,true);
+  } else {
+    for(const x of [7.05,9.95])lamp(x,2.18,.68);
+  }
+  drawWetGround2D(frame, paint);
   const layers:{z:number; draw:()=>void}[]=[];
   if(!seal){
     const ax=8.5, az=8.5;
@@ -289,19 +308,20 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       stroke([[9.54,3.22,.46],[9.54,2.14,.48],[9.54,2.14,1.62]],tint,.065);
     }
     for(const z of [3.82,7.55,10.96,14.85,18.20]){
-      for(const x of [2.3,5.72,11.28,14.7])layers.push({z,draw(){ column(x,z); }});
-      for(const [left,right] of [[2.3,5.72],[11.28,14.7]])layers.push({z:z+.04,draw(){ arcade(left,right,z); }});
-      if(z<8)layers.push({z:z+.05,draw(){arcade(5.72,11.28,z);}});
+      for(const x of [.55,5.45,11.55,16.45])layers.push({z,draw(){ column(x,z); }});
+      for(const [left,right] of [[.55,5.45],[11.55,16.45]])layers.push({z:z+.04,draw(){ arcade(left,right,z); }});
+      if(z<8)layers.push({z:z+.05,draw(){arcade(5.45,11.55,z);}});
     }
   }
-  const rails = seal ? [[7.02,11,11.94],[9.98,11,11.94],[7.02,13.05,15],[9.98,13.05,15]] : [[7.04,7,12],[9.96,7,12],[7.04,13,15.8],[9.96,13,15.8]];
+  const rails = seal ? [[7.02,11,11.94],[9.98,11,11.94],[7.02,13.05,15],[9.98,13.05,15]] : [[6.0,8.0,10.94],[11.0,8.0,10.94],[6.0,13.04,14.92],[11.0,13.04,14.92],[1.10,8.02,10.94],[15.90,8.02,10.94]];
   for(const [x,za,zb] of rails){
+    const deck=seal?0:hallSupport('sluice',x,za);
     layers.push({z:(za+zb)/2,draw(){
       for(let z=za;z<=zb;z+=1.0){
-        plate(x-.064,z-.064,.128,.128,0,.66,'#b6a887','#4c6462','#334b4e');
+        plate(x-.064,z-.064,.128,.128,deck,deck+.66,'#b6a887','#4c6462','#334b4e');
       }
-      for(const h of [.35,.66])stroke([[x,za,h],[x,zb,h]],'#485e5c',.057);
-      stroke([[x-.018,za,.69],[x-.018,zb,.69]],'#c1aa80',.022);
+      for(const h of [.35,.66])stroke([[x,za,deck+h],[x,zb,deck+h]],'#485e5c',.057);
+      stroke([[x-.018,za,deck+.69],[x-.018,zb,deck+.69]],'#c1aa80',.022);
     }});
   }
   if(!seal)for(const [x,z] of [[7.03,7.01],[9.94,11.92],[7.03,15.86]]){
@@ -322,7 +342,9 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       lamp(x,11.11,1.17,true);
     }});
   }
-  addRasterActors(layers,frame,camera,ctx,false,undefined,seal?wardGrip(frame,paint):undefined);
+  const hall = frame.room;
+  if (!seal) addRiserLayers(layers,frame,'sluice',camera,paint);
+  addRasterActors(layers,frame,camera,ctx,false,(x,z)=>hallSupport(hall,x,z),seal?wardGrip(frame,paint):undefined);
   layers.sort((a,b)=>a.z-b.z).forEach(l=>l.draw());
   const vignette=ctx.createRadialGradient(width*.49,height*.47,height*.26,width*.50,height*.50,Math.max(width*.62,height*.76));
   vignette.addColorStop(0,'#04131e00');vignette.addColorStop(1,'#03101bd6');

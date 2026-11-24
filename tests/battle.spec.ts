@@ -53,8 +53,8 @@ test('capture respects HP, status, stock and ownership, and awards no experience
 });
 
 test('trainer practice prevents capture and escape, and pays ordinary victory experience', () => {
-  const opened = battle.beginBattle({ creature: 'riolu', level: 4, area: 'grove', trainer: '林间见习员' }, rules.initialBattleProgress());
-  expect(opened.message).toContain('林间见习员派出了利欧路');
+  const opened = battle.beginBattle({ creature: 'riolu', level: 4, area: 'harbor', trainer: '绿廊陪练' }, rules.initialBattleProgress());
+  expect(opened.message).toContain('绿廊陪练派出了利欧路');
   const state = opened.state;
   expect(battle.resolveBattleTurn(state, { kind: 'ball' }, false, lowRoll)).toEqual([]);
   expect(battle.resolveBattleTurn(state, { kind: 'run' }, false, lowRoll)).toEqual([]);
@@ -219,7 +219,7 @@ test('battle history keeps twelve announcements, restores focus, and leaves a qu
   await expect(list).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(trigger).toBeFocused();
-  await arena.getByRole('button', { name: '返回原野' }).click();
+  await arena.getByRole('button', { name: '返回环城' }).click();
   await expect(arena).toBeHidden();
   const inventory = await page.evaluate(() => JSON.parse(localStorage.getItem('tidebound-save-v1')!).battle);
   expect(inventory.charms).toBe(2);

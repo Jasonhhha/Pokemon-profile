@@ -1,10 +1,12 @@
 import {
-  BoxGeometry, CanvasTexture, Color, CylinderGeometry, ExtrudeGeometry, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial,
-  MeshStandardMaterial, PlaneGeometry, RepeatWrapping, Shape, ShapeGeometry, SphereGeometry, SRGBColorSpace, Vector3,
+  BoxGeometry, CanvasTexture, Color, CylinderGeometry, Group, Mesh, MeshBasicMaterial,
+  MeshStandardMaterial, PlaneGeometry, RepeatWrapping, SphereGeometry, SRGBColorSpace, Vector3,
   type BufferGeometry, type ColorRepresentation,
 } from 'three';
 import type { RoomId } from './field-layout';
-import { plans } from './field-rooms';
+import { paintCityWindow } from './field-city-window';
+import { paintRoomChart, plans } from './field-rooms';
+import { batchStaticMeshes } from './field-mesh-batch';
 
 const box = new BoxGeometry(1, 1, 1);
 const drum = new CylinderGeometry(1, 1, 1, 16);
@@ -71,7 +73,7 @@ function floorMaterial(room: RoomId, width: number) {
         const shade = room === 'lab' ? .91 + noise(col, row, 19) * .15 : .79 + noise(col, row, 19) * .33;
         ctx.fillStyle = color.clone().multiplyScalar(shade).getStyle();
         ctx.fillRect(x + 1, y + 1, board - 1.8, height - 1.8);
-        ctx.fillStyle = oak ? 'rgba(257,241,202,.22)' : 'rgba(237,245,225,.15)';
+        ctx.fillStyle = oak ? 'rgba(255,241,202,.22)' : 'rgba(237,245,225,.15)';
         ctx.fillRect(x + 2.4, y + 1.3, board - 4, .85);
         ctx.fillRect(x + 1, y + 1.3, .80, height - 4);
       }
@@ -189,87 +191,15 @@ function runnerMap(room: RoomId) {
   return new MeshStandardMaterial({ map, roughness: .98 });
 }
 
-const roomWindows = new Map<RoomId, MeshStandardMaterial>();
+const roomWindows = new Map<string, MeshStandardMaterial>();
 
-function windowScene(room: RoomId) {
-  const cached = roomWindows.get(room);
+function windowScene(room: RoomId, night = false) {
+  const key = room + (night ? '-night' : '-day');
+  const cached = roomWindows.get(key);
   if (cached) return cached;
-  const size = 256;
-  const map = patterned(size, ctx => {
-    const sky = ctx.createLinearGradient(0, 0, 0, 182);
-    const stops = room === 'tower' ? ['#2c466c', '#8f8ead'] : room === 'lab' ? ['#8eacaa', '#ced0ae'] : ['#76a5ad', '#dccca1'];
-    sky.addColorStop(0, stops[0]);
-    sky.addColorStop(1, stops[1]);
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, size, size);
-    if (room === 'tower') {
-      for (let n = 0; n < 60; n++) {
-        const x = noise(n, 2, 31) * size;
-        const y = noise(n, 4, 56) * 171;
-        ctx.fillStyle = n % 4 ? 'rgba(232,222,190,.82)' : 'rgba(245,223,159,.94)';
-        const pixel = n % 7 === 0 ? 2.5 : 1.2;
-        ctx.fillRect(x, y, pixel, pixel);
-      }
-      ctx.fillStyle = '#e8d4af';
-      ctx.beginPath();
-      ctx.arc(189, 55, 12, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#5e6d93';
-      ctx.beginPath();
-      ctx.arc(194, 52, 10.7, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = room === 'lab' ? 'rgba(233,231,199,.19)' : 'rgba(243,232,199,.55)';
-      for (const [x, y, w, h] of [[49, 48, 38, 7], [127, 64, 55, 5], [201, 29, 29, 5], [235, 84, 56, 7]]) {
-        ctx.beginPath();
-        ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    if (room === 'home') {
-      const ocean = ctx.createLinearGradient(0, 100, 0, 260);
-      ocean.addColorStop(0, '#adc2ad');
-      ocean.addColorStop(1, '#488a94');
-      ctx.fillStyle = ocean;
-      ctx.fillRect(0, 124, 256, 132);
-      ctx.fillStyle = '#71928a';
-      ctx.beginPath();
-      ctx.moveTo(0, 124);
-      for (const [x, y] of [[21, 105], [43, 90], [63, 101], [80, 108], [104, 106], [133, 125], [160, 127], [179, 121], [207, 118], [231, 128], [256, 129]]) ctx.lineTo(x, y);
-      ctx.lineTo(256, 144);
-      ctx.lineTo(0, 140);
-      ctx.fill();
-      for (let i = 0; i < 47; i++) {
-        ctx.fillStyle = i % 3 ? 'rgba(226,228,196,.31)' : 'rgba(45,111,124,.19)';
-        ctx.fillRect(noise(i, 6, 4) * 256, 146 + noise(i, 11, 3) * 110, 10 + noise(i, 8, 2) * 38, i % 3 ? 1.1 : 2.1);
-      }
-    } else {
-      const peaks = room === 'tower' ? ['#6b7196', '#505e82', '#3a5370'] : ['#a0ad91', '#849b80', '#6a8a79'];
-      for (let layer = 0; layer < peaks.length; layer++) {
-        const low = 125 + layer * 37;
-        ctx.fillStyle = peaks[layer];
-        ctx.beginPath();
-        ctx.moveTo(0, low);
-        for (let x = 0; x <= 256; x += 17) ctx.lineTo(x, low + Math.sin(x / (layer + 21) + layer) * 13 - noise(x, layer, 55) * (room === 'tower' ? 32 : 16));
-        ctx.lineTo(260, 256);
-        ctx.lineTo(0, 256);
-        ctx.fill();
-      }
-      if (room === 'lab') for (let n = 0; n < 32; n++) {
-        const x = noise(n, 2, 31) * size;
-        const y = 176 + noise(n, 4, 56) * 69;
-        const h = 15 + noise(n, 2, 3) * 33;
-        ctx.fillStyle = n % 3 ? '#638573' : '#7b9880';
-        ctx.beginPath();
-        ctx.moveTo(x, y - h);
-        ctx.lineTo(x + h * .36, y);
-        ctx.lineTo(x - h * .36, y);
-        ctx.fill();
-      }
-    }
-  });
-  const material = new MeshStandardMaterial({ map, emissive: room === 'tower' ? 0x2a3f6b : 0x519293, emissiveMap: map, emissiveIntensity: .46, roughness: .39 });
-  roomWindows.set(room, material);
+  const map = patterned(256, ctx => paintCityWindow(ctx, room, night, 0, 0, 256, 256));
+  const material = new MeshStandardMaterial({ map, emissive: night ? 0x647497 : 0x8da8a4, emissiveMap: map, emissiveIntensity: night ? .28 : .43, roughness: .39 });
+  roomWindows.set(key, material);
   return material;
 }
 
@@ -347,6 +277,32 @@ function plant(root: Group, x: number, z: number, height: number) {
   }
 }
 
+function readingLamps(root: Group, room: RoomId, mid: number) {
+  const brass = room === 'lab' ? 0x687674 : 0x9e7752;
+  const glowColor = room === 'lab' ? 0xffe5b5 : 0xffbc79;
+  const glass = new MeshStandardMaterial({ color: 0xf3e9d2, emissive: glowColor, emissiveIntensity: .15, roughness: .43 });
+  const positions = [mid - 3.03, mid + 3.03].map(x => {
+    mesh(root, x, 1.67, 5.075, .28, .38, .11, brass, box, false);
+    mesh(root, x, 1.76, 5.27, .062, .071, .41, brass, box, false);
+    mesh(root, x, 1.79, 5.44, .19, .075, .19, brass, drum, false);
+    mesh(root, x, 1.98, 5.44, .18, .23, .18, glass, bulb, false);
+    mesh(root, x, 2.14, 5.44, .208, .052, .208, brass, drum, false);
+    return new Vector3(x, 1.95, 5.93);
+  });
+  return { positions, glass, glowColor };
+}
+
+function hangChart(root: Group, room: RoomId, x: number) {
+  const width = room === 'home' ? 1.10 : 1.61;
+  const map = patterned(160, ctx => {
+    ctx.scale(160 / (room === 'home' ? 26 : room === 'lab' ? 43 : 49), 160 / 25);
+    paintRoomChart(ctx, room, room === 'home' ? 13 : 1, 1);
+  });
+  const paper = new MeshStandardMaterial({ map, roughness: .91 });
+  mesh(root, x, 1.65, 5.095, width + .094, .96, .105, colors[room].edge);
+  mesh(root, x, 1.65, 5.155, width, .87, .015, paper, box, false);
+}
+
 export function buildRoomModel(room: RoomId) {
   const plan = plans[room];
   const style = colors[room];
@@ -369,6 +325,8 @@ export function buildRoomModel(room: RoomId) {
     mesh(root, wall, .44, 10.9, .27, .092, 6.08, style.trim);
   }
   for (const x of [mid - 5.3, mid, mid + 5.3]) windowFrame(root, x, 5.055, x === mid ? 2.33 : 1.95, room);
+  const roomLamps = readingLamps(root, room, mid);
+  hangChart(root, room, room === 'tower' ? mid - 1.83 : mid + 1.84);
   const lightMap = patterned(128, ctx => {
     const gradient = ctx.createLinearGradient(0, 107, 17, 12);
     gradient.addColorStop(0, 'rgba(255,248,222,0)');
@@ -384,7 +342,7 @@ export function buildRoomModel(room: RoomId) {
   }));
   windowLight.rotation.set(-Math.PI / 2, 0, -.25);
   windowLight.position.set(mid + 1.34, .013, 6.78);
-  root.add(windowLight);
+
 
   mesh(root, 12.5, .009, 10.7, room === 'lab' ? 4.0 : 5.2, .018, 4.11, runnerMap(room), box, false);
   for (const fixture of plan.furniture) {
@@ -465,5 +423,27 @@ export function buildRoomModel(room: RoomId) {
         break;
     }
   }
-  return root;
+  const day = windowScene(room);
+  const shared = new Set([...materials.values(), day]);
+  const owned = new Set<MeshStandardMaterial>();
+  root.traverse(part => {
+    if (part instanceof Mesh && part.material instanceof MeshStandardMaterial && !shared.has(part.material)) owned.add(part.material);
+  });
+  const group = batchStaticMeshes(root, material => material !== day && material !== roomLamps.glass);
+  const windows = group.children.filter((part): part is Mesh => part instanceof Mesh && part.material === day);
+  group.add(windowLight);
+  let previous = false;
+  return { group, obstacles: root.children, lamps: roomLamps.positions, lampColor: roomLamps.glowColor, dispose() {
+    group.traverse(part => { if (part instanceof Mesh) part.geometry.dispose(); });
+    owned.forEach(material => { material.map?.dispose(); material.dispose(); });
+    windowLight.material.map?.dispose();
+    windowLight.material.dispose();
+  }, setNight(night: boolean) {
+    if (previous === night) return;
+    previous = night;
+    const glass = windowScene(room, night);
+    for (const pane of windows) pane.material = glass;
+    windowLight.visible = !night;
+    roomLamps.glass.emissiveIntensity = night ? 1.75 : .15;
+  } };
 }

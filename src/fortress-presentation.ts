@@ -8,6 +8,7 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext('2d')!;
   const surface = document.createElement('canvas');
   let chamber: ReturnType<typeof createFortressInterior3D> | undefined;
+  let paintedChamber: typeof chamber;
   let raster: typeof import('./fortress-interior-2d') | undefined;
   let loadingRaster = false;
   let retryAfter = 0;
@@ -19,13 +20,24 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
   let previousSize: [number, number] | undefined;
   let lastDraw = -Infinity;
 
-  function release(event?: Event) {
-    event?.preventDefault();
+  function release() {
     gpuUnavailable = true;
-    surface.removeEventListener('webglcontextlost', release);
     chamber?.dispose();
     chamber = undefined;
+    lastDraw = -Infinity;
   }
+  function lost(event: Event) {
+    event.preventDefault();
+    release();
+    warmRaster();
+  }
+  function restored() {
+    gpuUnavailable = false;
+    requested = false;
+    lastDraw = -Infinity;
+  }
+  surface.addEventListener('webglcontextlost', lost);
+  surface.addEventListener('webglcontextrestored', restored);
 
   function warmRaster() {
     if (raster || loadingRaster || destroyed || performance.now() < retryAfter) return;
@@ -40,9 +52,9 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
       requested = true;
       gpuRequestedAt = performance.now();
       void import('./fortress-interior-3d').then(({ createFortressInterior3D }) => {
-        if (destroyed) return;
+        if (destroyed || gpuUnavailable) return;
         chamber = createFortressInterior3D(surface);
-        surface.addEventListener('webglcontextlost', release);
+        lastDraw = -Infinity;
       }).catch(error => {
         if (import.meta.env.DEV) console.warn('Fortress WebGL initialization switched to Canvas2D', error);
         release();
@@ -50,7 +62,7 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
     }
     // A save can reopen directly in the sanctum. Give the GPU time to start before
     // the compatibility renderer requests its separate pose atlas.
-    if (!chamber && requested && !gpuUnavailable && now - gpuRequestedAt < 350) return false;
+    if (!raster && !chamber && requested && !gpuUnavailable && now - gpuRequestedAt < 350) return false;
     if (!chamber) warmRaster();
     if (!raster && !chamber) return false;
     previousSize ??= [canvas.width, canvas.height];
@@ -64,8 +76,9 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
     const fraction = step ? Math.max(0, Math.min(1, (now - step.startedAt) / step.duration)) : 0;
     const follower = companionPosition(view, fraction);
     const alternatingFoot = step ? (step.from.x + step.from.y) % 2 : 0;
-    frame = {
-      room, now, reduced, facing: view.facing, inspecting: view.inspectingSeal, resonance: view.resonance,
+    const next: FortressInteriorFrame = {
+      room, now, reduced, facing: view.facing, inspecting: view.inspectingSeal, resonance: view.resonance, power: view.power,
+      palaceView: view.overview ? { angle: view.orbitOffset, tilt: view.orbitTilt } : undefined,
       liftUnlocked: view.liftUnlocked, liftPassage: view.liftPassage, shortcutOpen: view.shortcutOpen, gateAge: view.gateAge, roarAge: view.roarAge,
       ward: view.ward, wardAdjustmentAge: view.wardAdjustmentAge, wardSettledAge: view.wardSettledAge,
       x: .5 + (step ? step.from.x + (step.to.x - step.from.x) * fraction : view.location.x),
@@ -77,9 +90,11 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
     if (chamber) {
       try {
         if (surface.width !== w || surface.height !== h) { surface.width = w; surface.height = h; }
-        chamber.draw(frame);
+        chamber.draw(next);
         ctx.drawImage(surface, 0, 0, w, h);
         if (view.liftPassage) drawLiftPassage(ctx, view.liftPassage, reduced);
+        frame = next;
+        paintedChamber = chamber;
         canvas.dataset.renderer = 'webgl';
         return true;
       } catch (error) {
@@ -87,10 +102,12 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
         release();
       }
     }
-    if (!raster) return false;
+    if (!raster) { warmRaster(); return false; }
     canvas.dataset.renderer = 'canvas2d';
-    raster.drawFortressInterior2D(ctx, frame);
+    raster.drawFortressInterior2D(ctx, next);
     if (view.liftPassage) drawLiftPassage(ctx, view.liftPassage, reduced);
+    frame = next;
+    paintedChamber = undefined;
     return true;
   }
 
@@ -101,18 +118,25 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
       if (previousSize) [canvas.width, canvas.height] = previousSize;
       previousSize = undefined;
       frame = undefined;
+      paintedChamber = undefined;
     },
     getCamera() {
       return { x: (frame?.x ?? 0) * TILE, y: (frame?.y ?? 0) * TILE, width: canvas.width, height: canvas.height, scale: canvas.height / (13 * TILE), depth: 0 };
     },
     projectPoint(x: number, y: number) {
-      const point = chamber ? chamber.projectPoint(x / TILE, y / TILE) : raster!.fortressInteriorProject2D(ctx, frame!, x / TILE, y / TILE);
+      const point = paintedChamber ? paintedChamber.projectPoint(x / TILE, y / TILE) : raster!.fortressInteriorProject2D(ctx, frame!, x / TILE, y / TILE);
       return { ...point, scale: canvas.height / (13 * TILE) };
     },
     pointInWorld(x: number, y: number) {
-      const point = chamber ? chamber.pointInWorld(x, y) : raster?.fortressInteriorPoint2D(ctx, frame!, x, y);
+      const point = paintedChamber ? paintedChamber.pointInWorld(x, y) : raster?.fortressInteriorPoint2D(ctx, frame!, x, y);
       return point && { x: point.x * TILE, y: point.y * TILE };
     },
-    dispose() { destroyed = true; release(); },
+    dispose() {
+      destroyed = true;
+      surface.removeEventListener('webglcontextlost', lost);
+      surface.removeEventListener('webglcontextrestored', restored);
+      paintedChamber = undefined;
+      release();
+    },
   };
 }

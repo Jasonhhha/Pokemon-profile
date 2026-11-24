@@ -1,0 +1,18 @@
+.palace-section { display:grid; gap:12px; }
+.palace-section figure { margin:0; background:#172b32; border:1px solid #526368; border-radius:7px; overflow:hidden; }
+.palace-section canvas { display:block; width:100%; height:auto; aspect-ratio:600/370; cursor:crosshair; }
+.palace-section figcaption { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:7px 11px; background:#203338; color:#cfdfcf; font-size:11px; }
+.palace-section figcaption b { font-family:ui-monospace,monospace; color:#ebd4a5; }
+.palace-levels { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; }
+.palace-levels button { display:flex; flex-flow:column; align-items:flex-start; padding:8px 9px; border:1px solid #485e64; border-radius:4px; background:#23363e; color:#d9e3da; cursor:pointer; }
+.palace-levels button[aria-pressed=true] { background:#344b48; color:#f7e9c6; border-color:#b9a579; }
+.palace-levels b { font:650 12px ui-monospace,monospace; }
+.palace-levels span { font-size:12px; }
+.palace-note h3 { margin:0 0 4px; font-size:17px; }
+.palace-note p { margin:4px 0; line-height:1.65; font-size:14px; }
+.palace-note p:last-child {display:flex; align-items:baseline; gap:6px; color:#c1d0c7;}
+.palace-note svg { flex-shrink:0; align-self:flex-start; margin-top:4px; }
+@media(max-width:480px) {
+  .palace-levels button { padding:7px 4px; align-items:center; }
+  .palace-levels span {font-size:11px;}
+}

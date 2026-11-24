@@ -1,4 +1,4 @@
-import { createFieldRenderer, feetX, feetY, type FieldView } from './field-renderer';
+import { createFieldRenderer, feetX, type FieldView } from './field-renderer';
 import { createFortressPresentation } from './fortress-presentation';
 import { TILE } from './field-layout';
 import type { createFieldView3d } from './field-view3d';
@@ -14,6 +14,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
   let raster: typeof classic | NonNullable<typeof ring> = classic;
   let world: ReturnType<typeof createFieldView3d>;
   let pendingWorld: typeof world;
+  let lostWorld: typeof world;
   let loadingWorld = false;
   let requestedWorld = false;
   let ready = false;
@@ -49,16 +50,28 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     onReady?.();
   }
 
+  function restoredWorld() {
+    if (!lostWorld || destroyed) return;
+    pendingWorld = lostWorld;
+    lostWorld = undefined;
+    pendingWorld.resetCamera();
+  }
+
   function restoreClassic(event?: Event) {
     event?.preventDefault();
     const failed = world ?? pendingWorld;
     if (!failed) return;
-    failed.surface.removeEventListener('webglcontextlost', restoreClassic);
-    failed.destroy();
     world = pendingWorld = undefined;
-    canvas.dataset.renderer = 'canvas2d';
-    raster.resize(size.width, size.height);
-    raster.resetCamera();
+    if (event) lostWorld = failed;
+    else {
+      failed.surface.removeEventListener('webglcontextlost', restoreClassic);
+      failed.surface.removeEventListener('webglcontextrestored', restoredWorld);
+      failed.destroy();
+    }
+    if (!fortress.active) {
+      raster.resize(size.width, size.height);
+      raster.resetCamera();
+    }
   }
 
   function requestWorld() {
@@ -70,6 +83,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
       if (destroyed) return;
       pendingWorld = module.createFieldView3d(canvas, reducedMotion);
       pendingWorld?.surface.addEventListener('webglcontextlost', restoreClassic);
+      pendingWorld?.surface.addEventListener('webglcontextrestored', restoredWorld);
     }).catch(error => {
       if (import.meta.env.DEV) console.warn('WebGL field initialization could not finish', error);
     }).finally(() => { loadingWorld = false; });
@@ -117,6 +131,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
         raster.resetCamera();
       }
       raster.draw(time, view);
+      canvas.dataset.renderer = 'canvas2d';
       rememberAxes(view, raster === ring ? ring : undefined);
       markReady();
     },
@@ -136,12 +151,7 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
       if (fortress.active) return;
       if (world) return world.hitActor(x, y, candidates, doorway);
       if (ring && raster === ring) return ring.hitActor(x, y, candidates, doorway);
-      return candidates.find(actor => {
-        const entrance = doorway(actor);
-        const projected = raster.projectPoint(feetX(actor.x), feetY(actor.y));
-        return Math.abs(projected.x - x) <= (entrance ? 11 : 8) * projected.scale &&
-          y >= projected.y - (entrance ? 48 : 27) * projected.scale && y <= projected.y + 3 * projected.scale;
-      });
+      return classic.hitActor(x, y, candidates, doorway);
     },
     resetCamera: () => (world ?? raster).resetCamera(),
     getCamera: () => (fortress.active ? fortress : world ?? raster).getCamera(),
@@ -150,8 +160,9 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     destroy() {
       destroyed = true;
       fortress.dispose();
-      const active = world ?? pendingWorld;
+      const active = world ?? pendingWorld ?? lostWorld;
       active?.surface.removeEventListener('webglcontextlost', restoreClassic);
+      active?.surface.removeEventListener('webglcontextrestored', restoredWorld);
       active?.destroy();
     },
   };

@@ -166,13 +166,14 @@ export function buildCityLight(lamps: readonly CityLamp[], polar = false) {
   group.add(contact, pool, beacon.light, dial);
   return {
     group, skylight,
-    update(darkness: number, time = 0) {
-      beacon.update(time, darkness);
+    update(darkness: number, time = 0, load = .73) {
+      const powered = darkness * (.08 + load * 1.2);
+      beacon.update(time, powered);
       pool.visible = darkness > .027;
-      bulb.opacity = darkness * .65;
+      bulb.opacity = powered * .65;
       contact.material.opacity = 1 - darkness * .36;
       dial.visible = polar && darkness > .09;
-      dial.material.opacity = darkness * (.63 + .10 * Math.sin(time / 690));
+      dial.material.opacity = powered * (.63 + .10 * Math.sin(time / 690));
     },
     dispose() {
       beacon.dispose(); flat.dispose(); lampMap.dispose(); skylight.dispose(); contact.geometry.dispose();

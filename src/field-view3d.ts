@@ -1,3 +1,5 @@
+import { maps } from './field-layout';
+import { wallPoint, wallCamera, pickWallTile } from './fortress-wall-walk';
 import {
   ACESFilmicToneMapping, AdditiveBlending, Box3, CanvasTexture, Color, DirectionalLight, EqualStencilFunc, FogExp2,
   GreaterDepth, Group, HemisphereLight, IncrementStencilOp, Mesh, MeshBasicMaterial, OrthographicCamera,
@@ -11,6 +13,7 @@ import { updateCityArchitecture } from './field-city-models';
 import type { SurveyId } from './field-city-walks';
 import { buildRingArchitecture } from './field-ring-architecture';
 import { buildRingGates } from './field-ring-gates';
+import { nominalPower, type GridReading } from './fortress-power';
 import { buildRingGround } from './field-ring-ground';
 import { fortressLiftDepth } from './field-fortress-state';
 import { buildFortressExterior, fortressPanorama, fortressRadius, fortressShot } from './field-fortress-exterior';
@@ -18,24 +21,21 @@ import { frameStreetSubject, harborAerialCamera, harborOverviewYaw, ringStreetLo
 import { buildRingTerraces } from './field-ring-terraces';
 import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringRadius, ringXDelta } from './field-ring-space';
 import { buildCityFerry } from './field-city-ferry';
+import { buildTrialSignal } from './field-city-trial-signal';
 import { buildCityCrowd } from './field-city-crowd';
 import { buildCityLight } from './field-city-light';
 import { buildCityReflections } from './field-city-reflections';
 import { buildCityStreet, type CityLamp } from './field-city-street';
 import { buildRingTransit } from './field-ring-transit';
-import { buildFieldDressing } from './field-dressing';
 import { createFieldEffects } from './field-effects';
 import { createFieldPokemon, type FieldSpriteLight } from './field-pokemon';
-import { buildFieldProp } from './field-models';
+import { buildHarborProp } from './field-models';
 import { companionPosition, fieldFadeDuration, type FieldView } from './field-renderer';
 import { buildRoomModel } from './field-room-models';
-import { buildFieldTerrain } from './field-terrain3d';
 import { createTraveler } from './field-travelers';
 
 const outlooks: Record<FieldArea, readonly [number, number, number][]> = {
   harbor: [[5, 12, 5], [36, 12, 5]],
-  grove: [[17, 12, 6], [33, 12, 5]],
-  summit: [[18, 12, 6], [31, 9, 5]],
 };
 const alleyAngles = [
   [0, 0], [-.33, .035], [.33, .035], [-.63, .07], [.63, .07], [-.91, .12], [.91, .12],
@@ -67,23 +67,29 @@ function streetPitch(row: number, outward: boolean) {
 
 const atmospheres = {
   harbor: { day: 0x93aeb9, night: 0x213754, ground: 0xa79680 },
-  grove: { day: 0x8aa597, night: 0x303f51, ground: 0x7b9977 },
-  summit: { day: 0x96a9bd, night: 0x3a4567, ground: 0x9a8b9a },
   home: { day: 0x343237, night: 0x343237, ground: 0xc9926c },
   lab: { day: 0x273b40, night: 0x273b40, ground: 0x87aaa2 },
   tower: { day: 0x373746, night: 0x373746, ground: 0x928cb0 },
 };
 
 type SceneKey = keyof typeof atmospheres;
-type SceneModel = Omit<ReturnType<typeof buildFieldTerrain>, 'update'> & {
-  update: (time: number, night: number, pumpElapsed?: number, fortress?: FieldView['fortress'], resonance?: number) => void;
+type SceneModel = {
+  group: Group;
+  update: (time: number, night: number, pumpElapsed?: number, fortress?: FieldView['fortress'], resonance?: number, power?: GridReading) => void;
   lamps?: CityLamp[];
   optics?: ReturnType<typeof buildCityLight>;
   crowd?: ReturnType<typeof buildCityCrowd>;
   reflections?: ReturnType<typeof buildCityReflections>;
   dispose?: () => void;
   occluders?: { object: Object3D; bounds: Box3 }[];
+  trialSignal?: ReturnType<typeof buildTrialSignal>;
+  setWindowNight?: (night: boolean) => void;
+  roomLights?: { positions: Vector3[]; color: number };
 };
+
+function obstructionBounds(objects: readonly Object3D[]) {
+  return objects.map(object => ({ object, bounds: new Box3().setFromObject(object) }));
+}
 type SpriteShade = { x: number; z: number; at: number; shaded: number };
 
 function conversationTexture(active: boolean) {
@@ -311,6 +317,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   const localLights = Array.from({ length: 3 }, () => new PointLight(0xffbf72, 0, 4.7, 2));
   scene.add(...localLights);
   let key: SceneKey | undefined;
+  let wallRow: number | undefined;
   let previousTime = 0;
   let lastRender = -100;
   let lastActivity = -Infinity;
@@ -366,7 +373,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     return raycaster.ray;
   }
 
-  function cityBlocksRay(ray: Ray, distance: number, exceptParcel?: string) {
+  function blockedRay(ray: Ray, distance: number, exceptParcel?: string) {
     const occluders = key && cache.get(key)?.occluders;
     if (!occluders?.length) return false;
     shadowCaster.ray.copy(ray);
@@ -384,7 +391,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     cameraLine.direction.set(x, elevation, z).sub(origin);
     const range = cameraLine.direction.length();
     cameraLine.direction.divideScalar(range);
-    return cityBlocksRay(cameraLine, range - .045);
+    return blockedRay(cameraLine, range - .045);
   }
 
   function spriteLight(point: { x: number; z: number }, time: number, memory: SpriteShade): FieldSpriteLight {
@@ -392,7 +399,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     if (darkness < .96 && (time - memory.at > 110 || moved > .47)) {
       lightLine.origin.set(point.x, .51, point.z);
       lightLine.direction.copy(sun.position).sub(sun.target.position).normalize();
-      memory.shaded = Number(cityBlocksRay(lightLine, 30));
+      memory.shaded = Number(blockedRay(lightLine, 30));
       memory.x = point.x;
       memory.z = point.z;
       memory.at = time;
@@ -457,8 +464,13 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     let model = cache.get(sceneKey);
     if (!model) {
       if (room) {
-        model = { group: buildRoomModel(room), update: () => {} };
-      } else if (area === 'harbor') {
+        const interior = buildRoomModel(room);
+        const occluders = obstructionBounds(interior.obstacles).filter(({ bounds }) => bounds.max.y > .17);
+        model = {
+          group: interior.group, occluders, setWindowNight: interior.setNight, dispose: interior.dispose,
+          roomLights: { positions: interior.lamps, color: interior.lampColor }, update: () => {},
+        };
+      } else {
         const ground = buildRingGround();
         const structures = buildRingArchitecture();
         const terraces = buildRingTerraces();
@@ -471,6 +483,9 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         const transit = buildRingTransit();
         opaque.push(transit.structure, ...street.occluders);
         const ferry = buildCityFerry();
+        const trialSignal = buildTrialSignal();
+        opaque.push(trialSignal.group);
+        ground.group.add(trialSignal.group);
         const fortressExterior = buildFortressExterior();
         let fortressShadowStep = 0;
         const optics = buildCityLight(street.lamps, true);
@@ -478,7 +493,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         ground.group.add(structures, street.group, transit.group, ferry.group, optics.group, crowd.group, fortressExterior.group);
         for (const prop of props.harbor) {
           if (prop.kind !== 'beacon' && prop.kind !== 'boat') continue;
-          const object = buildFieldProp(prop, area);
+          const object = buildHarborProp(prop.kind, prop.variant);
           const point = prop.kind === 'beacon' ? ringPosition(cityLighthouseSite.x, cityLighthouseSite.z) : ringPosition(prop.x + .5, prop.y + .82);
           object.position.set(point.x, 0, point.z);
           object.rotation.y = ringAngle(prop.x + .5);
@@ -490,40 +505,32 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
           }
         }
         ground.group.updateMatrixWorld(true);
-        const occluders = opaque.map(object => ({ object, bounds: new Box3().setFromObject(object) }));
+        const occluders = obstructionBounds(opaque);
         const reflections = buildCityReflections(structures, lighthouse);
         ground.group.add(reflections.group);
         model = {
           group: ground.group,
           lamps: street.lamps,
-          optics, crowd, occluders, reflections,
-          dispose() { ferry.dispose(); gateways.dispose(); transit.dispose(); fortressExterior.dispose(); },
-          update(time, night, pumpElapsed, fortress, resonance) {
+          optics, crowd, occluders, reflections, trialSignal,
+          dispose() { trialSignal.dispose(); ferry.dispose(); gateways.dispose(); transit.dispose(); fortressExterior.dispose(); },
+          update(time, night, pumpElapsed, fortress, resonance, power = nominalPower) {
             const seaDrop = (fortress?.lift ?? 0) * fortressLiftDepth;
             const displacement = fortress?.cinematic ? Math.min(1,seaDrop*.17) * (1 - fortress.drain) : 0;
             ground.update(time, night, aerialAmount, seaDrop, displacement);
-            fortressExterior.update(fortress, time, night, aerialAmount > .40, resonance);
+            fortressExterior.update(fortress, time, night, aerialAmount > .40, resonance,power);
             const shadowStep = seaDrop ? 1 + Math.round(Math.max(0, (fortress?.drain ?? 0) - .80) * 20) : 0;
             if (shadowStep !== fortressShadowStep) renderer.shadowMap.needsUpdate = true;
             fortressShadowStep = shadowStep;
-            street.update(time, night, pumpElapsed);
-            transit.update(time, night);
+            street.update(time, night, pumpElapsed, power.city);
+            transit.update(time, night, power.city, power.phase);
             ferry.update(time, night, Math.min(1, seaDrop / (fortressLiftDepth * .84)) * 14.2);
             ferry.group.position.y = -seaDrop;
-            optics.update(night, time);
-            updateCityArchitecture(night);
-            structures.userData.update?.(time, night);
+            optics.update(night, time, power.city);
+            updateCityArchitecture(night, power.city);
+            structures.userData.update?.(time, night, power);
             terraces.update(time, night);
           },
         };
-      } else {
-        model = buildFieldTerrain(area);
-        model.group.add(buildFieldDressing(area));
-        for (const prop of props[area]) {
-          const object = buildFieldProp(prop, area);
-          object.position.set(prop.x + .5, 0, prop.y + .82);
-          model.group.add(object);
-        }
       }
       cache.set(sceneKey, model);
     }
@@ -558,7 +565,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         }
         arrows.add(arrow);
       }
-      locals = view.map.npcs.map(npc => {
+      locals = (view.location.wallPassage ? maps.harbor : view.map).npcs.map(npc => {
         const traveler = createTraveler(npc.style);
         const base = new Group();
         const npcPoint = pointAt(npc.x + .5, npc.y + .875);
@@ -576,12 +583,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       });
       lamps.length = 0;
       if (!room) {
-        const positions = props[area].filter(prop => prop.kind === 'beacon' || prop.kind === 'lamp' && area !== 'harbor').map(prop => ({
-          beacon: prop.kind === 'beacon',
-          ...(area === 'harbor' && prop.kind === 'beacon'
-            ? ringPosition(cityLighthouseSite.x, cityLighthouseSite.z) : pointAt(prop.x + .5, prop.y + 1.02)),
-          height: prop.kind === 'beacon' ? area === 'summit' ? 2.85 : cityLighthouseSite.lampHeight : 1.53,
-        }));
+        const positions: (CityLamp & { beacon: boolean })[] = [{ ...ringPosition(cityLighthouseSite.x, cityLighthouseSite.z), height: cityLighthouseSite.lampHeight, beacon: true }];
         for (const position of model.lamps ?? []) positions.push({ ...position, beacon: false });
         for (const { x, z, height, beacon } of positions) {
           const material = new SpriteMaterial({ map: glow, transparent: true, depthWrite: false, toneMapped: false, blending: AdditiveBlending });
@@ -668,11 +670,13 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       yaw = fortress.yaw;
       pitch = fortress.pitch;
     }
+    const wall = view.location.wallPassage ? wallCamera(x-.5,z-.5,mobile) : undefined;
+    if (wall) { yaw=wall.yaw; pitch=wall.pitch; }
     const turn = Math.atan2(Math.sin(yaw - viewYaw), Math.cos(yaw - viewYaw));
     viewYaw += turn * lens;
     const turning = polar && !panorama && !fortress && !calm && lens < 1 ? Math.min(.45, Math.max(0, (Math.abs(turn) - 1.05) * .26)) : 0;
     viewPitch += (Math.min(1.45, pitch + turning) - viewPitch) * lens;
-    const center = fortress ? fortress.center : panorama ? { x: Math.sin(viewYaw) * tour.advance, z: Math.cos(viewYaw) * tour.advance } : polar
+    const center = wall ? wall.center : fortress ? fortress.center : panorama ? { x: Math.sin(viewYaw) * tour.advance, z: Math.cos(viewYaw) * tour.advance } : polar
       ? streetCenter(x, z, mobile, outward, bias?.inset, bias?.lateral)
       : room ? { x: x * .42 + 12.1 * .58, z: z * .26 + 8.85 * .74 }
       : { x: x - 1.03, z: z - (mobile ? 1.61 : 2.48) };
@@ -687,14 +691,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     aimX += (center.x - aimX) * pan;
     aimZ += (center.z - aimZ) * pan;
 
-    const goalSpan = fortress ? fortress.span : focus ? (mobile ? 3.85 : 3.65) : panorama ? tour.span
+    const goalSpan = wall ? wall.span : fortress ? fortress.span : focus ? (mobile ? 3.85 : 3.65) : panorama ? tour.span
       : polar ? (mobile ? 7.45 : 8.56) + 1.70 * depth + .62 * alley
       : room ? (mobile ? 10.7 : 12.0)
       : (mobile ? 10.45 : aspect > 2.6 ? 10.8 : 12.85) + depth * 2.92;
-    const elevation = fortress ? fortress.center.y : focus ? (focus.id === 'station' || focus.id === 'market' ? .50 : .18) : panorama ? tour.elevation : polar ? .78 : 0;
+    const elevation = wall ? wall.center.y : fortress ? fortress.center.y : focus ? (focus.id === 'station' || focus.id === 'market' ? .50 : .18) : panorama ? tour.elevation : polar ? .78 : 0;
     span += (goalSpan - span) * lens;
     viewElevation += (elevation - viewElevation) * lens;
-    const distance = fortress ? fortress.distance : focus ? 5.2 : panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
+    const distance = wall ? wall.distance : fortress ? fortress.distance : focus ? 5.2 : panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
     viewDistance += (distance - viewDistance) * lens;
     const radius = viewDistance;
     if (reveal) {
@@ -760,10 +764,13 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const polar = location.area === 'harbor' && !location.room;
     const x = (step ? step.from.x + (polar ? ringXDelta(step.from.x, step.to.x) : step.to.x - step.from.x) * progress : location.x) + .5;
     const row = step ? step.from.y + (step.to.y - step.from.y) * progress : location.y;
-    const z = polar ? ringStreetRow(row) : row + .875;
-    const heroPosition = pointAt(x, z);
-    player.position.set(heroPosition.x, 0, heroPosition.z);
-    player.rotation.y = polar ? ringAngle(x) : 0;
+    const z = location.wallPassage ? row+.5 : polar ? ringStreetRow(row) : row + .875;
+    wallRow = location.wallPassage ? row : undefined;
+    const wallFeet = location.wallPassage ? wallPoint(x-.5,row) : undefined;
+    const heroPosition = wallFeet ?? pointAt(x, z);
+    player.position.set(heroPosition.x, wallFeet?.y ?? 0, heroPosition.z);
+    const forward = wallFeet ? wallPoint(x-.5,row-.1) : undefined;
+    player.rotation.y = wallFeet && forward ? Math.atan2(wallFeet.x-forward.x,wallFeet.z-forward.z) : polar ? ringAngle(x) : 0;
     const reduced = reducedMotion.matches;
     const gait = step ? (((step.from.x + step.from.y) & 1) + progress) / 2 : undefined;
     hero.pose({ facing: view.facing, time, phase: gait, running: step?.running, reduced });
@@ -785,18 +792,20 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const pathEnd = path.at(-1);
     destination.visible = Boolean(pathEnd);
     if (pathEnd) {
-      const point = pointAt(pathEnd.x + .5, pathEnd.y + .5);
-      destination.position.set(point.x, .078, point.z);
+      const spot = location.wallPassage ? wallPoint(pathEnd.x,pathEnd.y) : undefined;
+      const point = spot ?? pointAt(pathEnd.x + .5, pathEnd.y + .5);
+      destination.position.set(point.x, (spot?.y ?? 0)+.078, point.z);
     }
     pathDots.forEach((dot, index) => {
       dot.visible = index < path.length;
       if (dot.visible) {
-        const point = pointAt(path[index].x + .5, path[index].y + .5);
-        dot.position.set(point.x, .055, point.z);
+        const spot = location.wallPassage ? wallPoint(path[index].x,path[index].y) : undefined;
+        const point = spot ?? pointAt(path[index].x + .5, path[index].y + .5);
+        dot.position.set(point.x, (spot?.y ?? 0)+.055, point.z);
       }
     });
 
-    const target = !location.room && view.night ? 1 : 0;
+    const target = view.night ? (location.room ? .68 : 1) : 0;
     const twilight = polar ? 1 - Math.exp(-frameTime / 235) : .14;
     darkness = sceneChanged || reducedMotion.matches ? target : darkness + (target - darkness) * twilight;
     aim(view, x, z, time);
@@ -818,9 +827,10 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     renderer.setClearColor(haze.color);
     scene.environmentIntensity = city ? .31 - darkness * .22 : 1;
     for (const [index, { sprite, beacon }] of lamps.entries()) {
-      const activeBeacon = beacon && (location.area !== 'summit' || view.beaconLit);
+      const activeBeacon = beacon;
       const flicker = city && !reduced ? .96 + .04 * Math.sin(time * .0071 + index * 2.62) : 1;
       sprite.material.opacity = activeBeacon ? Math.max(.24, darkness * .87) : beacon ? 0 : darkness * (city ? .76 * flicker : .81);
+      if (city) sprite.material.opacity *= .12 + (view.power?.city ?? nominalPower.city) * 1.12;
       sprite.visible = sprite.material.opacity > .04;
     }
     const nearbyLights = darkness > .015 && !location.room
@@ -829,14 +839,26 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         Math.hypot(b.sprite.position.x - heroPosition.x, b.sprite.position.z - heroPosition.z))
       : [];
     localLights.forEach((light, index) => {
+      const fixture = model.roomLights?.positions[index];
+      if (fixture && model.roomLights) {
+        light.position.copy(fixture);
+        light.color.setHex(model.roomLights.color);
+        light.distance = 9.2;
+        light.intensity = 1.0 + 10.8 * darkness;
+        return;
+      }
+      light.distance = 4.7;
+      light.color.setHex(0xffbf72);
       const lamp = nearbyLights[index];
-      light.intensity = lamp ? darkness * (city ? 7.4 : 8.4) : 0;
+      light.intensity = lamp ? darkness * (city ? 8.8 * (view.power?.city ?? nominalPower.city) : 8.4) : 0;
       if (lamp) {
         light.position.copy(lamp.sprite.position);
         if (city) light.position.y -= .34;
       }
     });
-    model.update(reduced ? 0 : time, darkness, view.pumpElapsed, view.fortress, view.resonance);
+    model.trialSignal?.update(view.beaconLit);
+    model.setWindowNight?.(view.night);
+    model.update(reduced ? 0 : time, darkness, view.pumpElapsed, view.fortress, view.resonance, view.power);
     const cityWideShot = view.overview || previousFortressShot;
     model.crowd?.update(time, x, z, reduced, cssWidth < 545, cityWideShot);
     effects.update(time, view, heroPosition.x, heroPosition.z, progress, darkness, width / cssWidth, reduced);
@@ -860,12 +882,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       sylveon.root.visible = false;
     }
     const pet = companionPosition(view, progress);
-    const petPoint = pointAt(pet.x + .5, polar ? ringStreetRow(pet.y) : pet.y + .875);
+    const wallPet = location.wallPassage ? wallPoint(pet.x,pet.y) : undefined;
+    const petPoint = wallPet ?? pointAt(pet.x + .5, polar ? ringStreetRow(pet.y) : pet.y + .875);
     partner.update(companionImage, {
       ...petPoint, camera, time, reduced, night: darkness, passing: pet.passing,
       lookX: visibleTarget.x, lookZ: visibleTarget.z, id: view.companionId, sprint: step?.running,
-      lighting: polar && companionImage ? spriteLight(petPoint, time, companionShade) : undefined,
+      lighting: !location.room && companionImage ? spriteLight(petPoint, time, companionShade) : undefined,
     });
+    if (wallPet) partner.root.position.y += wallPet.y;
     model.reflections?.update(renderer, camera, time, darkness, {
       mobile: cssWidth < 550, reducedMotion: reduced, enabled: renderCost < 16 || !step,
       basinRadius: view.fortress?.lift ? fortressRadius - .02 : undefined,
@@ -881,14 +905,19 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   }
 
   function projectPoint(x: number, y: number) {
-    const point = pointAt(x / TILE, y / TILE);
-    projected.set(point.x, 0, point.z).project(camera);
+    const spot = wallRow !== undefined ? wallPoint(x/TILE-.5,y/TILE-.5) : undefined;
+    const point = spot ?? pointAt(x / TILE, y / TILE);
+    projected.set(point.x, spot?.y ?? 0, point.z).project(camera);
     return { x: (projected.x + 1) * width / 2, y: (1 - projected.y) * height / 2, scale: height / (span * TILE) };
   }
 
   function pointInWorld(x: number, y: number) {
+    if (wallRow !== undefined) return pickWallTile(x,y,wallRow,p=>{
+      projected.set(p.x,p.y,p.z).project(camera);
+      return {x:(projected.x+1)*width/2,y:(1-projected.y)*height/2,depth:projected.z};
+    });
     const ray = screenRay(x, y);
-    if (!ray.intersectPlane(ground, planeHit) || cityBlocksRay(ray, ray.origin.distanceTo(planeHit) - .02)) return;
+    if (!ray.intersectPlane(ground, planeHit) || blockedRay(ray, ray.origin.distanceTo(planeHit) - .02)) return;
     const point = key === 'harbor' ? ringCoordinates(planeHit.x, planeHit.z) : { x: planeHit.x, z: planeHit.z };
     return { x: point.x * TILE, y: point.z * TILE };
   }
@@ -908,42 +937,38 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         distance = hit.distance;
       }
     }
-    if (nearest && !cityBlocksRay(ray, distance - .025)) return nearest;
+    if (nearest && !blockedRay(ray, distance - .025)) return nearest;
   }
 
   function hitActor(x: number, y: number, candidates: FieldView['map']['npcs'], doorway: (actor: FieldView['map']['npcs'][number]) => boolean) {
     const ray = screenRay(x, y);
-    const radius = cssWidth < 550 ? .49 : .42;
     let nearest: FieldView['map']['npcs'][number] | undefined;
     let best = Infinity;
     for (const { npc: actor, traveler, marker, pickBounds } of locals) {
       if (!candidates.includes(actor)) continue;
-      const center = pointAt(actor.x + .5, actor.y + .875);
       let inside: Vector3 | null = null;
-      if (key === 'harbor') {
-        if (ray.intersectsBox(pickBounds)) {
-          // Mobile target padding should not turn the cobbles in front of a person into a doorway.
-          hits.length = 0;
-          raycaster.intersectObject(traveler.model, true, hits);
-          if (marker.visible) raycaster.intersectObject(marker, false, hits);
-          inside = hits[0]?.point ?? null;
-        }
-      } else {
-        obstacle.min.set(center.x - radius, .02, center.z - radius);
-        obstacle.max.set(center.x + radius, 2.11, center.z + radius);
-        inside = ray.intersectBox(obstacle, actorHit);
+      if (ray.intersectsBox(pickBounds)) {
+        hits.length = 0;
+        raycaster.intersectObject(traveler.model, true, hits);
+        if (marker.visible) raycaster.intersectObject(marker, false, hits);
+        inside = hits[0]?.point ?? null;
       }
       let entry: string | undefined;
       if (!inside && doorway(actor)) {
         const door = pointAt(actor.x + .5, actor.y - .075);
-        obstacle.min.set(door.x - .60, .08, door.z - .32);
-        obstacle.max.set(door.x + .60, 2.30, door.z + .32);
+        const cityDoor = key === 'harbor';
+        const halfWidth = cityDoor ? .60 : .50;
+        const halfDepth = cityDoor ? .32 : .15;
+        obstacle.min.set(door.x - halfWidth, .08, door.z - halfDepth);
+        obstacle.max.set(door.x + halfWidth, cityDoor ? 2.30 : 1.52, door.z + halfDepth);
         inside = ray.intersectBox(obstacle, actorHit);
         if (actor.event === 'about') entry = 'archive';
+        if (actor.event === 'projects') entry = 'market';
+        if (actor.event === 'contact') entry = 'central-station';
       }
       if (!inside) continue;
       const depth = ray.origin.distanceTo(inside);
-      if (depth < best && !cityBlocksRay(ray, depth - .033, entry)) {
+      if (depth < best && !blockedRay(ray, depth - .033, entry)) {
         best = depth;
         nearest = actor;
       }
@@ -984,7 +1009,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
 
   return {
     surface, draw, resize, projectPoint, pointInWorld, hitSurvey, hitActor, destroy,
-    resetCamera: () => { previousTime = 0; needsFrame = true; },
+    resetCamera: () => { previousTime = 0; needsFrame = true; renderer.shadowMap.needsUpdate = true; },
     hasStreetFrame: () => key === 'harbor' && !previousOverview && !previousFortressShot && width > 0 && height > 0,
     getCamera: () => ({ x: aimX * TILE, y: aimZ * TILE, scale: height / (span * TILE), depth, width, height }),
   };

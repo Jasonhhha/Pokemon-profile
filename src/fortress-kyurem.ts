@@ -1,3 +1,4 @@
+import { powerBranches } from './fortress-power-paths';
 import { glacialHeightAt } from './fortress-glacier';
 import { createLegPlant } from './fortress-leg-plant';
 import {
@@ -116,6 +117,9 @@ export function createKyuremActor() {
     jaws: SkinnedMesh[] = [];
   const soles: { mesh: SkinnedMesh; index: number; side: number }[] = [];
   const footprints = [new Vector3(), new Vector3()];
+  const crystals = powerBranches.map(branch => new Vector3(...branch.stream[0]));
+  const crystalMeshes: SkinnedMesh[] = [];
+  const crystalContacts: { shape: SkinnedMesh; vertex: number }[] = [];
   const plant: (((drop: number) => void) | undefined)[] = [];
   const gaps = [0, 0],
     totals = [0, 0];
@@ -253,6 +257,7 @@ export function createKyuremActor() {
           if (!(material instanceof MeshStandardMaterial)) return;
           const part = material.name;
           const ice = part === 'Material #12';
+          if (ice) crystalMeshes.push(node);
           if (material.map?.image) unpainted.delete(part);
           material.metalness = ice ? 0.14 : 0.035;
           material.roughness = ice ? 0.28 : 0.7;
@@ -396,6 +401,25 @@ export function createKyuremActor() {
           sampleSoles(false);
         }
         sampleSoles(true);
+        if (!crystalContacts.length) {
+          // Locate the ice surface once in its actual posed mesh, then follow those skinned vertices.
+          for (const target of crystals) {
+            let closest: { shape: SkinnedMesh; vertex: number } | undefined;
+            let distance = Infinity;
+            for (const shape of crystalMeshes) for (let vertex = 0; vertex < shape.geometry.attributes.position.count; vertex++) {
+              shape.getVertexPosition(vertex, temp).applyMatrix4(shape.matrixWorld);
+              const next = temp.distanceToSquared(target);
+              if (next < distance) {
+                distance = next;
+                closest = { shape, vertex };
+              }
+            }
+            if (closest) crystalContacts.push(closest);
+          }
+        }
+        crystalContacts.forEach(({ shape, vertex }, i) => {
+          shape.getVertexPosition(vertex, crystals[i]).applyMatrix4(shape.matrixWorld);
+        });
       }
       if (portrait.visible) {
         portrait.position.set(8.35 + Math.sin(bearing) * lunge * 0.18, glacierHeight + 0.018, 7.18);
@@ -410,6 +434,7 @@ export function createKyuremActor() {
       }
     },
     footprints,
+    crystals,
     muzzle(out: Vector3) {
       if (head) return head.localToWorld(out.copy(muzzleLocal));
       return out.set(6.01, 1.8, 8.27);

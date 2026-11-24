@@ -110,13 +110,13 @@ export const creatures = {
     ['tackle', 'quick-attack', 'wing-attack', 'growl'], [40, 55, 30, 30, 30, 60], 255),
   shinx: species('小猫怪', 'Shinx', 403, ['electric'], 'shinx', '太阳下山后，偶尔能看到它的尾尖在草里发亮。',
     ['tackle', 'spark', 'bite', 'leer'], [45, 65, 34, 40, 34, 45], 235),
-  buizel: species('泳圈鼬', 'Buizel', 418, ['water'], 'sinnoh/buizel', '住在雾杉小径水流较慢的地方，时常露出橙色尾巴。',
+  buizel: species('泳圈鼬', 'Buizel', 418, ['water'], 'sinnoh/buizel', '时常浮在东渡口的背流处，两条橙色尾巴露出水面。',
     ['quick-attack', 'water-gun', 'aqua-jet', 'growl'], [55, 65, 35, 60, 30, 85], 190),
-  drifloon: species('飘飘球', 'Drifloon', 425, ['ghost', 'flying'], 'sinnoh/drifloon', '喜欢顺着杉林的雾气漂到观测站屋檐下。',
+  drifloon: species('飘飘球', 'Drifloon', 425, ['ghost', 'flying'], 'sinnoh/drifloon', '薄雾升起时，会顺着河风飘到绿廊的屋檐下。',
     ['astonish', 'gust', 'ominous-wind', 'focus-energy'], [90, 50, 34, 60, 44, 70], 125),
-  riolu: species('利欧路', 'Riolu', 447, ['fighting'], 'riolu', '观测站的人常听见它在清晨练习步法。',
+  riolu: species('利欧路', 'Riolu', 447, ['fighting'], 'riolu', '绿廊的陪练说，清早能听见它在拱廊下练习步法。',
     ['quick-attack', 'force-palm', 'feint', 'screech'], [40, 70, 40, 35, 40, 60], 75),
-  gible: species('圆陆鲨', 'Gible', 443, ['dragon', 'ground'], 'gible', '喜欢躲在高地风塔附近的岩缝里。',
+  gible: species('圆陆鲨', 'Gible', 443, ['dragon', 'ground'], 'gible', '喜欢躲进东渡口防波堤的岩缝。',
     ['tackle', 'bulldoze', 'dragon-claw', 'sand-attack'], [58, 70, 45, 40, 45, 42], 45),
   snover: species('雪笠怪', 'Snover', 459, ['grass', 'ice'], 'sinnoh/snover', '远看像一棵矮杉，风大的时候才会匆匆挪窝。',
     ['powder-snow', 'razor-leaf', 'ice-shard', 'leer'], [60, 62, 50, 62, 60, 40], 120),
@@ -133,7 +133,7 @@ export type BattleProgress = {
   wins: number;
   trialWon: boolean;
 };
-export type BattleEncounter = { creature: CreatureId; level: number; trial?: boolean; trainer?: string; area?: 'harbor' | 'grove' | 'summit' };
+export type BattleEncounter = { creature: CreatureId; level: number; trial?: boolean; trainer?: string; area?: 'harbor' };
 export type BattleResult = { outcome: 'win' | 'caught' | 'fled' | 'lost'; progress: BattleProgress; creature: CreatureId };
 
 const supplies = { medicine: 3, charms: 4 };

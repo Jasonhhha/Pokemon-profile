@@ -1,9 +1,10 @@
 import { BufferGeometry, Float32BufferAttribute, Points, ShaderMaterial } from 'three';
 import type { FortressInteriorFrame } from './field-fortress-state';
-import { mazeFloors } from './fortress-maze';
+import { createFrostCloud, frostParticleLimit } from './fortress-frost-contact';
 
 export function createFrostFootfalls() {
-  const count = 18;
+  const count = frostParticleLimit;
+  const clouds = createFrostCloud();
   const starts = new Float32Array(count * 4);
   for (let i = 0; i < count; i++) starts[i * 4 + 3] = -100;
   const origins = new Float32BufferAttribute(new Float32Array(count * 3), 3);
@@ -11,13 +12,9 @@ export function createFrostFootfalls() {
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', origins);
   geometry.setAttribute('flight', flight);
-  geometry.setAttribute(
-    'frostCloud',
-    new Float32BufferAttribute(
-      Array.from({ length: count }, (_, i) => Number(i % 3 === 0)),
-      1,
-    ),
-  );
+  const kind = new Float32BufferAttribute(new Float32Array(count), 1);
+  geometry.setAttribute('frostCloud', kind);
+  geometry.setDrawRange(0, 0);
   const material = new ShaderMaterial({
     depthWrite: false,
     transparent: true,
@@ -51,59 +48,21 @@ export function createFrostFootfalls() {
   const mist = new Points(geometry, material);
   mist.frustumCulled = false;
   mist.renderOrder = 5;
-  let next = 0,
-    lastPhase = -1,
-    lastFoot = -1,
-    lastEvent = -Infinity,
-    lastFrame = -Infinity;
   return {
     mesh: mist,
     update(frame: FortressInteriorFrame, height: number) {
-      const now = frame.now * 0.001;
-      const cut = now < lastFrame || now - lastFrame > 0.35;
-      lastFrame = now;
-      if (cut || frame.reduced) {
-        lastEvent = -Infinity;
-        lastPhase = lastFoot = -1;
-        mist.visible = false;
-        for (let i = 0; i < count; i++) flight.setW(i, -100);
-        flight.needsUpdate = true;
-        if (frame.reduced) return;
+      if (clouds.advance(frame)) {
+        clouds.particles.forEach((p, i) => {
+          origins.setXYZ(i, p.x, p.y, p.z);
+          flight.setXYZW(i, p.vx, p.vy, p.vz, p.at);
+          kind.setX(i, Number(p.mist));
+        });
+        origins.needsUpdate = flight.needsUpdate = kind.needsUpdate = true;
+        geometry.setDrawRange(0, clouds.particles.length);
       }
-      material.uniforms.clock.value = now;
+      mist.visible = clouds.particles.length > 0;
+      material.uniforms.clock.value = frame.now * 0.001;
       material.uniforms.viewport.value = height;
-      const phase = frame.gaitPhase;
-      const fraction = phase === undefined ? -1 : (phase * 2) % 1;
-      const foot = phase === undefined ? -1 : Number(phase >= 0.5);
-      // The puff is released at sole contact, once per stride half, only on exposed ice.
-      if (phase !== undefined && fraction >= 0.43 && (foot !== lastFoot || lastPhase < 0.43) && now - lastEvent > 0.1) {
-        const bearing = { up: 0, down: Math.PI, left: -Math.PI / 2, right: Math.PI / 2 }[frame.facing];
-        const offset = phase < 0.5 ? -0.11 : 0.11;
-        const x = frame.x + Math.cos(bearing) * offset,
-          z = frame.y + Math.sin(bearing) * offset;
-        if (mazeFloors.catacomb.tiles[Math.floor(z)]?.[Math.floor(x)] === 'ice') {
-          lastEvent = now;
-          for (let n = 0; n < 3; n++) {
-            const id = next;
-            next = (next + 1) % count;
-            const cloud = n === 0,
-              angle = bearing + (n - 1) * 0.58 + 0.19 * Math.sin(id * 7.9);
-            const speed = cloud ? 0.25 : 0.42 + 0.13 * Math.sin(id);
-            origins.setXYZ(id, x, cloud ? 0.094 : 0.043, z);
-            flight.setXYZW(
-              id,
-              -speed * Math.sin(angle),
-              cloud ? 0.053 : 0.48 + 0.11 * Math.sin(id * 4.6),
-              speed * Math.cos(angle),
-              now,
-            );
-          }
-          origins.needsUpdate = flight.needsUpdate = true;
-        }
-      }
-      lastPhase = fraction;
-      lastFoot = foot;
-      mist.visible = now - lastEvent < 0.7;
     },
     dispose() {
       geometry.dispose();

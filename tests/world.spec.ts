@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-type Location = { area: 'harbor' | 'grove' | 'summit'; x: number; y: number; room?: 'home' | 'lab' | 'tower' };
+type Location = { area: 'harbor'; x: number; y: number; room?: 'home' | 'lab' | 'tower' };
 type Frame = { x: number; y: number; scale: number; depth: number; width: number; height: number };
 type FieldWindow = Window & {
   __field?: { getLocation: () => Location; getCamera: () => Frame; projectPoint: (x: number, y: number) => { x: number; y: number }; getRustle: () => { x: number; y: number } | null };
@@ -103,23 +103,29 @@ test('tapping the city guide from the street hits the 3D actor and routes to a c
   await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 13, y: 12 });
 });
 
-for (const renderer of ['webgl', 'canvas2d'] as const) {
-  test(`Archive touch in ${renderer} distinguishes the cobbles from the entrance`, async ({ browser }) => {
+const entrances = [
+  { site: 'Archive', column: 10, room: 'home', host: 12, panel: '王禹浩' },
+  { site: 'Market', column: 24, room: 'lab', host: 14, panel: '研究档案' },
+  { site: 'Station', column: 30, room: 'tower', host: 10, panel: '联系我' },
+] as const;
+
+for (const renderer of ['webgl', 'canvas2d'] as const) for (const door of entrances) {
+  test(`${door.site} touch in ${renderer} distinguishes the cobbles, entrance and host`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
     try {
       const page = await context.newPage();
-      await page.addInitScript(renderer => {
-        localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 9, y: 11 } }));
+      await page.addInitScript(({ renderer, column }) => {
+        localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: column - 1, y: 11 } }));
         if (renderer === 'canvas2d') {
           const canvas = HTMLCanvasElement.prototype;
           canvas.getContext = new Proxy(canvas.getContext, {
             apply: (target, self, args) => /^(webgl|experimental-webgl)/.test(args[0]) ? null : Reflect.apply(target, self, args),
           });
         }
-      }, renderer);
+      }, { renderer, column: door.column });
       await ready(page);
       const canvas = field(page).locator('canvas');
-      test.skip(renderer === 'webgl' && await canvas.getAttribute('data-renderer') !== 'webgl', 'This browser has no available WebGL context');
+      if (renderer === 'webgl') test.skip(!await page.evaluate(() => Boolean(document.createElement('canvas').getContext('webgl2'))), 'This browser has no available WebGL context');
       await expect(canvas).toHaveAttribute('data-renderer', renderer);
       const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);
       await page.getByRole('button', { name: '返回街道', exact: true }).tap();
@@ -134,10 +140,14 @@ for (const renderer of ['webgl', 'canvas2d'] as const) {
         }, { column, row, height });
         await page.touchscreen.tap(target.x, target.y);
       };
-      await tapPoint(10.2, 11.2);
-      await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 10, y: 11 });
-      await tapPoint(10.5, 9.925, 13);
-      await expect(page.locator('.game-viewport')).toHaveAttribute('data-room', 'home');
+      if (door.room === 'home') {
+        await tapPoint(door.column + .2, 11.2);
+        await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: door.column, y: 11 });
+      }
+      await tapPoint(door.column + .5, 9.925, 13);
+      await expect(page.locator('.game-viewport')).toHaveAttribute('data-room', door.room);
+      await tapPoint(door.host + .5, 7.875, 12);
+      await expect(page.getByRole('dialog', { name: door.panel, exact: true })).toBeVisible();
     } finally {
       await context.close();
     }
@@ -261,38 +271,44 @@ test('the ring atlas walks to the courtyards and records observations only at th
     await map.getByRole('button', { name: '沿街步行' }).click();
     await expect(page.locator('.game-hint')).toContainText(`观察${subject}`, { timeout: 23000 });
     await expect(page.locator('.map-district')).toHaveText(site);
-    await expect(page.locator('.journal-map-link b')).toHaveText(`${index} / 4`);
+    await expect(page.getByRole('button', { name: /街区手记/ }).locator('b')).toHaveText(`${index} / 4`);
     await field(page).press('e');
     await expect(page.locator('.field-dialogue strong')).toHaveText(subject);
-    await expect(page.locator('.journal-map-link b')).toHaveText(`${index + 1} / 4`);
+    await expect(page.getByRole('button', { name: /街区手记/ }).locator('b')).toHaveText(`${index + 1} / 4`);
     await page.getByRole('button', { name: '结束' }).click();
   }
   const supplies = () => page.locator('.field-supplies b').first();
   await expect(supplies()).toHaveText('5');
   await page.reload();
-  await expect(page.locator('.journal-map-link b')).toHaveText('4 / 4');
+  await expect(page.getByRole('button', { name: /街区手记/ }).locator('b')).toHaveText('4 / 4');
   await page.getByRole('button', { name: '返回街道' }).click();
   await field(page).press('e');
   await expect(page.locator('.field-dialogue strong')).toHaveText('信号场站钟');
   await expect(supplies()).toHaveText('5');
 });
 
-test('touch can take over an atlas walk and visit the ferry without boarding', async ({ browser }) => {
+test('touch can interrupt an atlas walk and visit the wharf without starting a trial', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 320, height: 740 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
   try {
     const page = await context.newPage();
     await ready(page);
-    await page.getByRole('button', { name: '群岛航线' }).tap();
+    await page.getByRole('button', { name: '环城地图' }).tap();
     const atlas = page.getByRole('region', { name: '环城步行图' });
-    await atlas.getByLabel('步行目的地').selectOption('ferry');
+    for (const pin of await atlas.locator('.city-chart-pin').all()) {
+      await pin.scrollIntoViewIfNeeded();
+      const box = (await pin.boundingBox())!;
+      await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+      await expect(pin).toHaveAttribute('aria-pressed', 'true');
+    }
+    await atlas.getByLabel('步行目的地').selectOption('trial');
     await atlas.getByRole('button', { name: '沿街步行' }).tap();
     await expect.poll(() => position(page)).not.toEqual({ area: 'harbor', x: 12, y: 12 });
     await page.getByRole('button', { name: '向下移动' }).tap();
     await expect(page.locator('.game-hint')).not.toContainText('步行前往');
-    await page.getByRole('button', { name: '群岛航线' }).tap();
-    await atlas.getByLabel('步行目的地').selectOption('ferry');
+    await page.getByRole('button', { name: '环城地图' }).tap();
+    await atlas.getByLabel('步行目的地').selectOption('trial');
     await atlas.getByRole('button', { name: '沿街步行' }).tap();
-    await expect.poll(() => position(page), { timeout: 18000 }).toEqual({ area: 'harbor', x: 37, y: 15 });
+    await expect.poll(() => position(page), { timeout: 18000 }).toEqual({ area: 'harbor', x: 36, y: 12 });
     await expect(page.locator('.game-viewport')).toHaveAttribute('data-area', 'harbor');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   } finally { await context.close(); }
@@ -304,7 +320,7 @@ test('the greenway itinerary takes the shortest detour with the fewest wild-gras
     location: { area: 'harbor', x: 18, y: 15 },
   })));
   await ready(page);
-  await page.getByRole('button', { name: '群岛航线' }).click();
+  await page.getByRole('button', { name: '环城地图' }).click();
   const atlas = page.getByRole('region', { name: '环城步行图' });
   await atlas.getByLabel('步行目的地').selectOption('greenway');
   await expect(atlas).toContainText('16 步 · 途经 1 格高草');
@@ -366,7 +382,7 @@ test('guide, collision, and map shortcuts work with an older visited save', asyn
   await expect(field(page)).toBeFocused();
   await expect(page.locator('.journey-count')).toHaveText('1/3');
   await page.keyboard.press('m');
-  await expect(page.getByRole('dialog', { name: '群岛航线' })).toContainText('当前位置');
+  await expect(page.getByRole('dialog', { name: '环城地图' })).toContainText('当前位置');
   await page.keyboard.press('Escape');
   await page.reload();
   await expect(page.locator('.journey-count')).toHaveText('1/3');
@@ -402,11 +418,11 @@ test('real species, move PP, a catch, working Pokédex, and a selected lead pers
   await expect(pound).toContainText('PP 34/35');
   await battle.getByRole('button', { name: '投掷精灵球' }).click();
   await expect(battle.getByRole('status')).toContainText('姆克儿');
-  await expect(battle.getByRole('button', { name: '返回原野' })).toBeVisible();
+  await expect(battle.getByRole('button', { name: '返回环城' })).toBeVisible();
   await page.reload();
   await expect(page.locator('.field-supplies')).toContainText('精灵球 3');
   await page.getByRole('button', { name: '图鉴', exact: true }).click();
-  const dex = page.getByRole('dialog', { name: '群岛图鉴' });
+  const dex = page.getByRole('dialog', { name: '环城图鉴' });
   await expect(dex.locator('.dex-tally')).toContainText('已入队 2/8');
   await dex.getByRole('button', { name: /姆克儿/ }).click();
   await expect(dex.locator('.dex-species')).toContainText('姆克儿');
@@ -423,24 +439,20 @@ test('real species, move PP, a catch, working Pokédex, and a selected lead pers
   await expect(page.locator('.lead-status')).toContainText('姆克儿');
 });
 
-test('the route connects all islands and unlocks return fast travel', async ({ page }) => {
+test('the wharf remains walkable to the end and the city map contains the local destinations', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 37, y: 15 } })));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await ready(page);
-  await field(page).focus();
-  await step(page, 'Right');
-  await step(page, 'Up');
-  await step(page, 'Right', 6);
-  await step(page, 'Down');
-  await step(page, 'Right', 18);
-  await step(page, 'Down', 4);
-  await expect(page.locator('.game-viewport')).toHaveAttribute('data-area', 'grove');
-  await step(page, 'Right', 38);
-  await expect(page.locator('.game-viewport')).toHaveAttribute('data-area', 'summit');
-  await page.getByRole('button', { name: '群岛航线' }).click();
-  const route = page.getByRole('dialog', { name: '群岛航线' });
-  await expect(route.getByRole('button', { name: '前往' })).toHaveCount(2);
-  await route.getByRole('button', { name: '前往' }).first().click();
-  await expect(page.locator('.game-viewport')).toHaveAttribute('data-area', 'harbor');
-  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 12, y: 12 });
+  await page.getByRole('button', { name: '返回街道', exact: true }).click();
+  await clickTile(page, 37, 16);
+  await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 37, y: 16 });
+  await page.getByRole('button', { name: '环城地图', exact: true }).click();
+  const map = page.getByRole('dialog', { name: '环城地图' });
+  await expect(map.locator('article.route-card')).toHaveCount(1);
+  await expect(map.getByRole('button', { name: '前往', exact: true })).toHaveCount(0);
+  for (const name of ['潮汐档案屋', '市集研究室', '中央车站信号室', '绿廊陪练', '东渡口试炼']) {
+    await expect(map.getByRole('button', { name, exact: true })).toBeVisible();
+  }
 });
 
 test('the dock perspective preserves click-to-move coordinates', async ({ page }) => {
@@ -464,7 +476,11 @@ test('WebGL renders at the viewport resolution and falls back after context loss
         return context;
       },
     });
-    Object.assign(window, { loseFieldGraphics: () => webgl?.getExtension('WEBGL_lose_context')?.loseContext() });
+    let extension: WEBGL_lose_context | null = null;
+    Object.assign(window, {
+      loseFieldGraphics() { extension = webgl?.getExtension('WEBGL_lose_context') ?? null; extension?.loseContext(); },
+      restoreFieldGraphics() { extension?.restoreContext(); },
+    });
   });
   await ready(page);
   const available = await page.evaluate(() => Boolean(document.createElement('canvas').getContext('webgl2')));
@@ -479,7 +495,10 @@ test('WebGL renders at the viewport resolution and falls back after context loss
   await page.evaluate(() => (window as Window & { loseFieldGraphics: () => void }).loseFieldGraphics());
   await expect(canvas).toHaveAttribute('data-renderer', 'canvas2d');
   await page.waitForFunction(() => (window as FieldWindow).__field!.getCamera().width > 356);
-  await clickTile(page, 10, 8);
+  // Open sea beyond the northern quay. The former target projects onto the archive door at some viewport sizes.
+  await canvas.scrollIntoViewIfNeeded();
+  const overviewBounds = (await canvas.boundingBox())!;
+  await page.mouse.click(overviewBounds.x + overviewBounds.width * .04, overviewBounds.y + overviewBounds.height * .12);
   await expect(page.locator('.game-hint')).toContainText('这里无法通行');
   expect(await position(page)).toEqual({ area: 'harbor', x: 12, y: 12 });
   const overviewScale = await page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale);
@@ -487,12 +506,15 @@ test('WebGL renders at the viewport resolution and falls back after context loss
   await expect.poll(() => page.evaluate(() => (window as FieldWindow).__field!.getCamera().scale)).toBeGreaterThan(overviewScale * 1.5);
   await clickTile(page, 11, 12);
   await expect.poll(() => position(page)).toEqual({ area: 'harbor', x: 11, y: 12 });
+  await page.evaluate(() => (window as Window & {restoreFieldGraphics: () => void}).restoreFieldGraphics());
+  await expect(canvas).toHaveAttribute('data-renderer','webgl');
+  expect(await position(page)).toEqual({area:'harbor',x:11,y:12});
 });
 
 test('expanded play contains keyboard focus and returns to the map on Escape', async ({ page }) => {
   await ready(page);
   await page.getByRole('button', { name: '放大画面' }).click();
-  const expanded = page.getByRole('dialog', { name: '潮汐群岛游戏' });
+  const expanded = page.getByRole('dialog', { name: '潮汐环城游戏' });
   await expect(expanded).toHaveAttribute('aria-modal', 'true');
   await expect(field(page)).toBeFocused();
   for (let i = 0; i < 12; i++) {
@@ -515,20 +537,20 @@ test('a reachable patch of rustling grass produces a real rare encounter', async
   await expect(page.locator('.game-hint')).toContainText('草在晃动');
   await clickTile(page, patch!.x, patch!.y);
   const battle = page.getByRole('region', { name: '野外战斗' });
-  await expect(battle.getByRole('meter', { name: '小猫怪体力' })).toBeVisible();
-  await expect(battle.locator('.battle-status--enemy')).toContainText('LV.5');
+  await expect(battle.getByRole('meter', { name: '圆陆鲨体力' })).toBeVisible();
+  await expect(battle.locator('.battle-status--enemy')).toContainText('LV.7');
 });
 
 test('the optional practice grants its first reward without completing the final trial', async ({ page }) => {
   await page.addInitScript(() => {
     Math.random = () => .35;
     if (localStorage.getItem('tidebound-save-v1')) return;
-    localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'grove', x: 14, y: 11 } }));
+    localStorage.setItem('tidebound-save-v1', JSON.stringify({ location: { area: 'harbor', x: 21, y: 13 } }));
   });
   await ready(page);
   await field(page).focus();
   await page.keyboard.press('e');
-  const invitation = page.getByRole('group', { name: '与林间陪练的对话' });
+  const invitation = page.getByRole('group', { name: '与绿廊陪练的对话' });
   await invitation.getByRole('button', { name: '稍后' }).click();
   await expect(field(page)).toBeFocused();
   await page.keyboard.press('e');
@@ -539,7 +561,7 @@ test('the optional practice grants its first reward without completing the final
   await expect(battle.getByRole('button', { name: '撤退' })).toBeDisabled();
   await battle.getByRole('button', { name: '泡沫光线' }).click();
   await battle.getByRole('button', { name: '泡沫光线' }).click();
-  await battle.getByRole('button', { name: '返回原野' }).click();
+  await battle.getByRole('button', { name: '返回环城' }).click();
   await expect(invitation).toContainText('两颗精灵球');
   await expect(page.locator('.field-supplies')).toContainText('精灵球 6');
   await expect(page.locator('.journey-count')).toHaveText('0/3');
@@ -547,13 +569,13 @@ test('the optional practice grants its first reward without completing the final
   await expect(page.locator('.field-supplies')).toContainText('精灵球 6');
 });
 
-test('the real-species summit trial resolves and preserves the victory on direct reload', async ({ page }) => {
+test('the real-species east wharf trial resolves and preserves the victory on direct reload', async ({ page }) => {
   await page.addInitScript(() => {
     Math.random = () => 0.35;
     if (localStorage.getItem('tidebound-save-v1')) return;
     localStorage.setItem('tidebound-save-v1', JSON.stringify({
-      location: { area: 'summit', x: 30, y: 9 },
-      visited: ['harbor', 'grove', 'summit'],
+      location: { area: 'harbor', x: 36, y: 12 },
+      visited: ['harbor'],
       greeted: true,
       battle: {
         team: [{ id: 'piplup', level: 5, hp: 21, xp: 0 }, { id: 'starly', level: 3, hp: 15, xp: 0 }],
@@ -564,10 +586,10 @@ test('the real-species summit trial resolves and preserves the victory on direct
   await ready(page);
   await field(page).focus();
   await page.keyboard.press('e');
-  const challenge = page.getByRole('group', { name: '与高地守望员的对话' });
+  const challenge = page.getByRole('group', { name: '与东渡口守望员的对话' });
   await expect(challenge).toContainText('特别怕冰');
   await challenge.getByRole('button', { name: '开始试炼' }).click();
-  const battle = page.getByRole('region', { name: '高地试炼' });
+  const battle = page.getByRole('region', { name: '东渡口试炼' });
   await expect(battle.getByRole('meter', { name: '圆陆鲨体力' })).toBeVisible();
   await expect(battle.getByRole('button', { name: '投掷精灵球' })).toBeDisabled();
   await expect(battle.getByRole('button', { name: '撤退' })).toBeDisabled();
@@ -575,13 +597,13 @@ test('the real-species summit trial resolves and preserves the victory on direct
     await battle.getByRole('button', { name: move, exact: true }).click();
   }
   await expect(battle.getByRole('status')).toContainText('试炼');
-  await expect(battle.getByRole('button', { name: '返回原野' })).toBeVisible();
+  await expect(battle.getByRole('button', { name: '返回环城' })).toBeVisible();
   await expect(page.locator('.journey-count')).toHaveText('3/3');
   await page.reload();
   await expect(page.locator('.journey-count')).toHaveText('3/3');
   await field(page).focus();
   await page.keyboard.press('e');
-  await expect(page.getByRole('group', { name: '与高地守望员的对话' })).toContainText('风塔已经点亮');
+  await expect(page.getByRole('group', { name: '与东渡口守望员的对话' })).toContainText('信号灯');
 });
 
 test('the personal profile, research, and mail entry points still work', async ({ page }) => {
@@ -624,7 +646,7 @@ test('an early adventure save keeps discovery, supplies, and a migrated real-spe
   await expect(page.locator('.lead-status')).toContainText('泳圈鼬');
   await expect(page.locator('.field-supplies')).toContainText('精灵球 1');
   await expect(page.locator('.journey-count')).toHaveText('2/3');
-  expect(await position(page)).toEqual({ area: 'grove', x: 3, y: 12 });
+  expect(await position(page)).toEqual({ area: 'harbor', x: 24, y: 11 });
   await page.reload();
   await expect(page.locator('.lead-status')).toContainText('泳圈鼬');
 });
@@ -634,7 +656,7 @@ test('the original profile partner carries forward into a new game', async ({ pa
   await ready(page);
   await expect(page.locator('.lead-status')).toContainText('圆陆鲨');
   await page.getByRole('button', { name: '查看圆陆鲨的图鉴' }).click();
-  await expect(page.getByRole('dialog', { name: '群岛图鉴' }).locator('.type-badges')).toContainText('龙');
+  await expect(page.getByRole('dialog', { name: '环城图鉴' }).locator('.type-badges')).toContainText('龙');
 });
 
 test('a migrated Starly can catch a different species in the first ordinary encounter', async ({ page }) => {
@@ -671,10 +693,10 @@ test('ambience, movement, battle, and menus stay usable on a 320px touch screen'
   await expect(battle).toBeVisible();
   expect(await fits()).toBe(true);
   await battle.getByRole('button', { name: '撤退' }).tap();
-  await battle.getByRole('button', { name: '返回原野' }).tap();
+  await battle.getByRole('button', { name: '返回环城' }).tap();
   await expect(field(page)).toBeFocused();
   await page.getByRole('button', { name: '图鉴', exact: true }).tap();
-  await expect(page.getByRole('dialog', { name: '群岛图鉴' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '环城图鉴' })).toBeVisible();
   expect(await fits()).toBe(true);
   expect(errors).toEqual([]);
   await context.close();
@@ -682,8 +704,8 @@ test('ambience, movement, battle, and menus stay usable on a 320px touch screen'
 
 const rooms = [
   { id: 'home', area: 'harbor', near: [11, 10], doorway: [10, 11], title: '潮汐档案屋', horizontal: null, panel: '王禹浩', text: '金融风险管理' },
-  { id: 'lab', area: 'grove', near: [9, 10], doorway: [10, 11], title: '雾杉观测室', horizontal: 'Right', panel: '研究档案', text: '集成 EWRLS' },
-  { id: 'tower', area: 'summit', near: [11, 10], doorway: [12, 11], title: '风语天文台', horizontal: 'Left', panel: '联系我', text: '打开邮件草稿' },
+  { id: 'lab', area: 'harbor', near: [24, 11], doorway: [24, 11], title: '市集研究室', horizontal: 'Right', panel: '研究档案', text: '集成 EWRLS' },
+  { id: 'tower', area: 'harbor', near: [30, 11], doorway: [30, 11], title: '中央车站信号室', horizontal: 'Left', panel: '联系我', text: '打开邮件草稿' },
 ] as const;
 
 for (const room of rooms) {
@@ -717,6 +739,35 @@ for (const room of rooms) {
     await expect.poll(() => position(page)).toEqual({ area: room.area, x: room.doorway[0], y: room.doorway[1] });
   });
 }
+
+test('the atlas walks out of a room and along the street, and can be interrupted indoors', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => localStorage.setItem('tidebound-save-v1', JSON.stringify({
+    location: { area: 'harbor', room: 'home', x: 12, y: 8 }, greeted: true,
+  })));
+  await ready(page);
+  const atlas = page.getByRole('region', { name: '环城步行图' });
+  const open = () => page.getByRole('button', { name: '环城地图', exact: true }).click();
+  await open();
+  await atlas.getByLabel('步行目的地').selectOption('archive');
+  await expect(atlas).toContainText('已在这间设施内');
+  await atlas.getByRole('button', { name: '返回现场' }).click();
+  expect(await position(page)).toEqual({ area: 'harbor', room: 'home', x: 12, y: 8 });
+  await open();
+  await atlas.getByLabel('步行目的地').selectOption('research');
+  await expect(atlas).toContainText(/室内 6 步 · 沿街 \d+ 步/);
+  await atlas.getByRole('button', { name: '出门并沿街步行' }).click();
+  await expect.poll(() => position(page), { intervals: [25, 40] }).toMatchObject({ room: 'home', x: 12, y: 9 });
+  await field(page).press('ArrowLeft');
+  await expect.poll(() => position(page)).toMatchObject({ room: 'home', x: 11 });
+  await expect(page.locator('.game-hint')).not.toContainText('步行前往');
+  await open();
+  await atlas.getByRole('button', { name: '出门并沿街步行' }).click();
+  await expect.poll(() => position(page), { timeout: 13000 }).toEqual({ area: 'harbor', x: 24, y: 11 });
+  await expect(page.locator('.game-hint')).toContainText('市集研究室');
+  await field(page).press('e');
+  await expect(page.locator('.game-viewport')).toHaveAttribute('data-room', 'lab');
+});
 
 test('expanded landscape touch play keeps direction, action and menu controls reachable', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 667, height: 375 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });

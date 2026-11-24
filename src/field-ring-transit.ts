@@ -1,7 +1,8 @@
 import {
-  BoxGeometry, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, RingGeometry, Vector3,
+  BoxGeometry, Color, CylinderGeometry, DoubleSide, Group, InstancedMesh, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D, RingGeometry, Vector3,
   type Material,
 } from 'three';
+import { railFeed } from './fortress-power';
 import { cityTransit, cityViaductPiers } from './field-city-layout';
 import { buildCityCarriages, ringCarriageDimensions } from './field-city-transit';
 import { batchStaticMeshes } from './field-mesh-batch';
@@ -18,6 +19,7 @@ const coping = new MeshStandardMaterial({ color: 0xd8c7a5, roughness: .78 });
 const tile = new BoxGeometry(1, 1, 1);
 const cylinder = new CylinderGeometry(1, 1, 1, 12);
 const railhead = .05;
+const feedColumns = Array.from({ length: RING_PERIOD / 4 }, (_, i) => i * 4 + .5);
 const up = new Vector3(0, 1, 0);
 const arrow = new Vector3();
 
@@ -125,6 +127,11 @@ function structure() {
     }
   }
   spanBraces(base, piers);
+  for (const x of feedColumns) {
+    const bearing = ringAngle(x), point = ringPosition(x, railZ + 1.24);
+    piece(base, point, railHeight - .16, [.59, .30, .14], dark, bearing);
+    piece(base, ringPosition(x, railZ + 1.38), railHeight - .16, [.49, .22, .048], brass, bearing);
+  }
 
   const station = ringPosition(29.55, railZ + 1.18);
   const stationHeading = ringAngle(29.55);
@@ -151,6 +158,18 @@ export function buildRingTransit() {
   const rail = structure();
   const train = buildCityCarriages();
   const { railZ, railHeight } = cityTransit;
+  const gaugeMaterial = new MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+  const gauges = new InstancedMesh(new BoxGeometry(.40, .135, .042), gaugeMaterial, feedColumns.length);
+  const transform = new Object3D(), coldGlass = new Color(0x253b39), liveGlass = new Color(0xa7fff0), gaugeColor = new Color();
+  gauges.name = 'Glazed supply indicators on the ring viaduct';
+  feedColumns.forEach((column, i) => {
+    const point = ringPosition(column, railZ + 1.44);
+    transform.position.set(point.x, railHeight - .16, point.z);
+    transform.rotation.y = ringAngle(column);
+    transform.updateMatrix();
+    gauges.setMatrixAt(i, transform.matrix);
+  });
+  group.add(gauges);
   const { axleHeight, bogieOffset, wheelRadius } = ringCarriageDimensions;
   const radius = ringRadius(railZ);
   const anglePerColumn = Math.PI * 2 / RING_PERIOD;
@@ -177,7 +196,13 @@ export function buildRingTransit() {
   group.add(coupler);
   return {
     group, structure: rail,
-    update(time: number, night: number) {
+    update(time: number, night: number, supply = .73, gridPhase = .45) {
+      feedColumns.forEach((column, i) => {
+        const current = railFeed(gridPhase, column / RING_PERIOD, supply, time === 0);
+        gaugeColor.copy(coldGlass).lerp(liveGlass, current);
+        gauges.setColorAt(i, gaugeColor);
+      });
+      gauges.instanceColor!.needsUpdate = true;
       const cycle = time ? (time / 1000 + 1.17) % 44 : 2.9;
       const index = stops.findIndex(stop => stop.at > cycle);
       const [from, to] = [stops[index - 1], stops[index]];
@@ -197,10 +222,11 @@ export function buildRingTransit() {
       const heading = ringAngle(center);
       coupler.position.set(Math.sin(heading) * drawbarRadius, carHeight + .199, Math.cos(heading) * drawbarRadius);
       coupler.rotation.y = heading;
-      train.lighting(night);
+      train.lighting(night, supply);
     },
     dispose() {
       train.dispose();
+      gauges.dispose(); gauges.geometry.dispose(); gaugeMaterial.dispose();
       rail.traverse(object => { if (object instanceof Mesh) object.geometry.dispose(); });
     },
   };

@@ -51,7 +51,7 @@ async function returnToBridge(page: Page, tile: Tile, touch = false) {
   await followWalkway(page, [...bridgeToPost(tile)].reverse().concat(bridge), touch);
 }
 
-test('walk to the loose chain, keep the repair on reload, and certify it only after a fresh pressure wave', async ({ page }, info) => {
+test('walk to the loose chain, keep the repair on reload, and certify it only after a fresh pressure wave', async ({ page }) => {
   test.setTimeout(100_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -98,7 +98,6 @@ test('walk to the loose chain, keep the repair on reload, and certify it only af
   if (!target) throw Error('Neither winch on the signalled side registered the loose chain');
   const fault = target.id;
   await expect(button(page, '收紧锁链')).toBeEnabled();
-  await view(page).screenshot({ path: info.outputPath('loose-anchor.png') });
   await button(page, '收紧锁链').click();
   await expect(view(page)).toHaveAttribute('data-ward-phase', 'braced');
   await page.reload();
@@ -124,13 +123,13 @@ test('walk to the loose chain, keep the repair on reload, and certify it only af
   await expect(view(page)).not.toHaveAttribute('data-ward-testing', 'true');
   expect((await adventure(page)).ward).toMatchObject({ phase: 'stable', fault });
   await page.getByRole('application').press('j');
-  const note = page.getByRole('dialog', { name:'群岛图鉴' }).locator('.ward-field-note');
+  const note = page.getByRole('dialog', { name:'环城图鉴' }).locator('.ward-field-note');
   await expect(note).toContainText('封印殿巡检手记');
   await expect(note).toContainText(target.name + '的止退爪已经归位');
   expect(errors).toEqual([]);
 });
 
-test('a narrow Canvas-only player can follow another pulse and operate the winch from the gallery', async ({ browser }, info) => {
+test('a narrow Canvas-only player can follow another pulse and operate the winch from the gallery', async ({ browser }) => {
   test.setTimeout(65_000);
   const page = await browser.newPage({ viewport:{width:320,height:720}, hasTouch:true, reducedMotion:'reduce' });
   try {
@@ -164,7 +163,6 @@ test('a narrow Canvas-only player can follow another pulse and operate the winch
     await button(page, '检查锚柱').tap();
     await button(page, '收紧锁链').tap();
     await expect(view(page)).toHaveAttribute('data-ward-phase', 'braced');
-    await view(page).screenshot({ path: info.outputPath('repaired-anchor-mobile.png') });
     await returnToBridge(page, target.tile, true);
     await button(page, '靠近封印').tap();
     await button(page, '复测封印').tap();

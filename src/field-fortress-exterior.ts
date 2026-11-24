@@ -1,3 +1,5 @@
+import { nominalPower } from './fortress-power';
+import { buildWallPassage } from './fortress-wall-model';
 import {
   BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, ExtrudeGeometry,
   Group, Mesh, MeshStandardMaterial, PlaneGeometry, RepeatWrapping, RingGeometry,
@@ -330,13 +332,14 @@ export function buildFortressExterior() {
     masonryTemplates.forEach(geometry => geometry.dispose());
     const palace = buildSeaPalace(fortressRadius, gateAngle, stoneTexture, metalTexture);
     const water = buildSpillways(fortressRadius, gateAngle);
-    outer.add(palace.group, water.group);
+    const passage = buildWallPassage();
+    outer.add(palace.group, water.group, passage.group);
     group.add(outer);
-    return { outer, palace, water, leaves, bodyGeo, ringSkirt, masonry, castings, stoneTexture, metalTexture, plate };
+    return { outer, palace, passage, water, leaves, bodyGeo, ringSkirt, masonry, castings, stoneTexture, metalTexture, plate };
   }
   return {
     group,
-    update(state: FortressView | undefined, time: number, night: number, panorama = false, resonance = 0) {
+    update(state: FortressView | undefined, time: number, night: number, panorama = false, resonance = 0, power = nominalPower) {
       const lift = state?.lift ?? 0;
       receiver.emissiveIntensity = .015 + 1.5 * resonance;
       sky.visible = Boolean(state?.cinematic || panorama && state?.phase === 'open');
@@ -356,6 +359,7 @@ export function buildFortressExterior() {
         opening = gate;
       }
       shell.palace.update(night, lift, resonance, state.drain);
+      shell.passage.update(power);
       shell.water.update(time / 1000, state, night);
     },
     dispose() {
@@ -363,6 +367,7 @@ export function buildFortressExterior() {
       sky.material.dispose(); sky.geometry.dispose();
       controls.traverse(m => { if (m instanceof Mesh) m.geometry.dispose(); });
       if (shell) {
+        shell.passage.group.traverse(part => { if (part instanceof Mesh) {part.geometry.dispose();part.material.dispose();} });
         shell.water.dispose(); shell.palace.dispose(); shell.bodyGeo.dispose(); shell.ringSkirt.dispose(); shell.masonry.map?.dispose(); shell.masonry.dispose();
         shell.stoneTexture.dispose(); shell.metalTexture.dispose(); shell.plate.map?.dispose(); shell.plate.dispose();
         for (const g of [...shell.leaves, shell.castings]) g.traverse(m => { if (m instanceof Mesh) m.geometry.dispose(); });

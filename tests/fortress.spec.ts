@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { fortressLiftStops } from '../src/field-fortress-state';
-import { mazeFloors } from '../src/fortress-maze';
+import { mazeFieldMap, mazeFloors } from '../src/fortress-maze';
 import { adventure, button, route, view, walk } from './maze-route';
 
-test('raise the palace, survey its four floors, open the service lift and hear the captive Kyurem', async ({ page }, info) => {
+test('raise the palace, survey its four floors, open the service lift and hear the captive Kyurem', async ({ page }) => {
   test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -24,9 +24,10 @@ test('raise the palace, survey its four floors, open the service lift and hear t
   await page.getByRole('application').press('e');
   await page.reload();
   await expect(view(page)).toHaveAttribute('data-fortress-phase','draining',{timeout:14000});
-  await expect(button(page,'群岛航线')).toBeDisabled();
-  await expect(button(page,'进入堡垒')).toHaveCount(0);
-  await button(page,'进入堡垒').click({timeout:16000});
+  await expect(button(page,'地图')).toBeDisabled();
+  await expect(button(page,'踏上外壁长阶')).toHaveCount(0);
+  await button(page,'踏上外壁长阶').click({timeout:16000});
+  await button(page,'沿阶前往下层王门').click();
   await button(page,'唤醒潮盘').click();
   // The trainer crosses the water hall while its 3D materials warm up on first entry.
   await expect(view(page)).toHaveAttribute('data-tide-dial','awake',{timeout:12000});
@@ -34,18 +35,18 @@ test('raise the palace, survey its four floors, open the service lift and hear t
   await expect(view(page)).toHaveAttribute('data-room','aqueduct');
   expect((await adventure(page)).mazeTrail.aqueduct).toHaveLength(1);
   await walk(page,'aqueduct',mazeFloors.aqueduct.switch);
-  await button(page,'操作浮桥绞盘').click();
+  await button(page,'操作分水仪').click();
   await expect(view(page)).toHaveAttribute('data-shortcut','open');
   await page.reload();
   await expect(view(page)).toHaveAttribute('data-shortcut','open');
   await button(page,'打开本层行迹图').click();
-  await expect(page.getByRole('dialog',{name:'迷宫行迹图'})).toContainText('回流水渠');
+  await expect(page.getByRole('dialog',{name:'地宫行迹图'})).toContainText('御水长庭');
   await button(page,'关闭').click();
   await walk(page,'aqueduct',mazeFloors.aqueduct.down);
   await button(page,'沿阶梯下行').click();
   await expect(view(page)).toHaveAttribute('data-room','catacomb');
   await walk(page,'catacomb',mazeFloors.catacomb.switch);
-  await button(page,'操作冰纹轮锁').click();
+  await button(page,'操作星图校准盘').click();
   await expect(view(page)).toHaveAttribute('data-shortcut','open');
   await walk(page,'catacomb',fortressLiftStops.catacomb);
   await button(page,'乘升降台').click();
@@ -63,17 +64,16 @@ test('raise the palace, survey its four floors, open the service lift and hear t
   await button(page,'听它吼叫').click();
   await expect(view(page)).toHaveAttribute('data-roar-phase','impact');
   await expect.poll(()=>page.evaluate(()=>Reflect.get(window,'cryPlaybackStarts'))).toBeGreaterThan(0);
-  await view(page).screenshot({path:info.outputPath('kyurem-ward.png')});
   await button(page,'返回观测桥').click();
   await page.reload();
   await expect(view(page)).toHaveAttribute('data-room','seal');
-  await button(page,'返回陵廊').click();
+  await button(page,'返回陵宫').click();
   await expect(view(page)).toHaveAttribute('data-room','catacomb');
   expect((await adventure(page)).shortcuts.sort()).toEqual(['aqueduct','catacomb']);
   expect(errors).toEqual([]);
 });
 
-test('reduced-motion touch exploration catches closed shortcuts and supports the Canvas seal', async ({ browser },info)=>{
+test('reduced-motion touch traverses the public palace and supports the Canvas seal', async ({ browser })=>{
   test.setTimeout(95_000);
   const page=await browser.newPage({ viewport:{width:320,height:720},hasTouch:true,reducedMotion:'reduce' });
   try {
@@ -87,16 +87,14 @@ test('reduced-motion touch exploration catches closed shortcuts and supports the
     await page.goto('/');
     await expect(view(page)).toHaveAttribute('data-room','catacomb');
     await expect(view(page)).toHaveAttribute('data-shortcut','closed');
-    const {gate,switch:lever,down} = mazeFloors.catacomb;
-    await walk(page,'catacomb',{x:gate.x,y:gate.y+1},true);
-    const before=(await adventure(page)).location;
-    await button(page,'向上移动').tap();
+    const {switch:lever,down} = mazeFloors.catacomb;
+    // The old B3 entrance resumes at the southern ceremonial stair.
+    expect((await adventure(page)).location).toMatchObject(mazeFloors.catacomb.up);
     await button(page,'打开本层行迹图').tap();
-    await expect(page.getByRole('dialog')).toContainText('尚未开启');
-    expect((await adventure(page)).location).toEqual(before);
+    await expect(page.getByRole('dialog')).toContainText('霜冠陵宫');
     await button(page,'关闭').tap();
     await walk(page,'catacomb',lever,true);
-    await button(page,'操作冰纹轮锁').tap();
+    await button(page,'操作星图校准盘').tap();
     await expect(view(page)).toHaveAttribute('data-shortcut','open');
     await walk(page,'catacomb',down,true);
     await button(page,'沿阶梯下行').tap();
@@ -105,20 +103,26 @@ test('reduced-motion touch exploration catches closed shortcuts and supports the
     await expect(page.locator('.game-canvas canvas')).toHaveAttribute('data-renderer','canvas2d');
     await button(page,'听它吼叫').tap();
     await expect(view(page)).toHaveAttribute('data-roar-phase','impact');
-    await view(page).screenshot({path:info.outputPath('kyurem-mobile.png')});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   } finally {await page.close();}
 });
 
-test('each floor can be solved with the gate closed and opening its shortcut shortens the return',()=>{
+test('both ceremonial avenues and each side gallery remain accessible before or after setting the instruments',()=>{
   for(const room of ['aqueduct','catacomb'] as const) {
-    const floor=mazeFloors[room];
-    const closed=route(room,floor.up,floor.down,false);
-    const open=route(room,floor.up,floor.down,true);
-    expect(closed.length).toBeGreaterThan(36);
-    expect(open.length).toBeLessThan(closed.length);
-    expect(open.some(({point})=>point.x===floor.gate.x && point.y===floor.gate.y)).toBe(true);
-    expect(route(room,floor.up,floor.switch,false).length).toBeGreaterThan(10);
+    const floor=mazeFloors[room], map=mazeFieldMap(room);
+    const axial=route(room,floor.up,floor.down,false);
+    expect(axial).toHaveLength(floor.up.y-floor.down.y);
+    expect(axial.every(({point})=>point.x===floor.up.x)).toBe(true);
+    expect(route(room,floor.up,floor.down,true)).toEqual(axial);
+    for(const x of [9,39])for(const z of [10,24,36])expect(route(room,floor.up,{x,y:z},false).length).toBeGreaterThan(0);
+    const reached=new Set<number>(),queue=[floor.up];
+    for(let i=0;i<queue.length;i++){
+      const at=queue[i],id=at.y*map.width+at.x;if(reached.has(id))continue;
+      reached.add(id);
+      const next=[[1,0],[-1,0],[0,1],[0,-1]].map(([dx,dy])=>({x:at.x+dx,y:at.y+dy})).filter(n=>map.walkable[n.y]?.[n.x]);
+      expect(next.length).toBeGreaterThanOrEqual(2);queue.push(...next);
+    }
+    expect(reached.size).toBe(map.walkable.flat().filter(Boolean).length);
   }
 });
 
@@ -130,16 +134,16 @@ test('the explored map follows actual footsteps and the seal observation is perm
   });
   await page.goto('/');
   await expect(view(page)).toHaveAttribute('data-room','aqueduct');
-  await walk(page,'aqueduct',{x:4,y:18});
+  await walk(page,'aqueduct',{x:24,y:42});
   await page.getByRole('application').press('m');
-  const atlas=page.getByRole('dialog',{name:'迷宫行迹图'});
+  const atlas=page.getByRole('dialog',{name:'地宫行迹图'});
   await expect(atlas).toBeVisible();
   const drawing=atlas.locator('svg.maze-drawing');
   await drawing.focus();
   await drawing.press('ArrowDown');
   await button(page,'沿足迹返回所选处').click();
   await expect(atlas).toHaveCount(0);
-  await expect.poll(async()=>(await adventure(page)).location).toMatchObject({x:4,y:19});
+  await expect.poll(async()=>(await adventure(page)).location).toMatchObject(mazeFloors.aqueduct.up);
   await page.evaluate(()=>{
     const saved=JSON.parse(localStorage.getItem('tidebound-save-v1')!);
     // An older release saved "seal" as B2. It remains a valid entrance to the new B4.
@@ -151,7 +155,7 @@ test('the explored map follows actual footsteps and the seal observation is perm
   await button(page,'靠近封印').click();
   await expect.poll(async()=>(await adventure(page)).kyuremObserved).toBe(true);
   await page.getByRole('application').press('j');
-  const dex=page.getByRole('dialog',{name:'群岛图鉴'});
+  const dex=page.getByRole('dialog',{name:'环城图鉴'});
   await expect(dex.locator('.dex-detail')).toContainText('酋雷姆');
   await expect(dex.locator('.dex-detail')).toContainText('325.0');
 });

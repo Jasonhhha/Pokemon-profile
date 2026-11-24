@@ -17,6 +17,16 @@ function MapDrawing({ room, position, walked, open, compact, pin, onPin }: MapPr
   const seen = useMemo(() => surveyedCells(room, walked, open), [room, walked, open]);
   const steps = useMemo(() => new Set(walked), [walked]);
   const size = floor.width;
+  const plan = useMemo(() => {
+    const paths = new Map<string,string[]>();
+    floor.tiles.forEach((row,y) => row.forEach((tile,x) => {
+      if (tile === 'wall') return;
+      const col = tile === 'channel' ? '#24454c' : '#485554';
+      const parts = paths.get(col) ?? [];
+      parts.push(`M${x},${y}h1v1h-1z`); paths.set(col,parts);
+    }));
+    return [...paths].map(([fill,parts]) => <path key={fill} fill={fill} d={parts.join('')}/>);
+  },[floor]);
   const plots = useMemo(() => {
     const groups = new Map<string, string[]>();
     for (const id of seen) {
@@ -59,16 +69,16 @@ function MapDrawing({ room, position, walked, open, compact, pin, onPin }: MapPr
   }, [size, steps, walked]);
   const features = [
     ...(room === 'catacomb' ? [{ ...fortressLiftStops.catacomb, mark: 'lift' }] : []),
-    { ...floor.up, mark: 'up' }, { ...floor.down, mark: 'down' }, { ...floor.switch, mark: 'handle' }, { ...floor.gate, mark: 'gate' },
+    { ...floor.up, mark: 'up' }, { ...floor.down, mark: 'down' }, { ...floor.switch, mark: 'handle' },
   ];
   return <svg className="maze-drawing" viewBox={`${left} ${top} ${area} ${area}`} role="img"
     aria-label={compact ? '已探索的通路与当前位置' : '本层行迹。可点选金色足迹，或用方向键沿足迹选择返回点。'}
     tabIndex={compact ? undefined : 0} onClick={choose} onKeyDown={chooseWithKeys}>
     <rect width={size} height={floor.height} fill="#18262a" />
-    {plots}
+    {plan}{plots}
     <path d={trace} stroke="#d7b777" opacity=".7" strokeWidth=".18" fill="none" />
     {walked.map(id => <rect key={id} x={id % size + .31} y={Math.floor(id / size) + .31} width=".38" height=".38" fill="#e7c58d" />)}
-    {features.filter(f => seen.has(f.y * size + f.x)).map(f => <g transform={`translate(${f.x + .5} ${f.y + .5})`} key={f.mark}>
+    {features.map(f => <g transform={`translate(${f.x + .5} ${f.y + .5})`} key={f.mark}>
       {f.mark === 'up' || f.mark === 'down' ? <path d="M0,-.68 .66,.49 -.66,.49Z" transform={f.mark === 'down' ? 'rotate(180)' : undefined} fill="#f5dfaf" stroke="#263536" strokeWidth=".14" /> :
         f.mark === 'lift' ? <path d="M-.48,-.48h.96v.96h-.96z" fill="#29454e" stroke="#d2b57e" strokeWidth=".24"/> : f.mark === 'handle' ? <circle r=".55" fill="#17464a" stroke="#85ebd3" strokeWidth=".25" /> :
         <path d="M-.45,-.54v1.08M0,-.54v1.08M.45,-.54v1.08" stroke={open ? '#85ebd3' : '#efa07c'} strokeWidth=".23" />}
@@ -96,12 +106,12 @@ export function MazeAtlas(props: MapProps & { walk: (point: MazePoint) => void }
     <div className="maze-sheet"><MapDrawing {...props} pin={pin} onPin={setPin} /></div>
     <div className="maze-notes">
       <div className="maze-floor-name"><span>{fortressRooms[room].level}</span><h3>{fortressRooms[room].name}</h3></div>
-      <p>金色足迹记录走过的路。点选足迹，可以沿原路回去。</p>
+      <p>纵贯南北的仪道通向两端楼梯。灰线是宫殿平面，金色是你的足迹。点选足迹可原路折返。</p>
       <ul className="maze-key">
         <li><b>●</b>你的位置</li><li><b>▲ / ▼</b>上下阶梯</li><li><b>◎</b>{floor.switchName}</li>
       </ul>
-      {room === 'catacomb' && visible(fortressLiftStops.catacomb) && <p className="maze-gate-state">□ 古升降台 · {open ? '可直达地下一层' : '等待轮锁启动'}</p>}
-      {visible(floor.gate) && <p className="maze-gate-state">{floor.gateName} · {open ? '已通行' : '尚未开启'}</p>}
+      {room === 'catacomb' && <p className="maze-gate-state">□ 古升降台 · 可往返潮枢水殿</p>}
+      <p className="maze-gate-state">{floor.switchName} · {open ? '已校准' : '待校准'}</p>
       {floor.landmarks.filter(visible).map(mark => <div key={mark.name} className="maze-place"><Navigation size={13} />{mark.name}</div>)}
       <button className="subtle-button maze-return" disabled={!canTravel} onClick={() => { if (pin) props.walk(pin); }}>
         <CornerDownLeft size={15}/>{canTravel ? '沿足迹返回所选处' : '选择一个足迹'}

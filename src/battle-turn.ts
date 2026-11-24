@@ -42,7 +42,8 @@ export type BattleState = {
 };
 
 export type BattleFrame = BattlePresentation & { state: BattleState; duration: number };
-export type BattleCommand = { kind: 'move'; move: MoveId } | { kind: 'switch'; id: CreatureId } | { kind: 'potion' | 'ball' | 'run' };
+export type BattleCommand = { kind: 'move'; move: MoveId } | { kind: 'switch'; id: CreatureId }
+  | { kind: 'potion'; id?: CreatureId } | { kind: 'ball' | 'run' };
 
 const boosted = ['attack', 'defense', 'specialAttack', 'specialDefense', 'speed'] as const;
 const tacticalPause = 1180;
@@ -59,7 +60,7 @@ export function beginBattle(encounter: BattleEncounter, progress: BattleProgress
     progress, enemy, active: lead.id, stages: { ally: freshStages(), enemy: freshStages() }, participants: [lead.id], turn: 1, escapes: 0, trainer,
     outcome: lead.hp === 0 ? 'lost' : undefined,
   };
-  const introduction = encounter.trial ? `${trainer ?? '巡林人'}的${species.name}登场，试炼开始！`
+  const introduction = encounter.trial ? `${trainer ?? '渡口守望员'}的${species.name}登场，试炼开始！`
     : trainer ? `${trainer}派出了${species.name}。切磋开始！` : `草丛里跃出了一只野生${species.name}！`;
   const message = lead.hp === 0 ? '队伍需要先恢复体力。' : introduction;
   return { state, message, duration: 0, effect: '' };
@@ -67,7 +68,8 @@ export function beginBattle(encounter: BattleEncounter, progress: BattleProgress
 
 export const activeMember = (state: BattleState) => state.progress.team.find(member => member.id === state.active)!;
 export const healthyReserves = (state: BattleState) => state.progress.team.filter(member => member.id !== state.active && member.hp > 0);
-export const canUsePotion = (state: BattleState) => !state.outcome && state.progress.medicine > 0 && canReceivePotion(activeMember(state));
+export const potionTargets = (state: BattleState) => state.progress.team.filter(canReceivePotion);
+export const canUsePotion = (state: BattleState) => !state.outcome && state.progress.medicine > 0 && potionTargets(state).length > 0;
 export const isTrainerBattle = (state: BattleState, trial: boolean) => Boolean(trial || state.trainer);
 export const canThrowBall = (state: BattleState, trial: boolean) => !isTrainerBattle(state, trial) && !state.outcome && state.enemy.hp > 0
   && state.progress.charms > 0 && !state.progress.team.some(member => member.id === state.enemy.id);
@@ -239,7 +241,7 @@ export function resolveBattleTurn(initial: BattleState, command: BattleCommand, 
     const levelUp = upgraded.find(trained => trained.level > (eligible.find(member => member.id === trained.id)?.level ?? 99));
     const progress = upgraded.length ? ` ${upgraded.length > 1 ? '参战伙伴各' : creatures[upgraded[0].id].name}获得 ${xp} 点经验。` : '';
     const level = levelUp ? ` ${creatures[levelUp.id].name}升至 Lv.${levelUp.level}！` : '';
-    const announcement = caught ? `${enemyName}加入了队伍！` : trial ? '通过了风语高地试炼！'
+    const announcement = caught ? `${enemyName}加入了队伍！` : trial ? '通过了东渡口试炼！'
       : state.trainer ? `赢下了与${state.trainer}的切磋！` : `战胜了野生${enemyName}。`;
     emit(`${announcement}${progress}${level}`, caught ? 'capture' : 'enemyFaint', { cue: caught ? 'capture' : 'faint', duration: 0 });
   }
@@ -250,16 +252,23 @@ export function resolveBattleTurn(initial: BattleState, command: BattleCommand, 
       return true;
     }
     if (activeMember(state).hp > 0) return false;
-    const reserve = healthyReserves(state)[0];
+    const reserves = healthyReserves(state);
     const fallen = name('ally');
-    if (reserve) {
-      emit(`${fallen}失去了战斗能力。`, 'playerFaint', { cue: 'faint', duration: 530 });
-      send(reserve.id, `${creatures[reserve.id].name}接替了${fallen}！`);
+    if (reserves.length) {
+      emit(`${fallen}失去了战斗能力。${reserves.length > 1 ? '请选择接替的伙伴。' : ''}`, 'playerFaint', { cue: 'faint', duration: 530 });
+      if (reserves.length === 1) send(reserves[0].id, `${creatures[reserves[0].id].name}接替了${fallen}！`);
     } else {
       state = { ...state, outcome: 'lost' };
       emit(`${fallen}失去了战斗能力。队伍需要回港口休整。`, 'playerFaint', { cue: 'faint', duration: 0 });
     }
     return true;
+  }
+
+  if (activeMember(state).hp === 0) {
+    if (command.kind !== 'switch' || !healthyReserves(state).some(member => member.id === command.id)) return [];
+    send(command.id, `就决定是你了，${creatures[command.id].name}！`);
+    emit('选择下一步行动。', '', { duration: 0 });
+    return frames;
   }
 
   if (command.kind === 'move') {
@@ -279,11 +288,13 @@ export function resolveBattleTurn(initial: BattleState, command: BattleCommand, 
       if (!healthyReserves(state).some(member => member.id === command.id)) return [];
       send(command.id, `${name('ally')}退回。派出了${creatures[command.id].name}！`);
     } else if (command.kind === 'potion') {
-      const member = activeMember(state);
+      const member = state.progress.team.find(ally => ally.id === (command.id ?? state.active));
+      if (!member) return [];
       const progress = givePotion(state.progress, member.id);
       if (progress === state.progress) return [];
       state = { ...state, progress };
-      emit(`使用了伤药，${name('ally')}恢复 ${activeMember(state).hp - member.hp} 点体力。`, 'heal', { cue: 'heal' });
+      const restored = progress.team.find(ally => ally.id === member.id)!.hp - member.hp;
+      emit(`使用了伤药，${creatures[member.id].name}恢复 ${restored} 点体力。`, member.id === state.active ? 'heal' : '', { cue: 'heal' });
     } else if (command.kind === 'ball') {
       if (!canThrowBall(state, trial)) return [];
       const firstCatch = state.progress.team.length === 1;

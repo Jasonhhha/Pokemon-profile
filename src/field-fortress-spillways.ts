@@ -1,7 +1,8 @@
 import {
-  Color, DoubleSide, Group, InstancedMesh, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3,
+  Color, DoubleSide, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, PlaneGeometry, ShaderMaterial, Vector3,
 } from 'three';
 import { fortressLiftDepth, type FortressView } from './field-fortress-state';
+import { discharge, drainClock, fillSeconds, spillwayFall, spillwayLevels, valveDelay, wakeDelay } from './fortress-spillway-flow';
 
 const tau = Math.PI * 2;
 const noise = `
@@ -11,11 +12,7 @@ const noise = `
     return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+1.),f.x),f.y);
   }
 `;
-const stages = [
-  { y: -3.46, lip: 1.41, width: 3.96, reach: 2.22, next: -10.77 },
-  { y: -10.76, lip: 3.98, width: 5.02, reach: 2.83, next: -15.01 },
-  { y: -15.02, lip: 7.05, width: 6.13, reach: 5.96, next: -23.0 },
-];
+
 
 export function maritimeSky() {
   const mat = new ShaderMaterial({
@@ -46,14 +43,10 @@ export function maritimeSky() {
   return sky;
 }
 
-function smooth(x: number, a: number, b: number) {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-}
-
 export function buildSpillways(radius: number, west: number) {
   const group = new Group(), crest = new PlaneGeometry(2, 1, 58, 39), quad = new PlaneGeometry(1, 1);
-  const time = { value: 0 }, night = { value: 0 };
+  const time = { value: 0 }, night = { value: 0 }, elapsed = { value: 0 };
+  crest.setAttribute('valveDelay', new InstancedBufferAttribute(new Float32Array(valveDelay), 1));
   const foam = new ShaderMaterial({
     transparent: true, depthWrite: false, side: DoubleSide,
     uniforms: { clock: time, night },
@@ -92,30 +85,34 @@ export function buildSpillways(radius: number, west: number) {
         #include <colorspace_fragment>
       }`,
   });
-  const fallShader = stages.map(stage => new ShaderMaterial({
+  const fallShader = spillwayLevels.map(stage => new ShaderMaterial({
     transparent: true, depthWrite: false, side: DoubleSide,
-    uniforms: { clock: time, night, width: { value: stage.width }, drop: { value: 0 }, reach: { value: 1 }, pressure: { value: 1 }, sea: { value: 0 } },
+    uniforms: { clock: time, night, width: { value: stage.width }, drop: { value: 0 }, reach: { value: 1 }, sea: { value: 0 },
+      elapsed, flight: { value: 0 }, opening: { value: stage.uncovers }, taper: { value: stage.tapers }, emptyAt: { value: stage.empties } },
     vertexShader: `
-      uniform float clock,width,drop,reach,pressure;
+      uniform float clock,width,drop,reach,elapsed,flight,opening,taper,emptyAt;
+      attribute float valveDelay; varying float pressure;
       varying vec2 surface; varying float phase; varying float level;
       void main() {
         float t=1.-uv.y, x=position.x;
+        float emission=elapsed-valveDelay-t*flight;
+        pressure=smoothstep(opening,opening+${fillSeconds},emission)*(1.-smoothstep(taper,emptyAt,emission));
         phase=instanceMatrix[3].x*.457 + instanceMatrix[3].z*.71;
         float pleat=sin(x*16.+phase+sin(t*10.-clock*3.6)*.48)+.38*sin(x*26.+t*7.+clock*.67);
         float crown=1.-x*x;
         float fan=1.+(.15+.16*pressure)*t*t+.055*t*sin(phase+t*9.-clock*2.);
-        float along=reach*t*(.71+.29*crown)+pleat*(.018+.048*t)+.064*t*sin(t*14.-clock*5.+phase);
+        float along=reach*t*(.57+.43*pressure)*(.71+.29*crown)+pleat*(.018+.048*t)+.064*t*sin(t*14.-clock*5.+phase);
         float eccentric=.09*sin(t*7.+phase-clock*.46)*t;
         float h=-drop*t*t+.055*pleat*t;
-        vec4 world=modelMatrix*instanceMatrix*vec4((x+eccentric)*width*.5*fan*(.47+.53*pressure),h,along,1.);
+        vec4 world=modelMatrix*instanceMatrix*vec4((x+eccentric)*width*.5*fan*(.11+.89*sqrt(pressure)),h,along,1.);
         surface=vec2(x,t);level=world.y;gl_Position=projectionMatrix*viewMatrix*world;
       }`,
     fragmentShader: `
-      uniform float clock,pressure,night,sea;
+      uniform float clock,night,sea; varying float pressure;
       varying vec2 surface;varying float phase;varying float level;
       ${noise}
       void main(){
-        if(level<sea-.08)discard;
+        if(level<sea-.08||pressure<.012)discard;
         float x=surface.x,t=surface.y; vec2 q=vec2(x*9.+phase,t*7.-clock*3.3);
         vec2 curl=vec2(noise(q*.47)-.5,noise(q.yx*.61+47.)-.5);
         float roll=noise(q*.61+curl)*.46+noise(q*1.67+curl*3.)*.32+noise(q*4.5)*.22;
@@ -123,20 +120,25 @@ export function buildSpillways(radius: number, west: number) {
         float torn=1.-(.075+.27*t)*(.33+.67*noise(q*.54+curl))-.06*t*threads;
         float gap=smoothstep(.65,.86,roll)*smoothstep(.52,.92,abs(x))*t;
         float edge=(1.-smoothstep(torn-.065,torn,abs(x)))*(1.-.74*gap);
-        float froth=smoothstep(.52,.85,roll+.18*threads+.18*t);
+        edge*=mix(smoothstep(.19,.57,threads),1.,smoothstep(.05,.28,pressure));
+        float fold=.5+.5*sin(x*17.+3.1*curl.x+.56*sin(phase+t*5.));
+        float froth=smoothstep(.59,.90,roll+.16*threads+.17*t+.055*fold);
         float rill=sin(x*22.+phase+roll*5.6)*.07+.10*(1.-t);
         vec3 deep=mix(vec3(.025,.205,.245),vec3(.010,.094,.16),night);
         vec3 jade=mix(vec3(.16,.49,.52),vec3(.052,.235,.33),night);
         vec3 pearl=mix(vec3(.74,.89,.87),vec3(.32,.60,.66),night);
-        vec3 hue=mix(mix(deep,jade,clamp(.29+threads*.65+rill,0.,1.)),pearl,froth*(.52+.42*t));
-        gl_FragColor=vec4(hue,edge*(.88+.09*pressure)*(1.-.035*froth));
+        vec3 hue=mix(deep,jade,clamp(.19+threads*.62+rill+.15*fold,0.,1.));
+        hue=mix(hue,pearl,froth*(.48+.49*t));
+        float lipLight=pow(fold,8.)*smoothstep(.25,.71,threads)*(.10+.14*t);
+        hue+=vec3(.19,.23,.21)*lipLight;
+        gl_FragColor=vec4(hue,edge*(.71+.16*fold+.10*pressure)*(1.-.035*froth));
         #include <colorspace_fragment>
       }`,
   }));
   const angle = Array.from({ length: 8 }, (_, i) => west + Math.PI / 8 + i * tau / 8);
   const position = new Vector3(), m = new Matrix4(), ground = new Matrix4().makeRotationX(-Math.PI / 2);
   const variation = new Color();
-  const banks = stages.map((stage, j) => {
+  const banks = spillwayLevels.map((stage, j) => {
     const water = new InstancedMesh(crest, fallShader[j], 8), splash = new InstancedMesh(quad, foam, 8);
     const mist = new InstancedMesh(quad, aerosol, 8 * 15);
     for (const [i, a] of angle.entries()) {
@@ -152,27 +154,26 @@ export function buildSpillways(radius: number, west: number) {
     group,
     update(seconds: number, state: FortressView, darkness: number) {
       const sea = -.58 - fortressLiftDepth * state.lift;
-      const force = (1 - smooth(state.drain, .44, .985));
-      group.visible = state.cinematic && state.lift > .10 && force > .024;
+      const dt = drainClock(state);
+      group.visible = state.cinematic && state.phase !== 'open' && dt >= spillwayLevels[0].uncovers;
       if (!group.visible) return;
-      time.value = seconds; night.value = darkness;
-      stages.forEach((stage, j) => {
-        const { water, splash, mist } = banks[j], available = stage.y - sea;
-        const power = smooth(available, -.08, 1.48) * force;
-        water.visible = splash.visible = mist.visible = power > .017;
+      time.value = seconds; night.value = darkness; elapsed.value = dt;
+      spillwayLevels.forEach((stage, j) => {
+        const { water, splash, mist } = banks[j], fall = spillwayFall(stage, sea);
+        water.visible = splash.visible = mist.visible = fall.drop > .015 && dt >= stage.uncovers &&
+          dt < stage.empties + .42 + fall.flight + wakeDelay;
         if (!water.visible) return;
-        const planned = stage.y - stage.next;
-        const drop = j === 2 ? Math.max(.02, available) : Math.max(.02, Math.min(available, planned));
-        const reach = stage.reach * Math.sqrt(drop / planned) * (.61 + .39 * power), impact = stage.y - drop;
+        const {drop, reach, flight, impact} = fall;
         const uniforms = fallShader[j].uniforms;
-        uniforms.sea.value = sea; uniforms.drop.value = drop; uniforms.reach.value = reach; uniforms.pressure.value = power;
+        uniforms.sea.value = sea; uniforms.drop.value = drop; uniforms.reach.value = reach; uniforms.flight.value = flight;
         angle.forEach((a, i) => {
-          const s = Math.sin(a), c = Math.cos(a), r = radius + stage.lip + reach;
+          const power = discharge(stage, i, dt-flight), wake = discharge(stage, i, dt-flight-wakeDelay);
+          const s = Math.sin(a), c = Math.cos(a), r = radius + stage.lip + reach*(.57+.43*power);
           const width = (stage.width + 1.7) * (j === 2 ? 2.04 : 1.08) * (.54 + power * .46);
           const length = (j === 2 ? 12.0 : 5.1) * (.44 + .56 * power);
           m.makeRotationY(a).multiply(ground).scale(position.set(width, length, 1)).setPosition(s * r, impact + .10, c * r);
           splash.setMatrixAt(i, m);
-          splash.setColorAt(i, variation.setRGB(power, 0, 0));
+          splash.setColorAt(i, variation.setRGB(.71*power + .29*wake, 0, 0));
           for (let k = 0; k < 15; k++) {
             const seed = i * .713 + k * .618 + j * .337, life = (seconds * (.34 + (k % 4) * .062) + seed) % 1;
             const tangent = Math.sin(k * 19.73 + i * 3.61) * (stage.width * .46 + life * .78);

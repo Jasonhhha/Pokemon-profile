@@ -8,6 +8,7 @@ import {
   cityTerraceAt, cityTerraceFrontages, cityTerraces, ringBreakwaterSpans, type CityTerrace,
   harborHeight, outerRingStart,
 } from './field-city-layout';
+import { harborHeads } from './field-harbor-mouth';
 import { maps, tileAt, type Tile } from './field-layout';
 import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringRadius, wrapRingX } from './field-ring-space';
 
@@ -320,6 +321,21 @@ function ground(upper: RingSurface, cliffs: RingSurface) {
   return edges;
 }
 
+function harborLanterns(walls: RingSurface, lenses: RingSurface) {
+  for (const head of harborHeads) for (const casting of head.castings) {
+    const { foot, crown, top, base } = casting;
+    const surface = casting.lit ? lenses : walls;
+    const color = new Color(casting.color);
+    const a: Point[] = foot.map(p => [p.x, base, p.z]);
+    const b: Point[] = crown.map(p => [p.x, top, p.z]);
+    for (let i = 0; i < a.length; i++) {
+      const next = (i + 1) % a.length;
+      surface.quad(a[i], a[next], b[i], b[next], color);
+      if (i > 0 && i < b.length - 1) surface.triangle(b[0], b[i], b[next], color);
+    }
+  }
+}
+
 function breakwater(top: RingSurface, walls: RingSurface, trim: RingSurface, shoreEdges: Edge[]) {
   // Low outer seawalls continue the circle across the open harbor. The ferry sails clear of their tips.
   const edge = harborHeight + .31;
@@ -329,7 +345,14 @@ function breakwater(top: RingSurface, walls: RingSurface, trim: RingSurface, sho
       const x = from + (to - from) * index / pieces;
       const length = (to - from) / pieces;
       const color = tint(shore, .82 + random(index, Math.round(from), 46) * .17);
-      walls.block(x, edge, length, .662, -.83, .84, tint(color, .88));
+      walls.block(x, edge - .88, length, 1.58, -.84, .85, tint(color, .88));
+      walls.block(x, edge - 1.10, length, 1.83, -.57, .21, tint(harbourSalt, .85));
+      top.sector(x, edge - .84, length, .91, .018, tint(shore, .99));
+      trim.block(x + .015, edge + .46, length - .030, .33, .065, .17, tint(marble, .87));
+      if (index % 3 === 1) {
+        walls.block(x + length * .38, edge + .61, .105, .30, -.49, .74, tint(shore, .93));
+        trim.block(x + length * .38 - .012, edge + .56, .129, .41, .244, .075, marble);
+      }
       for (let course = 0; course < 2; course++) {
         const start = x + .008 + course * .017;
         walls.block(start, edge + .626, length - .025, .045, -.464 + course * .240, .225,
@@ -1196,6 +1219,10 @@ export function buildRingGround() {
   const stone = coastlineFinish();
   const edges = ground(top, cliffs);
   breakwater(top, cliffs, trim, edges);
+  const lenses = new RingSurface();
+  harborLanterns(cliffs, lenses);
+  const lensGlass = new MeshStandardMaterial({ vertexColors: true, roughness: .25, emissive: 0xffc483, emissiveIntensity: 0 });
+  group.add(lenses.mesh(lensGlass, 'Glazed harbour signals'));
   platform(boards, top, trim);
   archSpan(top, cliffs, -.022, 1.064, [.48]);
   archSpan(top, cliffs, 33.98, 4.04, [34.67, 35.97, 37.19]);
@@ -1224,6 +1251,7 @@ export function buildRingGround() {
   return {
     group,
     update(time: number, darkness: number, aerial = 0, seaDrop = 0, displacement = 0) {
+      lensGlass.emissiveIntensity = darkness * .85;
       sea.position.y = seaLevel - seaDrop;
       sea.material.uniforms.displacement.value = displacement;
       basin.visible = seaDrop > .0001;

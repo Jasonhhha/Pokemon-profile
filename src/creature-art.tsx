@@ -37,11 +37,19 @@ function cropSprite(image: HTMLImageElement) {
 export function loadSprite(url: string): Promise<HTMLCanvasElement> {
   let asset = sprites.get(url);
   if (!asset) {
-    const image = new Image();
-    image.src = url;
-    asset = image.decode().then(() => cropSprite(image));
+    async function decode() {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return cropSprite(image);
+    }
+    // Field actors, party portraits and the dex all share one retry when a request is interrupted.
+    asset = decode().catch(async () => {
+      await new Promise(resolve => window.setTimeout(resolve, 450));
+      return decode();
+    });
     sprites.set(url, asset);
-    void asset.catch(() => sprites.delete(url));
+    void asset.catch(() => { if (sprites.get(url) === asset) sprites.delete(url); });
   }
   return asset;
 }
@@ -57,21 +65,28 @@ export function CreatureSprite({ id, className = '', back = false }: { id: Creat
     if (!context) return;
     let alive = true;
     context.clearRect(0, 0, width, height);
-    void loadCreatureSprite(id).then(sprite => {
-      if (!alive) return;
-      const scale = Math.min((width - 5) / sprite.width, (height - 4) / sprite.height, 1.34);
-      const drawnWidth = Math.round(sprite.width * scale);
-      const drawnHeight = Math.round(sprite.height * scale);
-      context.save();
-      context.imageSmoothingEnabled = false;
-      if (back) {
-        context.translate(width, 0);
-        context.scale(-1, 1);
-      }
-      context.drawImage(sprite, Math.floor((width - drawnWidth) / 2), height - drawnHeight - 3, drawnWidth, drawnHeight);
-      context.restore();
-    }).catch(() => {});
-    return () => { alive = false; };
+    let drawn = false;
+    const draw = () => {
+      if (drawn) return;
+      void loadCreatureSprite(id).then(sprite => {
+        if (!alive || drawn) return;
+        drawn = true;
+        const scale = Math.min((width - 5) / sprite.width, (height - 4) / sprite.height, 1.34);
+        const drawnWidth = Math.round(sprite.width * scale);
+        const drawnHeight = Math.round(sprite.height * scale);
+        context.save();
+        context.imageSmoothingEnabled = false;
+        if (back) {
+          context.translate(width, 0);
+          context.scale(-1, 1);
+        }
+        context.drawImage(sprite, Math.floor((width - drawnWidth) / 2), height - drawnHeight - 3, drawnWidth, drawnHeight);
+        context.restore();
+      }).catch(() => {});
+    };
+    draw();
+    window.addEventListener('online', draw);
+    return () => { alive = false; window.removeEventListener('online', draw); };
   }, [id, back]);
   return <canvas ref={canvas} data-species={id} className={`creature-sprite ${className}`} width={width} height={height} role="img" aria-label={creatures[id].name} />;
 }

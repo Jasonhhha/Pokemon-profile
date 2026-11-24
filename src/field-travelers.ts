@@ -16,7 +16,7 @@ const outfits: Record<Role, Paint> = {
   researcher: { coat: 0xd6c3a1, seam: 0x587776, trim: 0xe4d8b5, hat: 0x5f837d, hair: 0x4a3340, skin: 0xbd7f63, pants: 0x40575c },
   healer: { coat: 0xa0c5b3, seam: 0x4d7873, trim: 0xf8e7c5, hat: 0xede1ce, hair: 0x654739, skin: 0xe5a682, pants: 0x56756d },
   keeper: { coat: 0x596f89, seam: 0x364760, trim: 0xe0b17b, hat: 0x686681, hair: 0x312b40, skin: 0xbb8269, pants: 0x3d4360 },
-  trial: { coat: 0x876a58, seam: 0x554651, trim: 0xe7b574, hat: 0x405269, hair: 0x302938, skin: 0xd99879, pants: 0x43526a },
+  trial: { coat: 0x405b69, seam: 0x283e4c, trim: 0xddb778, hat: 0xe2dfc9, hair: 0x302938, skin: 0xd99879, pants: 0x384856 },
   spar: { coat: 0x6d5271, seam: 0x433a56, trim: 0xefb8a1, hat: 0x9f666d, hair: 0x443044, skin: 0xab6f55, pants: 0x4a465e },
   commuter: { coat: 0x5b6979, seam: 0x384954, trim: 0xdacba9, hat: 0x556478, hair: 0x57382d, skin: 0xe0ad8f, pants: 0x425566 },
   courier: { coat: 0xb48357, seam: 0x674b50, trim: 0xf1d397, hat: 0x506572, hair: 0x392f39, skin: 0xaa745e, pants: 0x525563 },
@@ -115,6 +115,14 @@ function headwear(head: Group, role: Role, colors: Paint) {
     part(head, cylinder, colors.seam, [0, .104, -.016], [.266, .073, .255], .03);
     part(head, face, colors.trim, [0, .307, -.041], [.085, .068, .072]);
     for (const side of [-1, 1]) part(head, soft, colors.hat, [side * .239, .020, .023], [.100, .124, .147], -.16, side * -.11);
+    return;
+  }
+  if (role === 'trial') {
+    part(head, cylinder, colors.hat, [0, .182, -.012], [.295, .125, .272], -.045);
+    part(head, face, colors.hat, [0, .218, -.012], [.287, .098, .267], -.045);
+    part(head, cylinder, colors.seam, [0, .112, .007], [.263, .068, .245], -.045);
+    part(head, face, colors.seam, [0, .093, .190], [.243, .036, .137], -.14);
+    part(head, soft, colors.trim, [0, .151, .257], [.067, .066, .022], -.17);
     return;
   }
   if (role === 'spar') {
@@ -218,12 +226,18 @@ export function createTraveler(role: Role) {
   part(torso, block, c.seam, [.003, .016, .215], [.028, .383, .018], -.029);
   part(torso, block, c.trim, [.005, .144, .232], [.031, .066, .029], -.029);
   part(torso, cylinder, c.skin, [0, .365, .007], [.105, .091, .097]);
-  collar(torso, c, role === 'player' || role === 'guide' || role === 'trial' || role === 'resident');
+  collar(torso, c, role === 'player' || role === 'guide' || role === 'resident');
   for (const side of [-1, 1]) {
     part(torso, soft, c.seam, [side * .146, -.106, .176], [.105, .109, .038], -.10, side * .24);
     part(torso, block, c.trim, [side * .153, -.067, .199], [.084, .022, .017], -.10, side * .24);
   }
-  if (role === 'player' || role === 'guide' || role === 'trial') bag(torso, role === 'player' ? 0xa2694b : role === 'guide' ? 0xb97d62 : 0x626473, c.seam, c.trim);
+  if (role === 'player' || role === 'guide') bag(torso, role === 'player' ? 0xa2694b : 0xb97d62, c.seam, c.trim);
+  if (role === 'trial') {
+    for (const side of [-1, 1]) {
+      part(torso, block, c.trim, [side * .217, .283, .047], [.127, .025, .13], 0, side * -.16);
+      for (const row of [0, 1, 2]) part(torso, face, c.trim, [side * .073, .128 - row * .094, .203], [.020, .020, .011]);
+    }
+  }
   if (role === 'courier') bag(torso, 0x69595a, c.seam, c.trim);
   if (role === 'commuter') {
     part(torso, block, 0x645348, [.384, -.294, -.022], [.17, .205, .28], -.13, -.10);

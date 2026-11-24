@@ -1,3 +1,5 @@
+import { createPowerCore } from './fortress-power-core';
+import { sealVolume } from './fortress-portals';
 import { glacier, iceHeight, glacialHeightAt, faultLines, floorFragment, floorVertex } from './fortress-glacier';
 import {
   BufferGeometry,
@@ -24,8 +26,8 @@ import { createIceReflection } from './fortress-ice-reflection';
 import { roarPose } from './fortress-kyurem';
 
 const tau = Math.PI * 2;
-const centre = new Vector3(8.5, -0.65, 6.5);
-const barrierScale = new Vector3(4.74, 5.65, 4.55);
+const centre = new Vector3(sealVolume.x, sealVolume.y, sealVolume.z);
+const barrierScale = new Vector3(sealVolume.width, sealVolume.height, sealVolume.depth);
 const contact = new Vector3(-0.59, 0.67, 0.48).normalize();
 const impact = onWard(contact, new Vector3()).multiply(barrierScale).add(centre);
 const noise = (i: number) => {
@@ -283,6 +285,8 @@ export function createIcePrison() {
       length: 1.5 + noise(i) * 1.4,
     };
   });
+  const grid = createPowerCore();
+  root.add(grid.root);
   const responseSkin = buildWardResponse(centre, barrierScale, contact, eyeLine);
   root.add(responseSkin.root);
   const anchors = createWardAnchors(centre, barrierScale);
@@ -300,7 +304,9 @@ export function createIcePrison() {
       muzzle: Vector3,
       feet: Vector3[],
       eyes: Vector3,
+      crystals?: Vector3[],
     ) {
+      grid.update(frame.power, frame.reduced, crystals, frame.now);
       eyeLine.value.copy(eyes);
       clock.value = time;
       age.value = Math.min(6, frame.roarAge ?? Infinity);
@@ -385,6 +391,7 @@ export function createIcePrison() {
       for (const m of [bedMaterial, inlay, crystal, shellPaint, collarPaint, shadowFinish, contactShadow]) m.dispose();
       reflection.dispose();
       anchors.dispose();
+      grid.dispose();
       responseSkin.dispose();
       mist.dispose();
       pillars.dispose();

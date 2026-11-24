@@ -1260,12 +1260,12 @@ export function buildCityStreet(polar = false) {
   return {
     group, lamps: polar ? lamps.map(({x,z,height}) => ({ ...ringPosition(x,z), height })) : lamps,
     occluders: [...boundaries, ...features],
-    update(time: number, night: number, pumpElapsed?: number) {
+    update(time: number, night: number, pumpElapsed?: number, load = .73) {
       for (const court of courts) court.update?.(pumpElapsed);
       const stamp = time / 1000;
       ripples.uniforms.clock.value = stamp;
       ripples.uniforms.darkness.value = night;
-      glass.emissiveIntensity = .15 + night * .95;
+      glass.emissiveIntensity = (.15 + night * .95) * (.06 + load * 1.26);
       stageDroplets(stamp);
     },
   };

@@ -1,0 +1,24 @@
+.game-controls.seal-console { flex-wrap: wrap; }
+.seal-console .power-console {
+  order: 8; display: flex; align-items: center; gap: 12px; flex: 1 0 100%; grid-column: 1 / -1; grid-row: 3;
+  padding-top: 7px; border-top: 1px solid #406366; color: #c4e0d8;
+}
+.power-console-id { display: flex; align-items: center; gap: 5px; white-space: nowrap; color: #a9dacf; font-size: 12px; }
+.power-instruments { display: flex; flex: 1; gap: 9px; }
+.power-instruments label { display: grid; flex: 1; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px; font-size: 10px; }
+.power-instruments meter { appearance: none; grid-column: 1/-1; grid-row: 2; width: 100%; height: 5px; border-radius: 2px; background: #384d4e; }
+.power-instruments meter::-webkit-meter-bar { height: 5px; background: #384d4e; border: none; border-radius: 2px; }
+.power-instruments meter::-webkit-meter-optimum-value { background: #8bdec9; }
+.power-instruments meter::-moz-meter-bar { background: #8bdec9; }
+.power-instruments b { grid-column: 2; grid-row: 1; color: #dae6cc; font: 650 10px monospace; }
+.power-console[data-limited=true] .power-instruments b { color: #e3c49a; }
+@media(max-width:580px) {
+  .seal-console .power-console { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+  .power-console .power-instruments { grid-column: 1/-1; grid-row: 2; }
+  .seal-console .power-console button { grid-row: 1; grid-column: 2; padding-inline: 8px; }
+}
+.power-instruments label { position: relative; }
+.power-instruments label + label::before {
+  content: ''; position: absolute; left: -7px; top: 44%; width: 3px; height: 3px;
+  border-top: 1px solid #80ad9f; border-right: 1px solid #80ad9f; transform: rotate(45deg);
+}

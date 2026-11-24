@@ -7,11 +7,7 @@ import { ringPosition, ringRadius } from './field-ring-coordinates';
 import type { FieldView } from './field-renderer';
 
 type Speck = { x: number; y: number; z: number; vx: number; vz: number; born: number; life: number; size: number; angle: number; paint: ColorRepresentation };
-const paints = {
-  harbor: { grass: 0x8fac6b, trail: 0xc5ad81, rock: 0xdad0ae },
-  grove: { grass: 0x79a17a, trail: 0xa59276, rock: 0xc1ba9c },
-  summit: { grass: 0x9da685, trail: 0xbfb19e, rock: 0xc6b8ca },
-};
+const paint = { grass: 0x8fac6b, trail: 0xc5ad81, rock: 0xdad0ae };
 
 const random = (value: number) => {
   const product = Math.sin(value * 129.98 + 8.37) * 43758.5453;
@@ -50,8 +46,8 @@ export function createFieldEffects() {
   atmosphereGeometry.setAttribute('trait', new BufferAttribute(attributes, 1));
   const atmospherePaint = new ShaderMaterial({
     uniforms: {
-      timestamp: { value: 0 }, aperture: { value: 1 }, shade: { value: 0 }, mode: { value: 0 }, outerShore: { value: ringRadius(25.1) },
-      color: { value: new Color(0xffffff) },
+      timestamp: { value: 0 }, aperture: { value: 1 }, shade: { value: 0 }, outerShore: { value: ringRadius(25.1) },
+      color: { value: new Color(0xa4e6d2) },
     },
     transparent: true,
     depthWrite: false,
@@ -59,7 +55,6 @@ export function createFieldEffects() {
     vertexShader: /* glsl */ `
       uniform float timestamp;
       uniform float aperture;
-      uniform float mode;
       uniform float outerShore;
       attribute float grain;
       attribute float trait;
@@ -69,21 +64,11 @@ export function createFieldEffects() {
         vec3 point = position;
         float flight = timestamp * (.43 + trait * .75) + grain * 17.0;
         float flutter = sin(flight) * .5 + .5;
-        if (mode > 1.5) {
-          point.x = mod(point.x + timestamp * (1.09 + trait), 45.0);
-          point.y -= grain * .58;
-          point.z += sin(flight) * .5;
-        } else if (mode > .5) {
-          point.x += sin(flight) * (1.0 + grain);
-          point.y += .48 * cos(flight * 1.16);
-          point.z += .58 * cos(flight * .63);
-        } else {
-          float azimuth = point.z * .28 + timestamp * (.032 + trait * .025);
-          float distance = mix(2.82 + grain * .86, outerShore + grain * .71, step(.41, trait));
-          point.x = sin(azimuth) * distance;
-          point.y = .04 + grain * .34;
-          point.z = cos(azimuth) * distance;
-        }
+        float azimuth = point.z * .28 + timestamp * (.032 + trait * .025);
+        float distance = mix(2.82 + grain * .86, outerShore + grain * .71, step(.41, trait));
+        point.x = sin(azimuth) * distance;
+        point.y = .04 + grain * .34;
+        point.z = cos(azimuth) * distance;
         gl_PointSize = aperture * mix(1.05, 3.35, grain);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(point, 1.0);
         thrust = trait;
@@ -92,16 +77,11 @@ export function createFieldEffects() {
     `,
     fragmentShader: /* glsl */ `
       uniform float shade;
-      uniform float mode;
       uniform vec3 color;
       varying float intensity;
       varying float thrust;
       void main() {
         vec2 travel = gl_PointCoord - .5;
-        if (mode > 1.5) {
-          travel.y *= 2.65;
-          travel.x += travel.y * .15;
-        }
         float radius = length(travel);
         float center = 1.0 - smoothstep(.06, .48, radius);
         float sparkle = smoothstep(.64, .93, thrust);
@@ -113,18 +93,15 @@ export function createFieldEffects() {
   const atmosphere = new Points(atmosphereGeometry, atmospherePaint);
   atmosphere.frustumCulled = false;
   group.add(atmosphere);
-  const areaGlow = { harbor: 0xa4e6d2, grove: 0xd9e594, summit: 0xf2deec };
 
   function scatter(time: number, view: FieldView, x: number, z: number) {
     const step = view.step!;
     const kind = tileAt(view.location.area, step.to.x, step.to.y);
-    const area = paints[view.location.area];
     const grassy = kind === 'grass' || kind === 'lawn';
     if (kind === 'dock' || kind === 'water' || kind === 'shelf' || kind === 'drop') return;
     const number = step.running ? 7 : grassy ? 4 : 3;
-    const polar = view.location.area === 'harbor';
-    const from = polar ? ringPosition(step.from.x + .5, step.from.y + .875) : { x: step.from.x, z: step.from.y };
-    const to = polar ? ringPosition(step.to.x + .5, step.to.y + .875) : { x: step.to.x, z: step.to.y };
+    const from = ringPosition(step.from.x + .5, step.from.y + .875);
+    const to = ringPosition(step.to.x + .5, step.to.y + .875);
     const travel = Math.max(.01, Math.hypot(to.x - from.x, to.z - from.z));
     const dx = (to.x - from.x) / travel;
     const dz = (to.z - from.z) / travel;
@@ -139,7 +116,7 @@ export function createFieldEffects() {
         vx: -dx * pace + spread * dz, vz: -dz * pace + spread * dx,
         angle: seed * .04 + i, born: time, life,
         size: (step.running ? .061 : .043) * (.66 + random(seed + i * 4 + 3) * .68),
-        paint: grassy ? area.grass : kind === 'path' || kind === 'shore' ? area.trail : area.rock,
+        paint: grassy ? paint.grass : kind === 'path' || kind === 'shore' ? paint.trail : paint.rock,
       });
     }
     if (specks.length > speckCount) specks.splice(0, specks.length - speckCount);
@@ -181,13 +158,10 @@ export function createFieldEffects() {
     particles.instanceMatrix.needsUpdate = true;
     if (particles.instanceColor) particles.instanceColor.needsUpdate = true;
 
-    const area = view.location.area;
     const uniforms = atmospherePaint.uniforms;
     uniforms.timestamp.value = time / 1000;
     uniforms.aperture.value = pixelRatio;
-    uniforms.mode.value = area === 'harbor' ? 0 : area === 'grove' ? 1 : 2;
-    uniforms.shade.value = area === 'harbor' ? .28 + darkness * .18 : area === 'grove' ? .12 + darkness * .63 : .41 - darkness * .10;
-    uniforms.color.value.setHex(areaGlow[area]);
+    uniforms.shade.value = .28 + darkness * .18;
   }
 
   return {

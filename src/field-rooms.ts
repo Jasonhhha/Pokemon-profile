@@ -1,5 +1,6 @@
 import { TILE, type FieldArea, type FieldMap, type RoomId } from './field-layout';
 import { box, polygon, type Point } from './field-pixels';
+import { paintCityWindow } from './field-city-window';
 import { noise, textureGround, type GroundMaterial } from './field-texture';
 
 export type { RoomId } from './field-layout';
@@ -41,13 +42,13 @@ export const plans = {
     ],
   },
   lab: {
-    name: '雾杉观测室',
-    english: 'Mistpine Laboratory',
-    area: 'grove',
+    name: '市集研究室',
+    english: 'Market Research Office',
+    area: 'harbor',
     left: 3,
     right: 20,
-    exterior: { x: 10, y: 10 },
-    npc: { event: 'projects', x: 14, y: 7, name: '观测站研究员', style: 'researcher', solid: true },
+    exterior: { x: 24, y: 10 },
+    npc: { event: 'projects', x: 14, y: 7, name: '市集研究员', style: 'researcher', solid: true },
     furniture: [
       { kind: 'bookshelf', x: 5, y: 5, width: 3 },
       { kind: 'server', x: 9, y: 5, width: 2 },
@@ -58,13 +59,13 @@ export const plans = {
     ],
   },
   tower: {
-    name: '风语天文台',
-    english: 'Whisper Observatory',
-    area: 'summit',
+    name: '中央车站信号室',
+    english: 'Central Station Signal Room',
+    area: 'harbor',
     left: 4,
     right: 19,
-    exterior: { x: 12, y: 10 },
-    npc: { event: 'contact', x: 10, y: 7, name: '信号站守望员', style: 'keeper', solid: true },
+    exterior: { x: 30, y: 10 },
+    npc: { event: 'contact', x: 10, y: 7, name: '车站信号员', style: 'keeper', solid: true },
     furniture: [
       { kind: 'radio', x: 9, y: 6, width: 4 },
       { kind: 'telescope', x: 16, y: 7, width: 3, depth: 2 },
@@ -80,7 +81,7 @@ type Room = Pick<RoomPlan, 'name' | 'english' | 'area' | 'exterior'> & {
 };
 
 function floorAt(plan: RoomPlan, x: number, y: number) {
-  if (plan.area === 'summit' && (y === 5 || y === startY) && (x === plan.left || x === plan.right)) return false;
+  if (plan.npc.event === 'contact' && (y === 5 || y === startY) && (x === plan.left || x === plan.right)) return false;
   return y >= 5 && y <= startY && x >= plan.left && x <= plan.right;
 }
 
@@ -218,27 +219,17 @@ function compassFloor(ctx: CanvasRenderingContext2D, pal: RoomColors) {
   box(ctx, '#e1ca9b', x - 1, y - 1, 3, 3);
 }
 
-function windowBay(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, mode: RoomId) {
+function windowBay(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, mode: RoomId, night: boolean) {
   box(ctx, '#514c4f', x - 3, y - 3, w + 6, h + 7);
   box(ctx, '#aaa18b', x - 2, y - 2, w + 4, h + 5);
-  const sky = mode === 'tower' ? '#3c4c70' : mode === 'lab' ? '#649188' : '#72a6ac';
-  const terrain = mode === 'tower' ? '#566584' : mode === 'lab' ? '#516d61' : '#438d91';
-  const reflection = mode === 'tower' ? '#e5cea4' : '#b8cac0';
-  box(ctx, sky, x, y, w, h);
-  polygon(ctx, terrain, [[x, y + h - 5], [x + Math.floor(w * .32), y + h - 10], [x + Math.floor(w * .53), y + h - 7], [x + w - 4, y + h - 12], [x + w, y + h - 7], [x + w, y + h], [x, y + h]]);
-  box(ctx, reflection, x + 3, y + 3, Math.ceil(w / 3));
-  box(ctx, reflection, x + 8, y + 5, 5);
-  if (mode === 'tower') {
-    box(ctx, '#eadbb7', x + w - 10, y + 4, 2, 2);
-    box(ctx, '#eadbb7', x + w - 16, y + 9, 1);
-  }
+  paintCityWindow(ctx, mode, night, x, y, w, h);
   box(ctx, '#b6aa91', x + Math.floor(w / 2), y, 1, h);
   box(ctx, '#b6aa91', x, y + Math.floor(h / 2), w);
   box(ctx, '#d2bd97', x - 3, y + h, w + 6, 2);
   box(ctx, '#65595a', x - 3, y + h + 2, w + 6);
 }
 
-function wallArt(ctx: CanvasRenderingContext2D, id: RoomId, x: number, y: number) {
+export function paintRoomChart(ctx: CanvasRenderingContext2D, id: RoomId, x: number, y: number) {
   if (id === 'home') {
     box(ctx, '#574b4f', x - 13, y - 1, 26, 24);
     box(ctx, '#bc9c6b', x - 12, y, 24, 22);
@@ -269,7 +260,7 @@ function wallArt(ctx: CanvasRenderingContext2D, id: RoomId, x: number, y: number
   }
 }
 
-function roomShell(ctx: CanvasRenderingContext2D, id: RoomId, plan: RoomPlan, pal: RoomColors) {
+function roomShell(ctx: CanvasRenderingContext2D, id: RoomId, plan: RoomPlan, pal: RoomColors, night: boolean) {
   const left = plan.left * TILE;
   const right = (plan.right + 1) * TILE;
   const top = 5 * TILE;
@@ -309,18 +300,18 @@ function roomShell(ctx: CanvasRenderingContext2D, id: RoomId, plan: RoomPlan, pa
   box(ctx, '#19222538', right - 8, top, 8, bottom - top);
 
   if (id === 'home') {
-    windowBay(ctx, left + 62, 48, 29, 21, id);
-    wallArt(ctx, id, 194, 47);
-    windowBay(ctx, right - 64, 48, 26, 21, id);
+    windowBay(ctx, left + 62, 48, 29, 21, id, night);
+    paintRoomChart(ctx, id, 194, 47);
+    windowBay(ctx, right - 64, 48, 26, 21, id, night);
     rug(ctx, pal, 159, 134, 78, 76);
   } else if (id === 'lab') {
-    windowBay(ctx, left + 95, 47, 36, 22, id);
-    wallArt(ctx, id, 260, 48);
+    windowBay(ctx, left + 95, 47, 36, 22, id, night);
+    paintRoomChart(ctx, id, 260, 48);
     laboratoryAisle(ctx, pal);
   } else {
-    wallArt(ctx, id, left + 35, 48);
-    windowBay(ctx, 170, 44, 41, 25, id);
-    windowBay(ctx, 226, 44, 41, 25, id);
+    paintRoomChart(ctx, id, left + 35, 48);
+    windowBay(ctx, 170, 44, 41, 25, id, night);
+    windowBay(ctx, 226, 44, 41, 25, id, night);
     compassFloor(ctx, pal);
     polygon(ctx, pal.trim, [[left - 10, bottom - 32], [left + 18, bottom + 7], [left + 24, bottom + 7], [left - 8, bottom - 37]]);
     polygon(ctx, pal.trim, [[right + 10, bottom - 32], [right - 18, bottom + 7], [right - 24, bottom + 7], [right + 8, bottom - 37]]);
@@ -549,15 +540,25 @@ function drawFixture(ctx: CanvasRenderingContext2D, fixture: Fixture, x: number,
   }
 }
 
-export function makeRoomArt(id: RoomId) {
+export function makeRoomArt(id: RoomId, night: boolean) {
   const plan = plans[id];
   const { image: base, draw: ctx } = surface(width * TILE, height * TILE);
-  roomShell(ctx, id, plan, roomColors[id]);
+  roomShell(ctx, id, plan, roomColors[id], night);
   const materials = Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x): GroundMaterial => {
     if (floorAt(plan, x, y)) return id === 'home' ? 'wood' : 'pavers';
     return y >= 2 && y <= 4 && x >= plan.left && x <= plan.right ? 'pavers' : 'void';
   }));
-  textureGround(ctx, plan.area, materials, TILE);
+  textureGround(ctx, id, materials, TILE);
+  if (night) {
+    box(ctx, '#17273c40', 0, 0, width * TILE, height * TILE);
+    const sockets = id === 'home' ? [169, 238] : id === 'lab' ? [125, 236] : [155, 279];
+    for (const x of sockets) {
+      floorLight(ctx, x, 72, 41, id === 'lab' ? '#ffdea352' : '#ffc2775c');
+      box(ctx, '#867054', x - 2, 66, 4, 1);
+      box(ctx, '#ffebbb', x - 1, 62, 2, 4);
+      box(ctx, '#ac8d62', x - 2, 61, 4, 1);
+    }
+  }
   if (id === 'home') {
     floorLight(ctx, 276, 113, 35, '#f2b35c52');
     floorLight(ctx, 191, 127, 55, '#f6d4861a');
@@ -578,6 +579,10 @@ export function makeRoomArt(id: RoomId) {
     const y = h - 6;
     const { image, draw } = surface(w, h);
     drawFixture(draw, furniture, x, y);
+    if (night) {
+      draw.globalCompositeOperation = 'source-atop';
+      box(draw, '#1d2c4320', 0, 0, w, h);
+    }
     return { image, x: worldX - x, y: worldY - y, depth: worldY };
   });
   return { base, foreground };

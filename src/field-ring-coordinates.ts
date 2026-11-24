@@ -9,7 +9,7 @@ const ringDepth = .48;
 export const wrapRingX = (x: number) => (x % RING_PERIOD + RING_PERIOD) % RING_PERIOD;
 export const ringAngle = (x: number) => (x - RING_CENTER_X) * angleStep;
 export const ringRadius = (z: number) => streetRadius + (z - 12) * ringDepth;
-export const harborOverviewYaw = ringAngle(.65);
+export const harborOverviewYaw = ringAngle(15.15);
 
 export function ringStreetRow(row: number) {
   return row + .875 - Math.min(.375, Math.max(0, (row - 15) * .14));
@@ -50,7 +50,7 @@ export function ringXDelta(from: number, to: number) {
 }
 
 export function ringOverviewCamera(aspect: number, compact: boolean, tilt: number) {
-  const pitch = Math.max(.62, Math.min(1.18, (compact ? .94 : .83) + tilt));
+  const pitch = Math.max(.62, Math.min(1.18, (compact ? .81 : .70) + tilt));
   const elevation = .84;
   const coast = ringRadius(harborHeight + 4.6);
   const height = (coast * Math.sin(pitch) + elevation * Math.cos(pitch) + .38) * 2;
@@ -59,7 +59,7 @@ export function ringOverviewCamera(aspect: number, compact: boolean, tilt: numbe
 
 export function harborAerialCamera(aspect: number, compact: boolean, tilt: number) {
   const coast = ringRadius(harborHeight + 4.6);
-  const pitch = Math.max(.62, Math.min(1.18, (compact ? .93 : .77) + tilt));
+  const pitch = Math.max(.62, Math.min(1.18, (compact ? .80 : .68) + tilt));
   const elevation = 1.05;
   const advance = coast * .14;
   const distance = coast * 3.45;

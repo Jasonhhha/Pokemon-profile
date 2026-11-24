@@ -6,7 +6,7 @@ const actorColors = {
   researcher: { hat: '#5a4e59', cap: '#423e52', coat: '#628b96', seam: '#4c6177', detail: '#d9dfc1', hair: '#594650', pants: '#596075', skin: '#edc193' },
   keeper: { hat: '#93b1a2', cap: '#628f8a', coat: '#6d8191', seam: '#505a76', detail: '#f1db9b', hair: '#46535e', pants: '#536575', skin: '#c99178' },
   healer: { hat: '#e9d0b5', cap: '#c79990', coat: '#e6dec3', seam: '#abaaa1', detail: '#b27f7b', hair: '#9b685f', pants: '#6e5973', skin: '#efc59a' },
-  trial: { hat: '#b6abc4', cap: '#887b9c', coat: '#9295ac', seam: '#646980', detail: '#e3c790', hair: '#4f495f', pants: '#655d7b', skin: '#d5a8a0' },
+  trial: { hat: '#e2dfc9', cap: '#344b59', coat: '#4d6874', seam: '#364954', detail: '#dcb67f', hair: '#4f495f', pants: '#485667', skin: '#d5a8a0' },
   spar: { hat: '#644959', cap: '#4d4252', coat: '#77677c', seam: '#5a536c', detail: '#edc592', hair: '#513d47', pants: '#4e5669', skin: '#cda089' },
 };
 
@@ -104,6 +104,18 @@ export function drawFieldActor(ctx: CanvasRenderingContext2D, style: keyof typeo
       box(ctx, hair, -4, -17, 3);
       box(ctx, hair, 1, -17, 3);
       box(ctx, '#918784', -1, -16, 2);
+    }
+  } else if (style === 'trial') {
+    box(ctx, outline, -7, -23, 14, 5);
+    box(ctx, hat, -6, -23, 12, 3);
+    box(ctx, cap, -6, -20, 12, 2);
+    if (!back) {
+      box(ctx, detail, side ? 3 : -1, -21, 2, 2);
+      box(ctx, outline, side ? 0 : -5, -18, side ? 8 : 10);
+      if (!side) for (const row of [-10, -8]) {
+        box(ctx, detail, -2, row, 1);
+        box(ctx, detail, 2, row, 1);
+      }
     }
   } else if (style === 'spar') {
     box(ctx, hair, -2, -23, 4, 2);

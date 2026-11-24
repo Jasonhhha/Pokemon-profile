@@ -1490,12 +1490,13 @@ export function buildCityArchitecture() {
   return city;
 }
 
-export function updateCityArchitecture(darkness: number) {
+export function updateCityArchitecture(darkness: number, supply = .73) {
   const level = Math.min(1, Math.max(0, darkness));
-  surfaces.light.color.copy(coolPane).lerp(neutralPane, level);
-  surfaces.light.emissiveIntensity = level * .70;
-  surfaces.skylight.emissiveIntensity = level * .24;
-  for (const material of plaques.values()) material.emissiveIntensity = level * .36;
+  const current = Math.min(1.30, supply / .73);
+  surfaces.light.color.copy(coolPane).lerp(neutralPane, Math.min(1, level * current));
+  surfaces.light.emissiveIntensity = level * .81 * current;
+  surfaces.skylight.emissiveIntensity = level * .26 * current;
+  for (const material of plaques.values()) material.emissiveIntensity = level * .41 * current;
 }
 
 const coolPane = new Color(0xb4c8d0);

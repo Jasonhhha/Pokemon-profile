@@ -1,3 +1,5 @@
+import {palaceElevation} from './fortress-maze';
+import { hallSupport } from './fortress-portals';
 import {
   AdditiveBlending,
   BufferGeometry,
@@ -17,7 +19,12 @@ import {
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { FortressRoom, FortressInteriorFrame } from './field-fortress-state';
 
-type Puddle = { x: number; z: number; w: number; d: number; angle: number };
+import { createWetFootfalls, palacePuddles, puddleUV, rippleLife, rippleReach, soleLife, wetMarkCapacity } from './fortress-wet-ground';
+
+const shoreGLSL = `float shore(vec2 uv) {
+  float a=atan(uv.y,uv.x);
+  return .79+.08*sin(a*3.+.7)+.056*sin(a*7.-.3)+.035*cos(a*11.);
+}`;
 
 const waterVertex = `
   varying vec3 point;
@@ -67,10 +74,9 @@ const puddleVertex = `
   void main(){disk=uv*2.-1.;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`;
 const puddleFragment = `
   varying vec2 disk; uniform float clock;
+  ${shoreGLSL}
   void main(){
-    float a=atan(disk.y,disk.x);
-    float r=length(disk);
-    float edge=.79+.08*sin(a*3.+.7)+.056*sin(a*7.-.3)+.035*cos(a*11.);
+    float r=length(disk),edge=shore(disk);
     if(r>edge) discard;
     vec2 q=(disk-vec2(.11,-.13))*vec2(1.,.85);
     float ripple=pow(max(0.,cos(length(q)*35.-clock*3.)),16.)*exp(-length(q)*3.5);
@@ -82,8 +88,9 @@ const puddleFragment = `
     #include <colorspace_fragment>
   }`;
 
-function wetFootfalls(puddles: Puddle[]) {
-  const count = 12;
+function wetFootfalls() {
+  const track = createWetFootfalls();
+  const count = wetMarkCapacity;
   const centers = new Float32Array(count * 12),
     corners: number[] = [],
     indices: number[] = [];
@@ -97,6 +104,8 @@ function wetFootfalls(puddles: Puddle[]) {
   const geometry = new BufferGeometry();
   const points = new Float32BufferAttribute(centers, 3);
   const timing = new Float32BufferAttribute(state, 4);
+  const waterUV = new Float32BufferAttribute(new Float32Array(count * 8), 2);
+  geometry.setAttribute('waterUV', waterUV);
   geometry.setAttribute('position', points);
   geometry.setAttribute('corner', new Float32BufferAttribute(corners, 2));
   geometry.setAttribute('stepData', timing);
@@ -106,30 +115,32 @@ function wetFootfalls(puddles: Puddle[]) {
     depthWrite: false,
     side: DoubleSide,
     uniforms: { now: { value: 0 } },
-    vertexShader: `attribute vec2 corner;attribute vec4 stepData;varying vec2 mark;varying vec3 fade;uniform float now;
+    vertexShader: `attribute vec2 corner,waterUV;attribute vec4 stepData;varying vec2 mark,disk;varying vec3 fade;uniform float now;
       void main(){
-        mark=corner;
+        mark=corner;disk=waterUV;
         float age=max(0.,now-stepData.x);
         bool ripple=stepData.z>.5;
-        vec2 size=ripple?vec2(.41):vec2(.095,.156);
+        vec2 size=ripple?vec2(${rippleReach}):vec2(.095,.156);
         vec2 q=corner*size;float c=cos(stepData.y),s=sin(stepData.y);
         vec3 p=position+vec3(c*q.x-s*q.y,0.,s*q.x+c*q.y);
         fade=vec3(age,stepData.z,stepData.w);
         gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
       }`,
-    fragmentShader: `varying vec2 mark;varying vec3 fade;
+    fragmentShader: `varying vec2 mark,disk;varying vec3 fade;
+      ${shoreGLSL}
       void main(){
         if(fade.y>.5){
-          if(fade.x>.72)discard;
-          float age=fade.x/.72,r=length(mark);
-          float ring=1.-smoothstep(.023,.069,abs(r-.10-age*.81));
-          gl_FragColor=vec4(.23,.42,.39,ring*(1.-age)*.62);
+          if(fade.x>${rippleLife}||length(disk)>shore(disk))discard;
+          float age=fade.x/${rippleLife}, r=length(mark), front=.10+age*.82;
+          float ring=1.-smoothstep(.015,.057,abs(r-front));
+          ring+=.38*(1.-smoothstep(.014,.050,abs(r-front+.18)))*smoothstep(.21,.41,age);
+          gl_FragColor=vec4(.29,.47,.44,ring*(1.-age)*.71);
         }else{
-          if(fade.x>4.5)discard;
+          if(fade.x>${soleLife})discard;
           float toe=length(vec2(mark.x*1.19,(mark.y+.25)*1.56));
           float heel=length(vec2(mark.x*1.49,(mark.y-.49)*2.50));
           float print=1.-smoothstep(.82,1.02,min(toe,heel));
-          gl_FragColor=vec4(.011,.031,.036,print*(1.-fade.x/4.5)*fade.z*.64);
+          gl_FragColor=vec4(.011,.031,.036,print*(1.-fade.x/${soleLife})*fade.z*.64);
         }
         #include <colorspace_fragment>
       }`,
@@ -137,53 +148,34 @@ function wetFootfalls(puddles: Puddle[]) {
   const mesh = new Mesh(geometry, material);
   mesh.frustumCulled = false;
   mesh.renderOrder = 3;
-  let write = 0,
-    previous = -1,
-    wet = 0,
-    lastWet = -Infinity;
-  function stamp(x: number, z: number, time: number, bearing: number, kind: number, strength: number) {
-    const first = write * 4;
-    write = (write + 1) % count;
-    for (let n = first; n < first + 4; n++) {
-      points.setXYZ(n, x, 0.029, z);
-      timing.setXYZW(n, time, bearing, kind, strength);
-    }
-    points.needsUpdate = timing.needsUpdate = true;
-  }
+  let lastMark = -Infinity;
   return {
     mesh,
     update(frame: FortressInteriorFrame) {
-      const now = frame.now / 1000;
+      const mark = track.advance(frame), now = frame.now / 1000;
       material.uniforms.now.value = now;
-      const phase = frame.gaitPhase;
-      if (phase === undefined || frame.reduced) {
-        previous = -1;
-        return;
+      if (!track.marks.length && Number.isFinite(lastMark)) {
+        // Reduced motion or a clock discontinuity retires the prints as well as the CPU tracks.
+        for (let i = 0; i < count * 4; i++) timing.setX(i, -1000);
+        timing.needsUpdate = true;
+        lastMark = -Infinity;
       }
-      const fraction = (phase * 2) % 1;
-      const contact = fraction >= 0.43 && previous < 0.43;
-      previous = fraction;
-      if (!contact) return;
-      const angle = { up: 0, down: Math.PI, left: -Math.PI / 2, right: Math.PI / 2 }[frame.facing];
-      const offset = phase >= 0.5 ? 0.103 : -0.103;
-      const x = frame.x + Math.cos(angle) * offset,
-        z = frame.y + Math.sin(angle) * offset;
-      const inWater = puddles.some(p => {
-        const dx = x - p.x,
-          dz = z - p.z,
-          c = Math.cos(p.angle),
-          s = Math.sin(p.angle);
-        return ((dx * c - dz * s) / p.w) ** 2 + ((dx * s + dz * c) / p.d) ** 2 < 0.7;
-      });
-      if (now - lastWet > 10) wet = 0;
-      if (inWater) {
-        stamp(x, z, now, 0, 1, 1);
-        wet = 1;
-        lastWet = now;
-      } else if (wet > 0.1) {
-        stamp(x, z, now, angle, 0, wet);
-        wet *= 0.58;
+      if (mark) {
+        const { x, z, at, bearing, strength, pool, slot } = mark;
+        const support = frame.room === 'sluice' || frame.room === 'seal' ? hallSupport(frame.room, x, z) : palaceElevation(frame.room,x,z);
+        for (let i = 0; i < 4; i++) {
+          const vertex = slot * 4 + i;
+          points.setXYZ(vertex, x, support + .033, z);
+          timing.setXYZW(vertex, at, pool ? 0 : bearing, Number(Boolean(pool)), strength);
+          if (pool) {
+            const [u,v] = puddleUV(pool, x + corners[vertex * 2] * rippleReach, z + corners[vertex * 2 + 1] * rippleReach);
+            waterUV.setXY(vertex, u, v);
+          }
+        }
+        points.needsUpdate = timing.needsUpdate = waterUV.needsUpdate = true;
+        lastMark = now;
       }
+      mesh.visible = !frame.reduced && now - lastMark < soleLife;
     },
     dispose() {
       geometry.dispose();
@@ -210,10 +202,10 @@ function cisternSurface() {
   return new ShapeGeometry(outline);
 }
 
-export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
+export function buildFortressWater(room: FortressRoom) {
   const group = new Group();
   const clock = { value: 0 };
-  const steps = wetFootfalls(puddles);
+  const steps = wetFootfalls();
   group.add(steps.mesh);
   const puddleMaterial = new ShaderMaterial({
     uniforms: { clock },
@@ -224,7 +216,7 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
   });
   const plane = new PlaneGeometry(2, 2);
   plane.rotateX(-Math.PI / 2);
-  for (const p of puddles) {
+  for (const p of palacePuddles[room]) {
     const patch = new Mesh(plane, puddleMaterial);
     patch.position.set(p.x, 0.022, p.z);
     patch.scale.set(p.w, 1, p.d);

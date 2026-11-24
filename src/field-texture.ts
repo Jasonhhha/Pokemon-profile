@@ -1,4 +1,4 @@
-import type { FieldArea } from './field-layout';
+import type { RoomId } from './field-layout';
 
 export type GroundMaterial = 'meadow' | 'thicket' | 'dirt' | 'pavers' | 'sand' | 'water' | 'shallows' | 'wood' | 'drop' | 'void';
 
@@ -33,7 +33,7 @@ function sampleNoise(x: number, y: number, scale: number, salt = 0) {
 
 export function textureGround(
   ctx: CanvasRenderingContext2D,
-  area: FieldArea,
+  room: RoomId,
   materials: GroundMaterial[][],
   tileSize: number,
 ) {
@@ -56,7 +56,7 @@ export function textureGround(
       const texture = fleck + broad * 3 + fine * 1.5 + band + depth;
       const shade = material === 'water' || material === 'shallows' || material === 'drop'
         ? 0
-        : localLight(area, x, y);
+        : localLight(room, x, y);
       const index = (y * width + x) * 4;
       channels[index] += texture * amounts[0] + shade * 1.25;
       channels[index + 1] += texture * amounts[1] + shade;
@@ -66,12 +66,12 @@ export function textureGround(
   ctx.putImageData(frame, 0, 0);
 }
 
-function localLight(area: FieldArea, x: number, y: number) {
-  if (area === 'harbor') {
+function localLight(room: RoomId, x: number, y: number) {
+  if (room === 'home') {
     const sunlitQuay = Math.max(0, 1 - Math.abs(y - 204) / 96) * 9;
     return sunlitQuay - 3 + 2 * Math.cos((x - 150) / 95);
   }
-  if (area === 'grove') {
+  if (room === 'lab') {
     const clearing = Math.max(0, 1 - Math.abs(x + y * .56 - 244) / 68) * 13;
     return clearing + Math.max(0, 1 - Math.abs(y - 209) / 47) * 4 - 10;
   }

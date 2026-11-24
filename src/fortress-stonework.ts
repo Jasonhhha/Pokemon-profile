@@ -1,3 +1,5 @@
+import {sluiceConduits,sluiceCurrent} from './fortress-palace-current';
+import { hallStairs, hallSupport, stairTread, viewingSteps } from './fortress-portals';
 import {
   AdditiveBlending,
   BoxGeometry,
@@ -24,7 +26,7 @@ import {
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { createWaterRelief } from './fortress-relief';
 import { carvedDrum, createTideDial } from './fortress-tide-dial';
-import type { FortressRoom } from './field-fortress-state';
+import {sluiceTerrace, type FortressRoom} from './field-fortress-state';
 import { wardPosts, wardWalkway } from './fortress-ward-service';
 
 const tau = Math.PI * 2;
@@ -126,6 +128,7 @@ export function buildFortressStonework(room: FortressRoom) {
   });
   const serpentine = new MeshStandardMaterial({ color: 0x728078, map: grainMap, roughness: 0.62, metalness: 0.09 });
   const weathered = new MeshStandardMaterial({ color: 0xaa9a79, map: grainMap, roughness: 0.7 });
+  const circuitLights=room==='sluice'?Array.from({length:12},()=>new MeshBasicMaterial({color:0x599f95})):[];
   const seaGlass = new MeshBasicMaterial({ color: 0x738f8d });
   const windows: Point[] = [];
   const geom = {
@@ -243,14 +246,14 @@ export function buildFortressStonework(room: FortressRoom) {
     box(bronze, x + sign * 0.04, 1.08, z, 0.085, 0.07, 1.22);
     box(wet, x, 0.23, z, 0.37, 0.15, 1.68);
   }
-  function rail(x: number, z1: number, z2: number) {
+  function rail(x: number, z1: number, z2: number, height=0) {
     for (let z = z1; z < z2 + 0.01; z += 1) {
-      box(wet, x, 0.085, z, 0.22, 0.15, 0.21);
-      put(geom.bell, weathered, [x, 0.14, z], [0.102, 0.29, 0.102]);
-      cyl(pale, x, 0.46, z, 0.13, 0.061);
-      cyl(bronze, x, 0.52, z, 0.08, 0.052);
+      box(wet, x, height+0.085, z, 0.22, 0.15, 0.21);
+      put(geom.bell, weathered, [x, height+0.14, z], [0.102, 0.29, 0.102]);
+      cyl(pale, x, height+0.46, z, 0.13, 0.061);
+      cyl(bronze, x, height+0.52, z, 0.08, 0.052);
     }
-    box(bronze, x, 0.52, (z1 + z2) / 2, 0.068, 0.057, z2 - z1 + 0.08);
+    box(bronze, x, height+0.52, (z1 + z2) / 2, 0.068, 0.057, z2 - z1 + 0.08);
   }
   function hoistLanding() {
     const x = 3.5,
@@ -600,14 +603,56 @@ export function buildFortressStonework(room: FortressRoom) {
   }
   let surround: MeshStandardMaterial | undefined;
   const lamps: Point[] = [];
-  const puddles: { x: number; z: number; w: number; d: number; angle: number }[] = [];
   if (room === 'sluice') {
     reflectedHall(false);
+    // The King’s Gate opens onto two usable viewing terraces. The outer loggias rise above the reservoir.
+    for(let z=5;z<=15;z++){
+      for(let x=1;x<=15;x++)if(sluiceTerrace(x,z)){
+        let last=x;
+        while(last<15&&sluiceTerrace(last+1,z))last++;
+        flagstones((x+last+1)/2,z+.5,last-x+1,1);
+        x=last;
+      }
+    }
+    for(const step of viewingSteps){
+      box(wet,step.x,step.top*.5,10.5,step.width+.006,step.top,11);
+      for(let z=5;z<16;z++){
+        box(pale,step.x,step.top-.018,z+.5,step.width-.006,.051,.984,.82+.12*grain(z+step.x));
+        if(step.width<.3)box(bronze,step.x-step.nose*(step.width/2-.023),step.top+.01,z+.5,.018,.013,.97,.76);
+      }
+    }
+    for(const side of [-1,1]){
+      for(const [offset,level,width] of [[9.25,2.76,2.55],[13.60,5.21,2.80]]){
+        const cx=8.5+side*offset, edge=cx-side*width/2;
+        box(wet,cx,level-.28,5.25,width,.56,29.8,.86);
+        box(pale,cx,level+.035,5.25,width+.12,.12,29.85,.88);
+        box(bronze,edge,level-.40,5.25,.097,.072,29.74);
+        box(pale,edge,level+.65,5.25,.13,.14,29.75,.86);
+        for(let z=-8.1;z<20.2;z+=2.495){
+          box(stone,edge,level+.33,z,.18,.56,.18);
+          box(bronze,edge,level+.53,z,.22,.047,.21);
+          box(wet,cx,-.44,z,width*.38,1.23,.71,.79);
+          const rise=level+1.09;
+          cyl(stone,cx,level/2-.19,z,.36,rise);
+          box(pale,cx,level-.67,z,width*.66,.20,.88,.88);
+        }
+      }
+      for(const [a,b] of [[8.05,10.95],[13.06,14.91]]){
+        rail(8.5+side*2.50,a,b);
+        rail(8.5+side*7.40,a,b,hallSupport('sluice',8.5+side*7.40,a));
+      }
+      for(const z of [5.57,11.64,15.42])capitalLamp(8.5+side*7.27,z,hallSupport('sluice',8.5+side*7.27,z)+.39,.56);
+    }
+
+    for(const {x,z,w,d,band} of sluiceConduits){
+      box(bronze,x,.028,z,w||.133,.024,d||.133,.87);
+      box(circuitLights[band],x,.043,z,w||.058,.010,d||.058);
+    }
     carvedStele(4.74, 0.65, -0.53, 1.45, 2.02);
     carvedStele(12.26, 0.65, -0.53, 1.45, 2.02);
     wornBorders(3.15, 17.88);
     box(dark, 8.5, -2.78, -1.95, 3.41, 0.19, 10.2, 0.66);
-    fallenColumn(1.7, 9.57, -0.43);
+    fallenColumn(4.58, 9.57, -0.43);
     fallenColumn(15.05, 3.7, 0.32);
     for (const x of [5.43, 11.57]) capitalLamp(x, -6.51, 1.08, 1.25);
     lintel(8.5, -11.5, 7.61, 7.5);
@@ -629,12 +674,7 @@ export function buildFortressStonework(room: FortressRoom) {
         brassBand(crossing, z + 0.38, 3);
         for (let k = -5; k <= 5; k++) box(iron, crossing + k * 0.24, 0.024, z, 0.028, 0.025, 0.56);
       }
-      for (const [a, b] of [
-        [5.1, 5.9],
-        [7.12, 11.88],
-        [13.1, 15.9],
-      ])
-        rail(8.5 + side * 1.48, a, b);
+
     }
     for (let n = 0; n < 4; n++) box(wet, 8.5, -0.11 - n * 0.145, 18.1 + n * 0.27, 3.1, 0.26, 0.3);
     flagstones(8.5, 10.5, 3, 15);
@@ -671,17 +711,6 @@ export function buildFortressStonework(room: FortressRoom) {
     }
     capitalLamp(6.66, 3.27, 0.31);
     capitalLamp(10.34, 3.27, 0.31);
-    for (const [x, z, w, d, a] of [
-      [8.1, 15.4, 1.09, 0.41, 0.26],
-      [9, 13.8, 0.7, 0.27, -0.6],
-      [7.55, 11.2, 0.45, 1.1, 0.13],
-      [8.63, 8.1, 1.03, 0.34, -0.18],
-      [6.42, 6.45, 0.52, 0.26, 0.2],
-      [8.92, 4.72, 0.53, 0.46, 0.4],
-      [13.46, 8.6, 0.31, 0.71, 0.08],
-      [3.47, 13.4, 0.32, 0.46, 0.15],
-    ])
-      puddles.push({ x, z, w, d, angle: a });
   } else {
     reflectedHall(true);
     carvedStele(3.44, -3.26, 0.55, 1.71, 2.42);
@@ -801,6 +830,21 @@ export function buildFortressStonework(room: FortressRoom) {
       cyl(iron, tailX, -0.423, tailZ, 0.062, 0.028);
     }
     flagstones(8.5, 17, 9, 4);
+    const stair = hallStairs.seal[0];
+    for (let i = 0; i < stair.steps; i++) {
+      const {z, depth, y} = stairTread(stair, i), mid = z + depth / 2;
+      box(wet, stair.x, y / 2 - .12, mid, stair.half * 2, y + .22, depth + .008);
+      box(pale, stair.x, y - .015, mid, stair.half * 2, .03, depth - .009, .83 + grain(i)*.1);
+      box(bronze, stair.x, y + .004, z + .028, stair.half * 2 - .09, .009, .017);
+      for (const side of [-1, 1]) {
+        const x = stair.x + side*(stair.half + .16);
+        box(wet, x, y / 2 + .03, mid, .32, y+.43, depth + .01, .87);
+        box(pale, x, y + .25, mid, .35, .045, depth, .85);
+      }
+    }
+    const crest = stairTread(stair, stair.steps - 1);
+    box(wet, stair.x, crest.y / 2 - .12, stair.z + stair.depth + .40, stair.half*2 + .69, crest.y + .22, .81);
+    for (const x of [stair.x - stair.half - .18, stair.x + stair.half + .18]) capitalLamp(x, stair.z + stair.depth + .16, crest.y + .32, .49);
     flagstones(8.5, 13, 3, 4);
     serviceGalleries();
     for (const x of [7.04, 9.96]) {
@@ -813,17 +857,6 @@ export function buildFortressStonework(room: FortressRoom) {
       cyl(bronze, x, 0.66, 15.29, 0.34, 0.12);
       capitalLamp(x, 15.29, 0.89, 0.79);
     }
-    for (const [x, z, w, d, a] of [
-      [5.8, 16.5, 0.98, 0.48, 0.41],
-      [11.0, 17.6, 1.04, 0.36, -0.37],
-      [8.25, 13.91, 0.86, 0.31, 0.21],
-      [8.98, 12.4, 0.43, 0.65, -0.24],
-      [2.54, 5.34, .22, .46, -.12],
-      [2.39, 10.63, .18, .39, .21],
-      [14.43, 8.56, .24, .38, -.26],
-      [12.43, 12.49, .37, .19, .18],
-    ])
-      puddles.push({ x, z, w, d, angle: a });
   }
   const dial = createTideDial(room);
   group.add(dial.group);
@@ -923,8 +956,11 @@ export function buildFortressStonework(room: FortressRoom) {
   return {
     group,
     lamps,
-    puddles,
-    update(resonance: number, time: number, x: number, z: number, liftUnlocked: boolean) {
+    update(resonance: number, time: number, x: number, z: number, liftUnlocked: boolean, bus=.78, phase=.45) {
+      for(const [i,line] of circuitLights.entries()){
+        const signal=sluiceCurrent(time,bus,phase,i);
+        line.color.setRGB(.036+signal*.21,.098+signal*.53,.11+signal*.43);
+      }
       liftJade.color.setHex(liftUnlocked ? 0x98cbb2 : 0x425950);
       liftJade.emissiveIntensity = liftUnlocked ? 0.62 : 0.035;
       walker.value.set(x, 0.91, z);
@@ -954,6 +990,7 @@ export function buildFortressStonework(room: FortressRoom) {
       group.traverse(o => {
         if (o instanceof InstancedMesh) o.dispose();
       });
+      for(const light of circuitLights)light.dispose();
       relief.dispose();
       dial.dispose();
       grainMap.dispose();

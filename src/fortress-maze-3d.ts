@@ -1,11 +1,24 @@
+import { outerWall, palaceOverlook, wallFacesCamera } from './palace-overlook';
+import {processionalSign} from './fortress-palace-sign';
+import { behindTraveller, palaceView } from './fortress-palace-camera';
+import { collectorSpokes, highSluices, sluiceVeil, suspendedHeight } from './fortress-palace-monuments';
 import {
-  AdditiveBlending,
+  armillaryRotation,
+  palaceArmillary,
+  palaceConductors,
+  palaceWorks,
+  wheelAngle,
+  worksPower,
+} from './fortress-palace-current';
+import {
+  BackSide,
   BoxGeometry,
   BufferGeometry,
   Color,
   CylinderGeometry,
   DirectionalLight,
-  DynamicDrawUsage,
+  DoubleSide,
+  Float32BufferAttribute,
   FogExp2,
   Group,
   HemisphereLight,
@@ -15,969 +28,597 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
-  PlaneGeometry,
   PointLight,
+  Raycaster,
   Scene,
+  ShaderMaterial,
+  SphereGeometry,
   Sprite,
   SpriteMaterial,
   TorusGeometry,
-  Vector3,
+  Vector2,
   type Material,
-  type Raycaster,
   type Texture,
 } from 'three';
-import { createFrostFootfalls } from './fortress-maze-frost';
-import { createPontoonMotion } from './fortress-pontoons';
-import { carvedDrum } from './fortress-tide-dial';
-import { buildFortressWater } from './fortress-water';
 import type { FortressInteriorFrame } from './field-fortress-state';
-import { catacombLift, mazeFloors, type MazePoint, type MazeRoom } from './fortress-maze';
+import { mazeFieldMap, mazeFloors, palaceElevation, type MazeRoom } from './fortress-maze';
+import { archStone, createMazeMaterials, crystalShape, funeraryLid, noise, stairSign } from './fortress-maze-materials';
+import { carvedDrum } from './fortress-tide-dial';
+import { channelSurface, cisternMirror, outfalls } from './fortress-maze-water';
+import { createFrostFootfalls } from './fortress-maze-frost';
+import { buildFortressWater } from './fortress-water';
+import { palaceArchitecture, palaceVault, type Form, type Stone } from './fortress-palace-architecture';
+import { palaceLandmarkRay } from './fortress-palace-picking';
 
-import {
-  archStone,
-  createMazeMaterials,
-  crystalShape,
-  funeraryLid,
-  noise,
-  stairSign,
-  tau,
-} from './fortress-maze-materials';
-import { channelSurface, cisternMirror, outfalls, type Outfall } from './fortress-maze-water';
-
-type Triple = [number, number, number];
 export function buildMazeRoom3D(room: MazeRoom, glow: Texture) {
   const plan = mazeFloors[room],
-    frost = room === 'catacomb';
+    cold = room === 'catacomb',
+    map = mazeFieldMap(room);
   const scene = new Scene(),
-    atmosphere = frost ? 0x182b3b : 0x203631;
-  scene.background = new Color(atmosphere);
-  scene.fog = new FogExp2(atmosphere, frost ? 0.04 : 0.038);
-  const palette = createMazeMaterials(frost);
-  const { ground, face, chalk, dark, brass, iron, wallCap, wet, wood, jade, ice, gem, glowGlass, amberGlass, mats } =
-    palette;
-  const blocks = new BoxGeometry(),
-    round = new CylinderGeometry(1, 1, 1, 12),
-    oct = new CylinderGeometry(1, 0.91, 1, 8);
-  const ring = new TorusGeometry(1, 0.092, 6, 24),
-    curve = archStone(),
-    icicle = crystalShape(),
-    lid = funeraryLid();
-  const screen = new PlaneGeometry(1, 1);
-  const lateralDrum = new CylinderGeometry(1, 1, 1, 12).rotateZ(Math.PI / 2);
-  const axialDrum = new CylinderGeometry(1, 1, 1, 12).rotateX(Math.PI / 2);
-  const flute = carvedDrum(
-    [
-      [0, 1],
-      [0.045, 1],
-      [0.14, 0.88],
-      [0.76, 0.79],
-      [0.94, 0.75],
-      [1, 0.79],
-    ],
-    10,
-    0.085,
-  );
-  const capital = carvedDrum(
-    [
-      [0, 0.61],
-      [0.19, 0.71],
-      [0.37, 0.66],
-      [0.84, 0.98],
-      [1, 1.01],
-    ],
-    9,
-    0.106,
-  );
-  const geometries = [flute, capital, lid, blocks, round, oct, ring, curve, icicle, screen, lateralDrum, axialDrum];
-  const pontoons = createPontoonMotion(room);
-  let activeBridge: { x: number; z: number } | undefined;
-  type Stamp = { pose: Matrix4; brightness: number; bridge?: { x: number; z: number } };
-  const bridgeParts: { instance: InstancedMesh; index: number; rest: Matrix4; x: number; z: number }[] = [];
-  const bridgeBatches = new Set<InstancedMesh>();
-  const batches = new Map<BufferGeometry, Map<Material, Stamp[]>>();
-  const placer = new Object3D(),
-    color = new Color();
-  function place(g: BufferGeometry, m: Material, p: Triple, s: Triple, r: Triple = [0, 0, 0], brightness = 1) {
-    placer.position.set(...p);
-    placer.scale.set(...s);
-    placer.rotation.set(...r);
-    placer.updateMatrix();
-    let group = batches.get(g);
-    if (!group) {
-      group = new Map();
-      batches.set(g, group);
-    }
-    let set = group.get(m);
-    if (!set) {
-      set = [];
-      group.set(m, set);
-    }
-    set.push({ pose: placer.matrix.clone(), brightness, bridge: activeBridge });
-  }
-  const box = (m: Material, x: number, y: number, z: number, w: number, h: number, d: number, shade = 1) =>
-    place(blocks, m, [x, y, z], [w, h, d], [0, 0, 0], shade);
-  const touchTargets: Mesh[] = [];
-  const destinations = new Map<Mesh, MazePoint>();
-  function touchTarget(point: MazePoint, shape: BufferGeometry, position: Triple, size: Triple) {
-    const target = new Mesh(shape, iron);
-    target.position.set(...position);
-    target.scale.set(...size);
-    target.updateMatrixWorld();
-    touchTargets.push(target);
-    destinations.set(target, { x: point.x + 0.5, y: point.y + 0.5 });
-  }
-  const lamps: Triple[] = [];
-  function lamp(x: number, y: number, z: number, scale = 0.75) {
-    place(oct, iron, [x, y + 0.12 * scale, z], [0.19 * scale, 0.24 * scale, 0.19 * scale]);
-    place(round, brass, [x, y + 0.35 * scale, z], [0.061 * scale, 0.44 * scale, 0.061 * scale]);
-    place(oct, brass, [x, y + 0.56 * scale, z], [0.15 * scale, 0.1 * scale, 0.15 * scale]);
-    place(oct, glowGlass, [x, y + 0.69 * scale, z], [0.1 * scale, 0.22 * scale, 0.1 * scale]);
-    place(oct, iron, [x, y + 0.83 * scale, z], [0.16 * scale, 0.055 * scale, 0.16 * scale]);
-    lamps.push([x, y + 0.7 * scale, z]);
-  }
-  const walk = (x: number, y: number) => {
-    const tile = plan.tiles[y]?.[x];
-    return tile !== undefined && tile !== 'wall' && tile !== 'channel';
+    air = cold ? 0x213449 : 0x304543;
+  scene.background = new Color(air);
+  scene.fog = new FogExp2(air, cold ? 0.016 : 0.014);
+  const palette = createMazeMaterials(cold);
+  const royal = new MeshStandardMaterial({ color: cold ? 0x355778 : 0x28645b, metalness: 0.32, roughness: 0.42 });
+  const basalt = palette.dark.clone();
+  basalt.color.setHex(cold ? 0x293946 : 0x4f5549);
+  basalt.metalness = 0.12;
+  basalt.roughness = 0.61;
+  basalt.onBeforeCompile = palette.dark.onBeforeCompile;
+  const gilt = new MeshStandardMaterial({
+    color: 0xd3a758,
+    metalness: 0.38,
+    roughness: 0.34,
+    emissive: 0x553311,
+    emissiveIntensity: 0.13,
+  });
+  const copper = palette.face.clone();
+  copper.color.setHex(0xb98454);
+  copper.metalness = 0.32;
+  copper.roughness = 0.42;
+  copper.onBeforeCompile = palette.face.onBeforeCompile;
+  const tones: Record<Stone, Material> = {
+    body: palette.face,
+    trim: palette.wallCap,
+    bright: palette.chalk,
+    dark: palette.wet,
+    bronze: palette.brass,
+    iron: palette.iron,
+    jade: palette.jade,
+    lamp: cold ? palette.glowGlass : palette.amberGlass,
+    ice: palette.gem,
+    royal,
+    basalt,
+    gilt,
+    copper,
   };
-  const stoneFloor = (x: number, y: number) => {
-    const tile = plan.tiles[y]?.[x];
-    return walk(x, y) && tile !== 'bridge' && tile !== 'gate';
-  };
-  const channel = channelSurface(room);
-  scene.add(channel);
-  let tick = 0;
-  const mirror = frost ? undefined : cisternMirror(channel, () => tick);
-  if (mirror) scene.add(mirror);
-  const pools = frost
-    ? undefined
-    : buildFortressWater(room, [
-        { x: 4.78, z: 18.54, w: 0.51, d: 0.34, angle: -0.25 },
-        { x: 3.56, z: 15.48, w: 0.44, d: 0.26, angle: 0.31 },
-        { x: 6.79, z: 8.48, w: 0.57, d: 0.25, angle: 0.12 },
-        { x: 11.53, z: 9.61, w: 0.44, d: 0.31, angle: -0.42 },
-        { x: 15.48, z: 7.43, w: 0.51, d: 0.33, angle: 0.17 },
-        { x: 18.64, z: 5.22, w: 0.43, d: 0.31, angle: -0.3 },
-      ]);
-  if (pools) scene.add(pools.group);
-  const frostSteps = frost ? createFrostFootfalls() : undefined;
-  if (frostSteps) scene.add(frostSteps.mesh);
-  for (let y = 0; y < plan.height; y++)
-    for (let x = 0; x < plan.width; x++) {
-      const tile = plan.tiles[y][x],
-        key = x + 31 * y,
-        cx = x + 0.5,
-        cz = y + 0.5;
-      const tint = 0.87 + 0.13 * noise(key);
-      if (tile === 'wall') {
-        const near = walk(x - 1, y) || walk(x + 1, y) || walk(x, y - 1) || walk(x, y + 1);
-        const boundary = x < 2 || y < 2 || x > plan.width - 3 || y > plan.height - 3;
-        const height = boundary ? 0.32 : near ? 0.64 : 0.81;
-        const variation = height + noise(key) * 0.07;
-        box(dark, cx, -0.54 + variation * 0.5, cz, 0.993, variation + 1.1, 0.993, tint);
-        box(wallCap, cx, variation - 0.004, cz, 0.994, 0.18, 0.994, tint);
-        if (near && !boundary) {
-          for (const [dx, dy] of [
-            [1, 0],
-            [-1, 0],
-            [0, 1],
-            [0, -1],
-          ]) {
-            if (!walk(x + dx, y + dy)) continue;
-            box(
-              face,
-              cx + 0.456 * dx,
-              variation + 0.063,
-              cz + 0.456 * dy,
-              dx ? 0.083 : 0.97,
-              0.07,
-              dy ? 0.083 : 0.97,
-              tint,
-            );
-          }
-        }
-        if (!near && !boundary && key % 7 === 0) {
-          box(wallCap, cx, variation + 0.15, cz, 0.88, 0.25, 0.88, tint);
-          if (frost && key % 3 === 0)
-            place(icicle, gem, [cx, variation + 0.29, cz], [0.22, 0.45, 0.22], [0.15, key, 0.12]);
-        }
-        continue;
-      }
-      if (tile === 'channel') {
-        if (frost && key % 8 === 0) {
-          const size = 0.2 + noise(key) * 0.19;
-          place(oct, ice, [cx, -1.05 + noise(key * 3) * 0.04, cz], [size, 0.14, size * 1.15], [0, key * 0.71, 0], 0.83);
-        }
-        continue;
-      }
-      if (tile === 'gate' || (x === plan.up.x && y === plan.up.y) || (x === plan.down.x && y === plan.down.y)) continue;
-      if (tile === 'bridge') {
-        activeBridge = { x: cx, z: cz };
-        const alongX = walk(x - 1, y) && walk(x + 1, y);
-        const yaw = alongX ? 0 : Math.PI / 2;
-        for (let slat = 0; slat < 6; slat++) {
-          const off = (slat - 2.5) / 6;
-          place(
-            blocks,
-            wood,
-            [cx + Math.cos(yaw) * off, -0.033, cz + Math.sin(yaw) * off],
-            [0.149, 0.067, 0.89],
-            [0, -yaw, 0],
-            tint * (0.86 + 0.14 * noise(key + slat)),
-          );
-        }
-        for (const side of [-1, 1]) {
-          place(
-            round,
-            dark,
-            [cx - Math.sin(yaw) * side * 0.34, -0.18, cz + Math.cos(yaw) * side * 0.34],
-            [0.14, 0.98, 0.14],
-            alongX ? [0, 0, Math.PI / 2] : [Math.PI / 2, 0, 0],
-          );
-          place(
-            blocks,
-            iron,
-            [cx - Math.sin(yaw) * side * 0.4, 0.014, cz + Math.cos(yaw) * side * 0.4],
-            [0.94, 0.026, 0.032],
-            [0, -yaw, 0],
-          );
-        }
-        activeBridge = undefined;
-        continue;
-      }
-      box(face, cx, frost ? -0.57 : -0.34, cz, 0.998, frost ? 1.06 : 0.6, 0.998, tint);
-      box(tile === 'ice' ? ice : ground, cx, -0.055, cz, 0.99, 0.11, 0.99, tint);
-      if (tile === 'grate') {
-        box(iron, cx, 0.003, cz, 0.84, 0.026, 0.84);
-        for (let k = 0; k < 7; k++) box(brass, cx - 0.35 + k * 0.117, 0.029, cz, 0.035, 0.035, 0.76, 0.76);
-      }
-      // Raised pale banks trace real drop-offs. Their breaks coincide with the pontoon crossings.
-      for (const [dx, dy] of [
-        [1, 0],
-        [-1, 0],
+  const shapes: Record<Form, BufferGeometry> = {
+    box: new BoxGeometry(),
+    column: new CylinderGeometry(1, 1, 1, 16),
+    shaft: carvedDrum(
+      [
         [0, 1],
-        [0, -1],
-      ]) {
-        const neighbor = plan.tiles[y + dy]?.[x + dx];
-        if (neighbor !== 'channel') continue;
-        box(chalk, cx + dx * 0.46, -0.005, cz + dy * 0.46, dx ? 0.095 : 0.99, 0.092, dy ? 0.095 : 0.99, tint);
-        if (!frost && key % 13 === 0) lamp(cx + dx * 0.4, 0.04, cz + dy * 0.4, 0.5);
-      }
-      if (tile === 'ice') {
-        for (let k = 0; k < 4; k++) {
-          const angle = noise(key + k) * 0.9 - 0.45;
-          place(
-            blocks,
-            chalk,
-            [cx - 0.29 + k * 0.17, 0.005, cz - 0.08 + 0.16 * Math.sin(k + key)],
-            [0.23, 0.009, 0.013],
-            [0, angle, 0],
-            0.9,
-          );
-        }
-      }
+        [0.04, 1],
+        [0.12, 0.88],
+        [0.77, 0.76],
+        [0.95, 0.71],
+        [1, 0.78],
+      ],
+      14,
+      0.077,
+    ),
+    capital: carvedDrum(
+      [
+        [0, 0.63],
+        [0.13, 0.71],
+        [0.35, 0.65],
+        [0.69, 0.87],
+        [0.89, 1],
+        [1, 1.01],
+      ],
+      12,
+      0.105,
+    ),
+    arch: archStone(),
+    orb: new SphereGeometry(1, 14, 9),
+    ring: new TorusGeometry(1, 0.104, 8, 40),
+    spike: crystalShape(),
+    lid: funeraryLid(),
+  };
+  const batches = new Map<BufferGeometry, Map<Material, { matrix: Matrix4; tint: number }[]>>();
+  const dummy = new Object3D(),
+    col = new Color();
+  function stamp(
+    form: Form,
+    material: Material,
+    x: number,
+    y: number,
+    z: number,
+    w: number,
+    h: number,
+    d: number,
+    yaw = 0,
+    roll = 0,
+    pitch = 0,
+    tint = 1,
+  ) {
+    const geom = shapes[form];
+    let materials = batches.get(geom);
+    if (!materials) {
+      materials = new Map();
+      batches.set(geom, materials);
     }
-  // The north and side walls retain their full vaults. The camera-facing wall is cut just above the foundation.
-  function gallery(cx: number, cz: number, yaw: number, bay: number, low: boolean) {
-    const sin = Math.sin(yaw),
-      cos = Math.cos(yaw);
-    const part = (
-      g: BufferGeometry,
-      m: Material,
-      x: number,
-      y: number,
-      z: number,
-      w: number,
-      h: number,
-      d: number,
-      shade = 1,
-    ) => place(g, m, [cx + x * cos + z * sin, y, cz - x * sin + z * cos], [w, h, d], [0, yaw, 0], shade);
-    const cube = (m: Material, x: number, y: number, z: number, w: number, h: number, d: number, shade = 1) =>
-      part(blocks, m, x, y, z, w, h, d, shade);
-    const lit = bay % 3 === 1;
-    cube(wet, 0, -0.18, -0.25, 3.05, 1.45, 1.02);
-    cube(face, 0, 0.42, -0.04, 3.02, 0.16, 0.93, 0.94);
-    if (low) {
-      cube(wallCap, 0, 0.56, -0.1, 2.98, 0.17, 0.82);
-      cube(wet, 1.5, 0.08, -0.03, 0.66, 1.17, 1.38);
-      cube(face, 1.5, 0.66, -0.02, 0.66, 0.14, 1.36);
-      if (frost) cube(ice, 1.49, 0.747, 0.33, 0.53, 0.037, 0.25, 0.74);
-      return;
+    let items = materials.get(material);
+    if (!items) {
+      items = [];
+      materials.set(material, items);
     }
-    cube(wet, 0, 1.67, -0.55, 3.04, 3.45, 0.42, 0.76);
-    cube(dark, 0, 0.42, 0.29, 2.41, 0.21, 0.65);
-    cube(face, 0, 0.545, 0.34, 2.26, 0.068, 0.54);
-    const spring = frost ? 1.84 : 1.64;
-    if (frost) {
-      cube(iron, 0, 1.02, -0.18, 1.48, 0.94, 0.13, 0.65);
-      cube(chalk, 0, 1.535, -0.12, 1.65, 0.12, 0.23);
-      cube(face, 0, 0.66, -0.03, 1.73, 0.17, 0.4);
-      part(oct, wallCap, 0, 1.22, 0.056, 0.45, 0.26, 0.22);
-      if (bay % 2 === 0) {
-        part(ring, brass, 0, 1.25, 0.218, 0.23, 0.23, 0.19);
-        cube(jade, 0, 1.23, 0.219, 0.044, 0.27, 0.027);
-      } else {
-        for (const dx of [-0.4, -0.19, 0.19, 0.4]) cube(chalk, dx, 1.05, -0.07, 0.046, 0.46, 0.035, 0.81);
-      }
-    } else {
-      for (const dx of [-0.76, -0.57, -0.38, -0.19, 0, 0.19, 0.38, 0.57, 0.76])
-        cube(iron, dx, 1.13, -0.09, 0.048, 1.19, 0.062, 0.83);
-      cube(brass, 0, 1.28, -0.075, 1.65, 0.075, 0.082, 0.77);
-      part(lateralDrum, iron, 0, 0.92, 0.16, 2.36, 0.14, 0.14);
-      for (const dx of [-0.91, 0.51]) part(lateralDrum, brass, dx, 0.92, 0.16, 0.104, 0.173, 0.173);
-      if (lit) {
-        part(axialDrum, iron, 0.62, 1.57, 0.06, 0.27, 0.27, 0.53);
-        part(ring, brass, 0.62, 1.57, 0.33, 0.27, 0.27, 0.36);
-        for (let n = -1; n <= 1; n++) cube(iron, 0.62 + n * 0.1, 1.57, 0.33, 0.036, 0.41, 0.04);
-      }
-    }
-    // Continuous vault courses and stepped piers tie adjoining bays into one structure.
-    part(curve, face, 0, spring, -0.015, 1.13, 0.79, 0.45);
-    part(curve, chalk, 0, spring, 0.204, 1.075, 0.77, 0.15, 0.84);
-    cube(dark, 1.5, 1.46, -0.04, 0.76, 3.0, 0.88);
-    cube(face, 1.5, 0.57, 0.13, 0.82, 0.19, 1.12);
-    part(flute, chalk, 1.5, 0.64, 0.34, 0.3, 1.32, 0.25, 0.91);
-    part(capital, chalk, 1.5, spring + 0.11, 0.34, 0.355, 0.24, 0.29, 0.86);
-    cube(face, 1.5, spring + 0.36, 0.14, 0.76, 0.23, 1.03);
-    cube(chalk, 1.5, spring + 0.53, 0.13, 0.88, 0.11, 1.15, 0.88);
-    cube(face, 0, 2.93, -0.16, 3.03, 0.3, 0.74);
-    cube(wallCap, 0, 3.1, -0.17, 3.08, 0.16, 0.89);
-    if (lit) {
-      const x = cx + 0.53 * sin + 1.5 * cos,
-        z = cz + 0.53 * cos - 1.5 * sin;
-      lamp(x, 1.34, z, 0.78);
-    }
+    dummy.position.set(x, y, z);
+    dummy.rotation.set(pitch, yaw, roll, 'YXZ');
+    dummy.scale.set(w, h, d);
+    dummy.updateMatrix();
+    items.push({ matrix: dummy.matrix.clone(), tint });
   }
-  for (let k = 0; k < 7; k++) {
-    const bay = 2.5 + 3 * k;
-    gallery(bay, 1.26, 0, k, false);
-    gallery(1.23, bay, Math.PI / 2, k + 2, false);
-    gallery(21.77, bay, -Math.PI / 2, k + 1, false);
-    gallery(bay, 21.77, Math.PI, k, true);
-  }
-  const pierSites = frost
-    ? [
-        [7.83, 5.79, 1.41],
-        [14.78, 10.7, 1.91],
-        [16.52, 13.6, 1.54],
-        [11.55, 16.4, 0.77],
-      ]
-    : [
-        [9.35, 6.74, 1.46],
-        [9.42, 19.22, 1.7],
-        [19.8, 16.97, 2.18],
-        [15.42, 5.35, 1.52],
-      ];
-  for (const [x, z, h] of pierSites) {
-    const base = plan.tiles[Math.floor(z)][Math.floor(x)] === 'wall' ? 0.77 : -0.49;
-    if (frost && base < 0) box(wet, x, -0.83, z, 0.62, 0.68, 0.62);
-    box(wet, x, base + 0.08, z, 0.67, 0.32, 0.67);
-    place(oct, chalk, [x, base + 0.27, z], [0.36, 0.14, 0.36], [0, 0.39, 0], 0.92);
-    place(flute, face, [x, base + 0.32, z], [0.27, h, 0.27]);
-    place(capital, chalk, [x, base + 0.26 + h, z], [0.33, 0.25, 0.33]);
-    box(wallCap, x, base + 0.57 + h, z, 0.71, 0.13, 0.71);
-    if (frost) place(icicle, gem, [x + 0.16, base + 0.59 + h, z + 0.13], [0.12, 0.29, 0.11], [0.21, x, -0.18]);
-  }
-  const apron = new Mesh(new PlaneGeometry(72, 72), wet);
-  apron.rotation.x = -Math.PI / 2;
-  apron.position.set(11.5, -1.28, 11.5);
-  apron.receiveShadow = true;
-  const apronUV = apron.geometry.attributes.uv;
-  for (let i = 0; i < apronUV.count; i++) apronUV.setXY(i, apronUV.getX(i) * 36, apronUV.getY(i) * 36);
-  scene.add(apron);
-  const moving: Group[] = [];
-  function mesh(parent: Group, g: BufferGeometry, m: Material, p: Triple, s: Triple, r: Triple = [0, 0, 0]) {
-    const item = new Mesh(g, m);
-    item.position.set(...p);
-    item.scale.set(...s);
-    item.rotation.set(...r);
-    item.castShadow = item.receiveShadow = true;
-    parent.add(item);
-    return item;
-  }
-  function batchMovingParts(assembly: Group) {
-    const sets = new Map<BufferGeometry, Map<Material, Mesh[]>>();
-    for (const object of [...assembly.children]) {
-      if (!(object instanceof Mesh) || Array.isArray(object.material)) continue;
-      let byMaterial = sets.get(object.geometry);
-      if (!byMaterial) {
-        byMaterial = new Map();
-        sets.set(object.geometry, byMaterial);
-      }
-      let parts = byMaterial.get(object.material);
-      if (!parts) {
-        parts = [];
-        byMaterial.set(object.material, parts);
-      }
-      parts.push(object);
-    }
-    for (const [geometry, materials] of sets)
-      for (const [material, parts] of materials) {
-        if (parts.length < 2) continue;
-        const combined = new InstancedMesh(geometry, material, parts.length);
-        parts.forEach((part, i) => {
-          part.updateMatrix();
-          combined.setMatrixAt(i, part.matrix);
-          assembly.remove(part);
-        });
-        combined.castShadow = combined.receiveShadow = true;
-        combined.computeBoundingSphere();
-        assembly.add(combined);
-      }
-  }
-  function arch(x: number, z: number, y: number, radius: number, rise: number, depth: number) {
-    const jamb = radius * 0.22;
-    for (const side of [-1, 1]) {
-      box(face, x + side * (radius + jamb * 0.5), y * 0.51, z, jamb, y * 1.02, depth);
-      box(chalk, x + side * (radius + jamb * 0.5), y - 0.025, z, jamb * 1.35, 0.13, depth * 1.13);
-      box(dark, x + side * (radius + jamb * 0.5), 0.075, z, jamb * 1.42, 0.15, depth * 1.2);
-    }
-    place(curve, chalk, [x, y, z], [radius, rise, depth]);
-  }
-  function stairs(p: MazePoint, down: boolean) {
-    const x = p.x + 0.5,
-      z = p.y + 0.5;
-    const trim = down ? jade : brass;
-    for (let k = 0; k < 7; k++) {
-      const level = (k - 3) * 0.027 * (down ? -1 : 1);
-      box(k === 0 ? trim : ground, x, level - 0.113, z + 0.42 - k * 0.14, 0.93, 0.224, 0.145, 0.93 + k * 0.008);
-      box(k === 0 ? trim : chalk, x, level - 0.02, z + 0.479 - k * 0.14, 0.91, 0.038, 0.025);
-    }
-    for (const side of [-1, 1]) {
-      box(dark, x + side * 0.52, -0.17, z, 0.17, 0.67, 1.13);
-      box(chalk, x + side * 0.52, 0.172, z, 0.2, 0.07, 1.17);
-    }
-    const name = down ? (frost ? '↓ B4' : '↓ B3') : frost ? '↑ B2' : '↑ B1';
-    const sign = stairSign(name, down);
-    mats.push(sign);
-    if (!down) {
-      // The return stair is a hatch with side rails. The open landing remains visible from both sides.
-      for (const side of [-1, 1]) {
-        const railX = x + side * 0.51;
-        for (const dz of [-0.39, 0.36]) place(oct, iron, [railX, 0.31, z + dz], [0.071, 0.36, 0.071]);
-        place(axialDrum, brass, [railX, 0.51, z - 0.02], [0.047, 0.047, 0.88]);
-      }
-      const markerX = x + 0.65,
-        markerZ = z - 0.57;
-      box(wet, markerX, 0.3, markerZ, 0.16, 0.66, 0.16);
-      box(brass, markerX, 0.66, markerZ, 0.22, 0.1, 0.19);
-      box(iron, markerX, 0.815, markerZ, 0.67, 0.29, 0.092);
-      place(screen, sign, [markerX, 0.817, markerZ + 0.049], [0.624, 0.257, 1]);
-      touchTarget(p, blocks, [markerX, 0.815, markerZ], [0.67, 0.29, 0.12]);
-      lamp(x - 0.58, 0.18, z - 0.47, 0.65);
-      return;
-    }
-    const head = z - 1.69,
-      spring = 1.29,
-      radius = 0.86,
-      rise = 0.76;
-    arch(x, head, spring, radius, rise, 0.46);
-    const plate = spring + rise * 0.99,
-      front = 0.232;
-    box(iron, x, plate, head + front, 0.84, 0.31, 0.094);
-    place(screen, sign, [x, plate + 0.005, head + front + 0.051], [0.81, 0.286, 1]);
-    touchTarget(p, blocks, [x, plate, head + front], [0.87, 0.34, 0.15]);
-    for (const side of [-1, 1]) {
-      const jambX = x + side * (radius * 1.11);
-      box(trim, jambX, spring * 0.6, head + front, 0.079, spring * 0.64, 0.048);
-      lamp(jambX, spring + 0.04, head, 0.61);
-      box(iron, x + side * 0.401, 0.009, z - 1.05, 0.061, 0.022, 0.91);
-    }
-  }
-  stairs(plan.up, false);
-  stairs(plan.down, true);
-
-  const outlets: Outfall[] = [];
-  if (!frost) {
-    const headings = [
-      [7.86, 13.21],
-      [9.48, 13.21],
-      [11.1, 13.21],
-      [12.72, 13.21],
-    ];
-    for (const [x, z] of headings) {
-      box(wet, x, -0.1, z, 0.45, 1.12, 0.71);
-      box(brass, x, 0.17, z, 0.47, 0.075, 0.74);
-      box(chalk, x, 0.47, z, 0.52, 0.12, 0.8);
-    }
-    for (let i = 0; i < headings.length - 1; i++) {
-      const [bx, bz] = headings[i],
-        mid = bx + 0.81;
-      place(curve, face, [mid, 0.48, bz], [0.693, 0.48, 0.62]);
-      place(curve, chalk, [mid, 0.48, bz + 0.31], [0.676, 0.45, 0.102], [0, 0, 0], 0.91);
-      box(wet, mid, 1.09, bz, 1.64, 0.16, 0.76);
-      for (const side of [-1, 1]) {
-        if (i === 2 && side === 1) {
-          for (const offset of [-0.56, 0.56]) box(face, mid + offset, 1.24, bz + 0.314, 0.51, 0.23, 0.15);
-        } else box(face, mid, 1.24, bz + side * 0.314, 1.64, 0.23, 0.15);
-      }
-    }
-    // Excess water passes over a chipped lip and falls back into the same cistern.
-    const trough = new Mesh(new PlaneGeometry(5.02, 0.48), channel.material);
-    trough.rotation.x = -Math.PI / 2;
-    trough.position.set(10.31, 1.179, 13.21);
-    trough.renderOrder = 2;
-    scene.add(trough);
-    geometries.push(trough.geometry);
-    for (const x of [7.73, 12.86]) box(face, x, 1.25, 13.21, 0.13, 0.23, 0.79);
-    const pipeX = 7.9,
-      pipeZ = 12.83;
-    place(round, iron, [pipeX, 0.4, pipeZ], [0.19, 1.61, 0.19]);
-    for (const level of [-0.22, 0.4, 1.13]) place(round, brass, [pipeX, level, pipeZ], [0.214, 0.09, 0.214]);
-    place(axialDrum, iron, [pipeX, 1.18, 13.03], [0.183, 0.183, 0.48]);
-    const ex = 11.91,
-      ez = 13.62;
-    box(chalk, ex, 1.094, ez, 0.69, 0.13, 0.38);
-    outlets.push({ x: ex, y: 1.181, z: ez + 0.12, dx: 0, dz: 1, width: 0.51, reach: 0.58 });
-    for (const [x, z, dx, dz] of [
-      [5.31, 1.91, 0, 1],
-      [21.09, 8.6, -1, 0],
-      [21.09, 17.6, -1, 0],
-    ]) {
-      const yaw = Math.atan2(dx, dz);
-      place(axialDrum, iron, [x, 0.97, z], [0.38, 0.38, 0.58], [0, yaw, 0]);
-      place(ring, brass, [x + dx * 0.27, 0.97, z + dz * 0.27], [0.355, 0.355, 0.42], [0, yaw, 0]);
-      place(axialDrum, wet, [x + dx * 0.283, 0.97, z + dz * 0.283], [0.295, 0.295, 0.03], [0, yaw, 0], 0.49);
-      outlets.push({ x: x + 0.3 * dx, y: 0.77, z: z + 0.3 * dz, dx, dz, width: 0.47, reach: 0.7 });
-    }
-    const turbine = plan.landmarks.find((p) => p.kind === 'turbine')!;
-    const x = turbine.x + 0.64,
-      z = turbine.y + 0.37;
-    channel.material.uniforms.wheel.value.set(x, z);
-    for (const dz of [-0.67, 0.64]) {
-      place(oct, dark, [x, -0.19, z + dz], [0.38, 0.85, 0.33], [0, Math.PI / 8, 0]);
-      box(brass, x, 0.22, z + dz, 0.44, 0.13, 0.22);
-    }
-    place(round, iron, [x, 0.18, z], [0.13, 1.68, 0.13], [Math.PI / 2, 0, 0]);
-    const axle = new Group();
-    axle.position.set(x, 0.18, z);
-    for (const dz of [-0.36, 0.36]) {
-      mesh(axle, ring, brass, [0, 0, dz], [0.83, 0.83, 0.63]);
-      mesh(axle, ring, iron, [0, 0, dz], [0.59, 0.59, 0.46]);
-      for (let k = 0; k < 4; k++) mesh(axle, blocks, iron, [0, 0, dz], [0.077, 1.58, 0.09], [0, 0, (k * Math.PI) / 4]);
-    }
-    for (let k = 0; k < 10; k++) {
-      const a = (k * tau) / 10;
-      mesh(axle, blocks, wood, [Math.sin(a) * 0.79, Math.cos(a) * 0.79, 0], [0.29, 0.09, 0.81], [0, 0, -a + 0.31]);
-    }
-    mesh(axle, axialDrum, iron, [0, 0, 0.458], [0.34, 0.34, 0.1]);
-    mesh(axle, ring, brass, [0, 0, 0.515], [0.263, 0.263, 0.25]);
-    for (let tooth = 0; tooth < 12; tooth++) {
-      const a = (tooth * tau) / 12;
-      mesh(axle, blocks, brass, [0.342 * Math.cos(a), 0.342 * Math.sin(a), 0.466], [0.084, 0.084, 0.115], [0, 0, a]);
-      mesh(axle, axialDrum, iron, [0.819 * Math.cos(a), 0.819 * Math.sin(a), 0.408], [0.033, 0.033, 0.058]);
-    }
-    mesh(axle, axialDrum, brass, [0, 0, 0.538], [0.134, 0.134, 0.109]);
-    scene.add(axle);
-    moving.push(axle);
-    for (const mark of plan.landmarks.filter((p) => p.kind === 'gauge')) {
-      const x = mark.x + 0.5,
-        z = mark.y + 0.5;
-      box(dark, x, -0.04, z, 0.57, 0.73, 0.54);
-      box(chalk, x, 0.68, z, 0.25, 1.38, 0.2);
-      box(iron, x, 0.66, z + 0.111, 0.18, 1.13, 0.04);
-      place(round, brass, [x + 0.174, 0.41, z + 0.071], [0.021, 1.36, 0.021]);
-      place(oct, jade, [x + 0.174, -0.248, z + 0.071], [0.101, 0.103, 0.101]);
-      box(brass, x + 0.106, 1.072, z + 0.05, 0.199, 0.046, 0.077);
-      for (let k = 0; k < 8; k++)
-        box(k % 2 ? brass : chalk, x - 0.031, 0.2 + k * 0.126, z + 0.141, k % 2 ? 0.083 : 0.13, 0.025, 0.021);
-      place(ring, brass, [x, 1.33, z + 0.04], [0.18, 0.18, 0.23]);
-    }
-    for (const [x, z] of [
-      [12.56, 4.39],
-      [19.76, 13.15],
-      [5.4, 9.63],
-    ]) {
-      place(oct, dark, [x, -0.14, z], [0.55, 0.81, 0.51], [0, 0.39, 0]);
-      place(round, iron, [x, 0.13, z + 0.25], [0.33, 0.54, 0.33], [Math.PI / 2, 0, 0]);
-      place(ring, brass, [x, 0.13, z + 0.54], [0.3, 0.3, 0.39]);
-      box(dark, x, 0.54, z, 0.98, 0.15, 1.1);
-    }
-  } else {
-    for (const relic of plan.landmarks) {
-      const x = relic.x + 0.5,
-        z = relic.y + 0.5;
-      if (relic.kind === 'sarcophagus') {
-        box(wet, x, -0.455, z, 0.94, 1.34, 1.59);
-        box(chalk, x, 0.245, z, 0.93, 0.089, 1.56);
-        box(face, x, 0.401, z, 0.81, 0.26, 1.37);
-        place(lid, chalk, [x, 0.522, z], [1, 1, 1]);
-        for (const dz of [-0.395, 0.395]) {
-          box(iron, x, 0.739, z + dz, 0.53, 0.022, 0.061);
-          for (const side of [-1, 1]) {
-            place(ring, brass, [x + side * 0.414, 0.418, z + dz], [0.06, 0.067, 0.068], [0, Math.PI / 2, 0]);
-            box(brass, x + side * 0.401, 0.517, z + dz, 0.037, 0.131, 0.065);
-          }
-        }
-        place(ring, brass, [x, 0.767, z - 0.035], [0.184, 0.184, 0.14], [-Math.PI / 2, 0, 0]);
-        place(ring, iron, [x, 0.77, z - 0.035], [0.129, 0.129, 0.13], [-Math.PI / 2, 0, 0]);
-        for (let k = 0; k < 3; k++)
-          place(blocks, brass, [x, 0.769, z - 0.035], [0.19, 0.017, 0.026], [0, (k * Math.PI) / 3, 0]);
-        place(icicle, gem, [x + 0.27, 0.536, z - 0.52], [0.17, 0.32, 0.17], [0.13, 1.88, -0.08]);
-        const lampX = x - 0.325,
-          lampZ = z + 0.535;
-        place(oct, brass, [lampX, 0.624, lampZ], [0.095, 0.066, 0.095]);
-        place(oct, amberGlass, [lampX, 0.718, lampZ], [0.062, 0.125, 0.062]);
-        place(oct, iron, [lampX, 0.804, lampZ], [0.095, 0.041, 0.095]);
-      } else {
-        place(oct, dark, [x, -0.56, z], [0.7, 1.13, 0.71], [0, 0.48, 0]);
-        for (let k = 0; k < 7; k++) {
-          const a = k * 2.4,
-            r = k === 0 ? 0 : 0.2 + 0.2 * noise(k + z);
-          const height = (k === 0 ? 1.9 : 0.54 + 1.04 * noise(k * 2)) * (relic.x === 17 ? 1.23 : 1);
-          place(
-            icicle,
-            gem,
-            [x + r * Math.sin(a), -0.07, z + r * Math.cos(a)],
-            [0.34 + 0.15 * noise(k), height, 0.36 + 0.1 * noise(k + 1)],
-            [0.12 + 0.27 * Math.cos(a), a, 0.11 + 0.27 * Math.sin(a)],
-          );
-        }
-        place(ring, brass, [x, -0.03, z], [0.55, 0.55, 0.4], [-Math.PI / 2, 0, 0]);
-      }
-    }
-    const fissures = [
-      [8.18, 4.25, 1.21],
-      [10.32, 3.63, 1.66],
-      [15.25, 11.65, 1.17],
-      [18.86, 12.54, 1.02],
-      [3.48, 14.24, 1.31],
-      [7.09, 19.27, 1.09],
-    ];
-    for (const [x, z, size] of fissures) {
-      place(oct, wet, [x, -0.72, z], [0.65, 0.82, 0.59], [0, x * 0.42, 0]);
-      for (let k = 0; k < 4; k++) {
-        const a = 1.9 * k + x * 0.36,
-          spread = k ? 0.24 : 0;
-        place(
-          icicle,
-          gem,
-          [x + spread * Math.cos(a), -0.39, z + spread * Math.sin(a)],
-          [(0.38 - k * 0.052) * size, (1.0 - k * 0.19) * size, (0.37 - k * 0.042) * size],
-          [0.12 + 0.28 * Math.sin(a), a, -0.12 + 0.3 * Math.cos(a)],
-          0.86 + 0.04 * k,
+  const box = (m: Material, x: number, y: number, z: number, w: number, h: number, d: number, tint = 1) =>
+    stamp('box', m, x, y, z, w, h, d, 0, 0, 0, tint);
+  const actorCut = { value: new Vector2(24.5, 43.5) };
+  const overhead = new Map<Material, Material>();
+  function flyover(original: Material) {
+    const cached = overhead.get(original);
+    if (cached) return cached;
+    const material = original.clone();
+    material.customProgramCacheKey = () => original.customProgramCacheKey() + '-overhead';
+    material.onBeforeCompile = (shader, renderer) => {
+      original.onBeforeCompile(shader, renderer);
+      shader.uniforms.walkerAt = actorCut;
+      shader.vertexShader =
+        'varying vec2 vaultSite;\n' +
+        shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\n vaultSite=(modelMatrix*instanceMatrix*vec4(position,1.)).xz;',
         );
+      shader.fragmentShader =
+        'uniform vec2 walkerAt;varying vec2 vaultSite;\n' +
+        shader.fragmentShader.replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>
+        vec2 forward=normalize(cameraPosition.xz-walkerAt),delta=vaultSite-walkerAt;
+        float advance=dot(delta,forward),across=abs(dot(delta,vec2(-forward.y,forward.x)));
+        if(cameraPosition.y<16. && advance>2.7 && across<5.5 && distance(cameraPosition.xz,vaultSite)<14.0)discard;`,
+        );
+    };
+    overhead.set(original, material);
+    return material;
+  }
+  const perimeter = new Map<string, {side: NonNullable<ReturnType<typeof outerWall>>; material: Material}>();
+  function bayMaterial(x:number,z:number,original:Material,isOverhead?:boolean) {
+    const side = outerWall(x,z);
+    if (!side) return isOverhead ? flyover(original) : original;
+    const key = side + original.uuid;
+    let entry = perimeter.get(key);
+    if (!entry) {
+      const material = original.clone();
+      material.onBeforeCompile = original.onBeforeCompile;
+      material.customProgramCacheKey = () => original.customProgramCacheKey();
+      entry = {side,material};
+      perimeter.set(key,entry);
+    }
+    return entry.material;
+  }
+  for (const bay of palaceArchitecture(room))
+    for (const v of bay.parts)
+      stamp(
+        v.form,
+        bayMaterial(bay.x,bay.z,tones[v.finish],bay.overhead),
+        v.x,
+        v.y,
+        v.z,
+        v.w,
+        v.h,
+        v.d,
+        v.yaw,
+        v.roll,
+        v.pitch,
+        0.9 + 0.11 * noise(v.x + v.z * 3.1 + v.y),
+      );
+  for (let z = 3; z < 46; z++)
+    for (let x = 3; x < 46; x++) {
+      if (!map.walkable[z][x]) continue;
+      const bridge = plan.tiles[z][x] === 'bridge',
+        liquid = plan.tiles[z][x] === 'ice';
+      for (let slice = 0; slice < 2; slice++) {
+        const cz = z + 0.25 + 0.5 * slice,
+          h = palaceElevation(room, x + 0.5, cz),
+          low = bridge ? -0.32 : -1.34;
+        box(palette.dark, x + 0.5, (h + low) / 2 - 0.038, cz, 1.009, h - low, 0.504);
+        box(
+          liquid ? palette.ice : palette.ground,
+          x + 0.5,
+          h - 0.033,
+          cz,
+          0.985,
+          0.066,
+          0.486,
+          0.83 + 0.15 * noise(z * 17 + x + slice),
+        );
+        const grand = x === 22 || x === 26,
+          threshold = z === 12 || z === 13 || z === 38 || z === 40;
+        if (grand || x === 8 || x === 40) box(palette.brass, x + 0.5, h + 0.004, cz, 0.036, 0.012, 0.49, 0.8);
+        if (threshold && x >= 22 && x <= 26)
+          box(palette.chalk, x + 0.5, h + 0.007, cz + 0.211, 0.96, 0.013, 0.049, 0.96);
+      }
+      const h = palaceElevation(room, x + 0.5, z + 0.5);
+      for (const side of [-1, 1])
+        if (!map.walkable[z][x + side])
+          box(palette.wallCap, x + 0.5 + 0.45 * side, h + 0.018, z + 0.5, 0.1, 0.075, 0.996);
+      if (bridge && (z === 9 || z === 11 || z === 23 || z === 25 || z === 35 || z === 37)) {
+        const edge = z + (z === 9 || z === 23 || z === 35 ? 0.055 : 0.945);
+        box(palette.brass, x + 0.5, h + 0.29, edge, 1.008, 0.055, 0.055);
+        if (x % 2 === 0) box(palette.iron, x + 0.5, h + 0.15, edge, 0.062, 0.29, 0.062);
       }
     }
-    // Glacial shelves expose faceted ice below the floor. Their silhouette follows the actual chasm.
-    for (let y = 2; y < plan.height - 2; y++)
-      for (let x = 2; x < plan.width - 2; x++) {
-        if (!stoneFloor(x, y)) continue;
-        const k = x + 31 * y;
-        for (const [dx, dz] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ]) {
-          if (plan.tiles[y + dz][x + dx] !== 'channel' || noise(k + 2 * dx + dz) > 0.43) continue;
-          const yaw = Math.atan2(dx, dz),
-            cx = x + 0.5 + dx * 0.491,
-            cz = y + 0.5 + dz * 0.491;
-          place(blocks, ice, [cx, -0.099, cz], [0.6 + 0.26 * noise(k + 19), 0.109, 0.077], [0, yaw, 0], 0.76);
-          for (let j = 0; j < 3; j++) {
-            const offset = (j - 1) * 0.21 + 0.042 * noise(k + j);
-            const scale = 0.08 + 0.12 * noise(k + j * 2);
-            place(
-              icicle,
-              gem,
-              [cx + dz * offset, -0.16, cz - dx * offset],
-              [scale, 0.2 + 0.34 * noise(k + j * 11), scale * 0.73],
-              [Math.PI - 0.038, yaw, -0.05 + 0.09 * noise(k + j)],
-              0.72 + j * 0.05,
-            );
-          }
-        }
-      }
-    for (const [x, z] of [
-      [14.5, 9.48],
-      [4.46, 13.58],
-      [17.48, 5.4],
-      [8.4, 18.02],
-    ]) {
-      box(wet, x, -0.51, z, 0.83, 1.22, 1.3);
-      box(face, x, 0.13, z, 0.87, 0.17, 1.42);
-      place(lid, chalk, [x, 0.216, z], [0.91, 0.87, 0.92]);
-      box(iron, x, 0.426, z, 0.11, 0.029, 0.68);
-      box(brass, x, 0.444, z - 0.16, 0.23, 0.019, 0.07);
+  const verts: number[] = [],
+    shades: number[] = [],
+    coords: number[] = [],
+    elements: number[] = [];
+  for (const panel of palaceVault(room)) {
+    const base = verts.length / 3;
+    for (const [x, z, y] of panel.vertices) {
+      verts.push(x, y, z);
+      coords.push((x + 0.18 * y) * 0.67, z * 0.64);
+      shades.push(panel.shade, panel.shade * 0.98, panel.shade * 0.95);
     }
+    elements.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
-
-  const cascades = outlets.length ? outfalls(outlets) : undefined;
-  if (cascades) {
-    scene.add(cascades);
-    cascades.renderOrder = 4;
-    outlets.forEach((lip, i) =>
-      channel.material.uniforms.release.value[i].set(
-        lip.x + lip.dx * lip.reach * Math.sin(1.24),
-        lip.z + lip.dz * lip.reach * Math.sin(1.24),
-      ),
-    );
-  }
-  const switchPosition = plan.switch;
-  const sx = switchPosition.x + 0.9,
-    sz = switchPosition.y + 0.78;
-  const signal = new MeshStandardMaterial({
-    color: 0xd9b477,
-    emissive: 0xd79340,
-    emissiveIntensity: 0.52,
-    roughness: 0.38,
+  const roof = new BufferGeometry();
+  roof.setAttribute('position', new Float32BufferAttribute(verts, 3));
+  roof.setAttribute('uv', new Float32BufferAttribute(coords, 2));
+  roof.setAttribute('color', new Float32BufferAttribute(shades, 3));
+  roof.setIndex(elements);
+  roof.computeVertexNormals();
+  const soffit = new MeshStandardMaterial({
+    color: cold ? 0x728595 : 0x8c907c,
+    map: palette.face.map,
+    side: BackSide,
+    vertexColors: true,
+    roughness: 0.91,
   });
-  const liftCore = new MeshStandardMaterial({
-    color: 0x425950,
-    emissive: 0x77c1a7,
-    emissiveIntensity: 0.035,
-    roughness: 0.29,
-  });
-  mats.push(signal, liftCore);
-  if (frost) {
-    const x = catacombLift.x + 0.5,
-      z = catacombLift.y + 0.5;
-    touchTarget(catacombLift, blocks, [x - 0.43, 0.63, z], [0.18, 0.48, 0.26]);
-    box(wet, x, 0.012, z, 0.91, 0.034, 0.94);
-    for (let k = -3; k <= 3; k++) box(iron, x + k * 0.115, 0.037, z, 0.078, 0.026, 0.83, 0.86 + (k % 2) * 0.065);
-    for (const dz of [-0.385, 0.385]) box(brass, x, 0.059, z + dz, 0.86, 0.024, 0.046);
-    place(ring, brass, [x, 0.06, z], [0.212, 0.212, 0.16], [-Math.PI / 2, 0, 0]);
-    place(oct, liftCore, [x, 0.061, z], [0.106, 0.021, 0.106]);
-    for (const dz of [-0.32, 0.32]) {
-      box(wet, x - 0.5, 0.82, z + dz, 0.21, 1.75, 0.2);
-      box(brass, x - 0.389, 0.83, z + dz, 0.057, 1.57, 0.078);
-      for (let link = 0; link < 8; link++) {
-        const y = 0.24 + link * 0.172;
-        place(ring, iron, [x - 0.358, y, z + dz], [0.064, 0.1, 0.075], [0, link % 2 ? Math.PI / 4 : -Math.PI / 4, 0]);
+  const front = { value: 44 };
+  soffit.onBeforeCompile = (shader) => {
+    shader.uniforms.cut = front;
+    shader.vertexShader =
+      'varying float vaultZ;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvaultZ=position.z;');
+    shader.fragmentShader =
+      'uniform float cut; varying float vaultZ;\n' +
+      shader.fragmentShader.replace(
+        '#include <clipping_planes_fragment>',
+        '#include <clipping_planes_fragment>\nif(vaultZ>cut)discard;',
+      );
+  };
+  const cover = new Mesh(roof, soffit);
+  cover.receiveShadow = true;
+  scene.add(cover);
+  const stripXYZ: number[] = [],
+    bedUV: number[] = [],
+    bands: number[] = [];
+  for (const line of palaceConductors(room)) {
+    for (let i = 0; i < line.length; i++) {
+      const a = line[i],
+        b = line[Math.min(i + 1, line.length - 1)],
+        previous = line[Math.max(0, i - 1)];
+      const dx = b.x - previous.x,
+        dz = b.z - previous.z,
+        length = Math.hypot(dx, dz);
+      const first = stripXYZ.length / 3;
+      for (const side of [-1, 1]) {
+        stripXYZ.push(a.x + (dz / length) * 0.069 * side, a.h, a.z - (dx / length) * 0.069 * side);
+        bedUV.push(side, a.run);
       }
-      place(lateralDrum, brass, [x - 0.405, 1.64, z + dz], [0.19, 0.146, 0.146]);
+      if (i) bands.push(first - 2, first - 1, first, first - 1, first + 1, first);
     }
-    box(brass, x - 0.477, 1.55, z, 0.215, 0.105, 0.83);
-    box(iron, x - 0.419, 0.58, z, 0.14, 0.4, 0.24);
-    box(liftCore, x - 0.334, 0.61, z, 0.041, 0.18, 0.068);
   }
-  box(dark, sx, 0.084, sz, 0.46, 0.17, 0.44);
-  box(chalk, sx, 0.193, sz, 0.39, 0.085, 0.39);
-  box(face, sx, 0.46, sz, 0.25, 0.47, 0.24);
-  box(iron, sx, 0.7, sz, 0.3, 0.15, 0.29);
-  place(axialDrum, brass, [sx, 0.71, sz + 0.007], [0.145, 0.145, 0.34]);
-  const switchWheel = new Group();
-  switchWheel.position.set(sx, 0.71, sz + 0.19);
-  mesh(switchWheel, ring, brass, [0, 0, 0], [0.31, 0.31, 0.34]);
-  for (let i = 0; i < 3; i++)
-    mesh(switchWheel, blocks, iron, [0, 0, 0.008], [0.55, 0.037, 0.065], [0, 0, (i * Math.PI) / 3]);
-  mesh(switchWheel, round, signal, [0, 0, 0.075], [0.1, 0.072, 0.1], [Math.PI / 2, 0, 0]);
-  mesh(switchWheel, axialDrum, brass, [0.226, 0.199, 0.076], [0.036, 0.036, 0.2]);
-  mesh(switchWheel, axialDrum, iron, [0.226, 0.199, 0.139], [0.046, 0.046, 0.14]);
-  scene.add(switchWheel);
-  touchTarget(plan.switch, axialDrum, [sx, 0.71, sz + 0.19], [0.335, 0.335, 0.15]);
-  // Give the control and its remote gate the same segmented brass medallion.
-  const landing = plan.gate;
-  for (const [x, z] of [
-    [sx, sz + 0.35],
-    [landing.x + (frost ? 0.76 : -0.31), landing.y + (frost ? 1.19 : 0.57)],
-  ]) {
-    place(ring, brass, [x, 0.026, z], [0.2, 0.2, 0.17], [-Math.PI / 2, 0, 0]);
-    for (let k = 0; k < 3; k++)
-      place(blocks, brass, [x, 0.026, z], [0.29, 0.025, 0.029], [0, (k * Math.PI) / 3, 0], 0.84);
-  }
-  const port = new Group(),
-    gx = plan.gate.x,
-    gz = plan.gate.y;
-  const cables: Mesh[] = [];
-  const cableStart = new Vector3(),
-    cableEnd = new Vector3(),
-    cableDirection = new Vector3(),
-    upVector = new Vector3(0, 1, 0);
-  if (!frost) {
-    port.position.set(gx, 0.008, gz + 0.5);
-    mesh(port, blocks, iron, [0.5, -0.062, 0], [1.01, 0.115, 0.84]);
-    for (let k = 0; k < 7; k++) mesh(port, blocks, wood, [(k + 0.5) / 7, 0.013, 0], [0.128, 0.052, 0.87]);
-    for (const side of [-1, 1]) {
-      mesh(port, blocks, brass, [0.5, 0.042, side * 0.39], [0.99, 0.025, 0.041]);
-      box(dark, gx + 0.018, 0.15, gz + 0.5 + side * 0.48, 0.24, 0.33, 0.18);
-      place(round, brass, [gx + 0.021, 0.16, gz + 0.5 + side * 0.49], [0.101, 0.2, 0.101], [Math.PI / 2, 0, 0]);
-      box(iron, gx - 0.11, 0.55, gz + 0.5 + side * 0.48, 0.11, 1.1, 0.11);
-      box(brass, gx - 0.11, 0.21, gz + 0.5 + side * 0.48, 0.18, 0.074, 0.18);
-      place(axialDrum, brass, [gx - 0.11, 1.1, gz + 0.5 + side * 0.48], [0.092, 0.092, 0.15]);
-      const cable = new Mesh(round, iron);
-      cable.castShadow = true;
-      scene.add(cable);
-      cables.push(cable);
+  const linework = new BufferGeometry();
+  linework.setAttribute('position', new Float32BufferAttribute(stripXYZ, 3));
+  linework.setAttribute('uv', new Float32BufferAttribute(bedUV, 2));
+  linework.setIndex(bands);
+  const enamel = new ShaderMaterial({
+    side: DoubleSide,
+    uniforms: { bus: { value: 0.78 }, phase: { value: 0.45 }, clock: { value: 0 }, aligned: { value: 0 } },
+    vertexShader: `varying vec2 track;void main(){track=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+    fragmentShader: `varying vec2 track;uniform float bus,phase,clock,aligned;void main(){
+      float energy=1.-smoothstep(.26,.68,abs(track.x));
+      float beat=pow(max(0.,cos(track.y*.79-clock*1.28-phase*2.3)),10.);
+      vec3 brass=vec3(.27,.19,.10), base=mix(vec3(.019,.12,.14),vec3(.09,.36,.32),bus);
+      vec3 core=base+vec3(.22,.57,.46)*beat*bus*(.55+aligned*.45);
+      gl_FragColor=vec4(mix(brass,core,energy),1.);
+      #include <colorspace_fragment>
+    }`,
+  });
+  scene.add(new Mesh(linework, enamel));
+  const wheels: Group[] = [];
+  if (!cold)
+    for (const [x, z] of palaceWorks) {
+      const wheel = new Group();
+      wheel.position.set(x, 1.68, z + 0.8);
+      const rings = new InstancedMesh(shapes.ring, palette.brass, 2);
+      for (let j = 0; j < 2; j++) {
+        dummy.position.set(0, 0, (j - 0.5) * 0.23);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(0.83, 0.83, 0.7);
+        dummy.updateMatrix();
+        rings.setMatrixAt(j, dummy.matrix);
+      }
+      wheel.add(rings);
+      const blades = new InstancedMesh(shapes.box, palette.jade, 16);
+      for (let j = 0; j < 8; j++) {
+        const a = (j * Math.PI) / 4;
+        dummy.position.set(0.39 * Math.cos(a), 0.39 * Math.sin(a), 0);
+        dummy.rotation.set(0, 0, a);
+        dummy.scale.set(0.76, 0.053, 0.1);
+        dummy.updateMatrix();
+        blades.setMatrixAt(2 * j, dummy.matrix);
+        dummy.position.set(0.68 * Math.cos(a), 0.68 * Math.sin(a), 0);
+        dummy.rotation.set(0, 0.23, a + 0.19);
+        dummy.scale.set(0.16, 0.31, 0.32);
+        dummy.updateMatrix();
+        blades.setMatrixAt(2 * j + 1, dummy.matrix);
+      }
+      wheel.add(blades);
+      wheels.push(wheel);
+      scene.add(wheel);
     }
-  } else {
-    port.position.set(gx + 0.5, 2.07, gz + 0.5);
-    for (let k = 0; k < 6; k++) mesh(port, blocks, iron, [(k - 2.5) * 0.165, -1, 0], [0.058, 2, 0.092]);
-    for (const y of [-1.73, -0.62]) mesh(port, blocks, brass, [0, y, 0], [0.96, 0.105, 0.14]);
-    for (const side of [-1, 1]) {
-      box(dark, gx + 0.5 + side * 0.53, 0.87, gz + 0.5, 0.2, 2.04, 0.38);
-      box(chalk, gx + 0.5 + side * 0.53, 2.03, gz + 0.5, 0.29, 0.45, 0.49);
-      box(iron, gx + 0.5 + side * 0.49, 1.6, gz + 0.65, 0.068, 3.18, 0.084);
-      place(axialDrum, brass, [gx + 0.5 + side * 0.49, 3.07, gz + 0.58], [0.12, 0.12, 0.24]);
+  const spheres = cold
+    ? palaceArmillary.map((part) => {
+        const ring = new Mesh(shapes.ring, tones[part.finish]);
+        ring.position.set(part.x, part.y, part.z);
+        ring.scale.set(part.w, part.h, part.d);
+        scene.add(ring);
+        return ring;
+      })
+    : [];
+  const spillGeometry = new BufferGeometry(),
+    spillVertices: number[] = [],
+    spillUV: number[] = [],
+    spillFaces: number[] = [];
+  const flywheel = new Group();
+  flywheel.position.set(24.5, 13.3, -1.68);
+  if (!cold) {
+    for (const a of collectorSpokes) {
+      const bar = new Mesh(shapes.box, gilt);
+      bar.scale.set(0.21, 1.63, 0.22);
+      bar.rotation.z = a;
+      bar.position.set(-Math.sin(a) * 1.86, Math.cos(a) * 1.86, 0);
+      flywheel.add(bar);
+      const root = new Mesh(shapes.box, palette.iron);
+      root.scale.set(0.37, 1.2, 0.28);
+      root.rotation.z = a + 0.33;
+      root.position.set(-Math.sin(a + 0.16) * 0.73, Math.cos(a + 0.16) * 0.73, 0);
+      flywheel.add(root);
     }
-    place(curve, chalk, [gx + 0.5, 2.24, gz + 0.5], [0.52, 0.42, 0.4]);
-    box(ground, gx + 0.5, -0.18, gz + 0.5, 1.02, 0.36, 1.01);
-    lamp(gx - 0.02, 0.1, gz + 0.74, 0.56);
-  }
-  scene.add(port);
-  for (const assembly of [...moving, switchWheel, port]) batchMovingParts(assembly);
-
-  // Recessed arches live along masonry edges, leaving the centers of passage tiles entirely clear.
-  for (let y = 2; y < plan.height - 2; y++)
-    for (let x = 2; x < plan.width - 2; x++) {
-      if (plan.tiles[y][x] !== 'wall' || !stoneFloor(x, y + 1) || (x * 7 + y * 3) % 8 > 1) continue;
-      const cx = x + 0.5,
-        z = y + 1.006;
-      box(dark, cx, 0.3, z, 0.5, 0.55, 0.05);
-      place(curve, face, [cx, 0.41, z + 0.04], [0.239, 0.18, 0.104]);
-      for (let k = -2; k <= 2; k++) box(iron, cx + k * 0.075, 0.27, z + 0.07, 0.025, 0.37, 0.037);
-    }
-  batches.forEach((materials, geometry) =>
-    materials.forEach((items, material) => {
-      const instance = new InstancedMesh(geometry, material, items.length);
-      items.forEach((stamp, i) => {
-        instance.setMatrixAt(i, stamp.pose);
-        instance.setColorAt(i, color.setScalar(stamp.brightness));
-        if (stamp.bridge) {
-          bridgeParts.push({ instance, index: i, rest: stamp.pose, x: stamp.bridge.x, z: stamp.bridge.z });
-          bridgeBatches.add(instance);
-          instance.instanceMatrix.setUsage(DynamicDrawUsage);
+    scene.add(flywheel);
+    for (const gate of highSluices) {
+      const start = spillVertices.length / 3;
+      for (let row = 0; row <= 24; row++)
+        for (let col = 0; col <= 10; col++) {
+          const u = col / 10,
+            t = row / 24;
+          spillVertices.push(...sluiceVeil(gate, u * 2 - 1, t));
+          spillUV.push(u, t);
+          const i = start + row * 11 + col;
+          if (row < 24 && col < 10) spillFaces.push(i, i + 11, i + 12, i, i + 12, i + 1);
         }
-      });
-      instance.castShadow = material !== glowGlass && material !== jade;
-      instance.receiveShadow = true;
-      instance.computeBoundingSphere();
-      scene.add(instance);
-    }),
-  );
-
-  const halo = new SpriteMaterial({
-    map: glow,
-    color: frost ? 0xa8dbf1 : 0xffcf91,
+    }
+  }
+  spillGeometry.setAttribute('position', new Float32BufferAttribute(spillVertices, 3));
+  spillGeometry.setAttribute('uv', new Float32BufferAttribute(spillUV, 2));
+  spillGeometry.setIndex(spillFaces);
+  const veil = new ShaderMaterial({
     transparent: true,
-    blending: AdditiveBlending,
+    side: DoubleSide,
     depthWrite: false,
-    opacity: 0.46,
+    uniforms: { clock: { value: 0 }, fogTone: { value: new Color(air) } },
+    vertexShader: `varying vec2 v;varying float depth;void main(){v=uv;vec4 eye=modelViewMatrix*vec4(position,1.);depth=-eye.z;gl_Position=projectionMatrix*eye;}`,
+    fragmentShader: `varying vec2 v;varying float depth;uniform float clock;uniform vec3 fogTone;
+      float hash(float n){return fract(sin(n*71.93)*43691.57);}
+      void main(){float lanes=v.x*21.3,seed=hash(floor(lanes));float run=v.y*7.1-clock*2.3+seed*9.;
+      float lace=pow(.5+.5*cos(run*6.28+sin(v.x*61.+v.y*5.)),5.);
+      float thread=pow(1.-abs(fract(lanes+sin(v.y*11.-clock)*.18)*2.-1.),3.);
+      float air=v.y*v.y;vec3 stream=mix(vec3(.025,.195,.184),vec3(.71,.89,.82),.30+.39*thread+.24*lace+.24*air);
+      float fog=1.-exp(-depth*depth*.00018);gl_FragColor=vec4(mix(stream,fogTone,fog),(.59+.24*lace)*smoothstep(0.,.045,min(v.x,1.-v.x)));
+      #include <colorspace_fragment>
+    }`,
   });
-  for (const p of lamps) {
-    const sprite = new Sprite(halo);
-    sprite.position.set(...p);
-    sprite.scale.setScalar(0.93);
-    scene.add(sprite);
+  if (!cold) {
+    const curtains = new Mesh(spillGeometry, veil);
+    curtains.renderOrder = 4;
+    scene.add(curtains);
   }
-  const sky = new HemisphereLight(frost ? 0xc2e2f4 : 0xf0e1b6, frost ? 0x4b607c : 0x4f6861, 1.33);
-  scene.add(sky);
-  const keyLight = new DirectionalLight(frost ? 0xcde6ff : 0xffddab, 1.68);
-  keyLight.position.set(4, 15, 14);
-  keyLight.target.position.set(12, 0, 10);
-  keyLight.castShadow = true;
-  keyLight.shadow.autoUpdate = false;
-  keyLight.shadow.needsUpdate = true;
-  let lastShadow = -Infinity,
-    shadowX = -50,
-    shadowZ = -50;
-  Object.assign(keyLight.shadow.camera, { left: -17, right: 17, top: 17, bottom: -17, near: 0.5, far: 44 });
-  keyLight.shadow.mapSize.set(1024, 1024);
-  keyLight.shadow.normalBias = 0.027;
-  keyLight.shadow.bias = -0.0002;
-  keyLight.shadow.camera.updateProjectionMatrix();
-  scene.add(keyLight, keyLight.target);
-  const wash = new DirectionalLight(frost ? 0x729ad0 : 0x7eb5bc, 0.68);
-  wash.position.set(18, 7, 1);
-  wash.target.position.set(10, 0, 13);
-  scene.add(wash, wash.target);
-  const relicLamp = new PointLight(frost ? 0x7bcbf4 : 0xffc27b, frost ? 11.5 : 8, 5.8, 2);
-  const masonryBounce = new PointLight(frost ? 0xe8ad70 : 0x75bfba, frost ? 2.6 : 4.8, 4.5, 2);
-  if (frost) {
-    relicLamp.position.set(17.32, 1.21, 12.13);
-    masonryBounce.position.set(8.12, 1.17, 11.04);
+  let cutEntrance = false;
+  const signs: Mesh[] = [];
+  for(const down of [false,true]){
+    const board=processionalSign(room,down);
+    const plate=new Mesh(shapes.box,stairSign(board.text,down));
+    plate.scale.set(board.w,board.h,.048);
+    plate.position.set(board.x,board.y,board.z);
+    scene.add(plate);
+    signs.push(plate);
+  }
+  for (const [geometry, materials] of batches)
+    for (const [material, items] of materials) {
+      const packed = new InstancedMesh(geometry, material, items.length);
+      items.forEach(({ matrix, tint }, i) => {
+        packed.setMatrixAt(i, matrix);
+        packed.setColorAt(i, col.setRGB(tint, tint, tint));
+      });
+      packed.castShadow = material !== palette.ground;
+      packed.receiveShadow = true;
+      packed.computeBoundingSphere();
+      scene.add(packed);
+    }
+  const water = channelSurface(room);
+  scene.add(water);
+  let tick = 0;
+  const mirror = cold ? undefined : cisternMirror(water, () => tick);
+  if (mirror) scene.add(mirror);
+  const pools = cold ? undefined : buildFortressWater(room);
+  if (pools) scene.add(pools.group);
+  const frost = cold ? createFrostFootfalls() : undefined;
+  if (frost) scene.add(frost.mesh);
+  const drains = cold
+    ? []
+    : palaceWorks.map(([x, z]) => outfalls([{ x, y: 1.1, z: z + 1.06, dx: 0, dz: 1, width: 0.42, reach: 0.91 }]));
+  for (const drain of drains) scene.add(drain);
+  palaceWorks.forEach(([x, z], i) => water.material.uniforms.release.value[i].set(x, z + 1.92));
+  const beacon = new SpriteMaterial({
+    map: glow,
+    color: cold ? 0xa8ecf4 : 0xffc479,
+    transparent: true,
+    opacity: 0.54,
+    depthWrite: false,
+  });
+  for (const z of [6.5, 20.5, 33.5, 41.5])
+    for (const x of [19.5, 29.5]) {
+      const glow = new Sprite(beacon);
+      glow.position.set(x + (x < 24 ? 0.71 : -0.71), palaceElevation(room, x, z) + 1.7, z);
+      glow.scale.setScalar(1.12);
+      scene.add(glow);
+    }
+  scene.add(new HemisphereLight(cold ? 0xe1f0ff : 0xffefc9, cold ? 0x627580 : 0x665c45, cold ? 1.48 : 1.34));
+  const key = new DirectionalLight(cold ? 0xe6f3ff : 0xffdfab, cold ? 1.72 : 1.84);
+  key.position.set(13, 24, 29);
+  key.target.position.set(24, 0, 20);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  Object.assign(key.shadow.camera, { left: -25, right: 25, top: 24, bottom: -24, near: 0.1, far: 70 });
+  key.shadow.camera.updateProjectionMatrix();
+  key.shadow.normalBias = 0.064;
+  key.shadow.bias = -0.00015;
+  key.shadow.autoUpdate = false;
+  key.shadow.needsUpdate = true;
+  scene.add(key, key.target);
+  const rim = new DirectionalLight(cold ? 0xd8bd96 : 0xaed3bf, 1.09);
+  rim.position.set(30, 9, 1);
+  rim.target.position.set(24.5, 4, 24.5);
+  scene.add(rim, rim.target);
+  const lantern = new PointLight(cold ? 0x92dbef : 0xfdd097, 53, 18, 2);
+  lantern.position.set(24.5, 4, 6.5);
+  scene.add(lantern);
+  if (cold) {
+    const oculus = new PointLight(0x9ce9e3, 78, 18, 2);
+    oculus.position.set(22.8, suspendedHeight + 2.3, 25.4);
+    scene.add(oculus);
   } else {
-    relicLamp.position.set(8.91, 1.56, 8.84);
-    masonryBounce.position.set(12.1, 1.78, 14.03);
+    const collectorLight = new PointLight(0xffddaa, 163, 27, 2);
+    collectorLight.position.set(24.5, 14.3, 5.7);
+    scene.add(collectorLight);
   }
-  scene.add(relicLamp, masonryBounce);
-  const guideLight = new PointLight(frost ? 0x9dcee9 : 0xf2c996, 4.5, 7.8, 2);
-  const downLight = new PointLight(frost ? 0x8abfff : 0x84ccbc, 9.5, 6.3, 2);
-  downLight.position.set(plan.down.x + 0.5, 1.38, plan.down.y + 0.1);
-  scene.add(guideLight, downLight);
-  const deckMatrix = new Matrix4();
+  const needle = new Group();
+  needle.position.set(24.5, 8.58, 3.13);
+  for (const [a, long, w] of [
+    [0.27, 1.88, 0.094],
+    [-0.81, 1.14, 0.14],
+  ]) {
+    const pointer = new Mesh(shapes.box, palette.brass);
+    pointer.scale.set(w, long, 0.087);
+    pointer.rotation.z = a;
+    pointer.position.set((-Math.sin(a) * long) / 2, (Math.cos(a) * long) / 2, 0);
+    needle.add(pointer);
+  }
+  scene.add(needle);
+  const device = new Group(),
+    { x, y } = plan.instrument;
+  device.position.set(x + 0.5, 1.25, y + 0.49);
+  for (let i = 0; i < 4; i++) {
+    const bar = new Mesh(shapes.box, palette.brass);
+    bar.scale.set(0.073, 0.68, 0.058);
+    bar.rotation.z = (i * Math.PI) / 4;
+    device.add(bar);
+  }
+  scene.add(device);
   return {
     scene,
-    surfaceAt: pontoons.surfaceAt,
-    landmarkAt(ray: Raycaster) {
-      const hit = ray.intersectObjects(touchTargets, false)[0];
-      return hit ? destinations.get(hit.object as Mesh) : undefined;
-    },
+    surfaceAt: (x: number, z: number) => palaceElevation(room, x, z),
+    landmarkAt: (ray: Raycaster) => palaceLandmarkRay(room, ray.ray.origin, ray.ray.direction, cutEntrance),
     update(t: number, w: number, h: number, frame: FortressInteriorFrame) {
+      const view = frame.palaceView ? palaceOverlook(frame.palaceView, w / h) : palaceView(room, frame.x, frame.y, w / h);
+      cutEntrance = behindTraveller(view.eye, frame.x, frame.y, 24.5, 43.7);
+      signs[0].visible = !cutEntrance;
       tick = frame.now;
-      jade.emissiveIntensity = 0.35 + 0.3 * (frame.resonance ?? 0);
-      const shadowAge = tick - lastShadow;
-      const moved = Math.abs(frame.x - shadowX) + Math.abs(frame.y - shadowZ) > 0.13;
-      if (shadowAge < 0 || shadowAge > 960 || (shadowAge > 78 && (moved || frame.gateAge < 0.7))) {
-        keyLight.shadow.needsUpdate = true;
-        lastShadow = tick;
-        shadowX = frame.x;
-        shadowZ = frame.y;
+      cover.visible = !frame.palaceView;
+      for (const {side,material} of perimeter.values()) material.visible = !wallFacesCamera(side,frame.palaceView);
+      if (scene.fog instanceof FogExp2) scene.fog.density = frame.palaceView ? 0.004 : cold ? 0.016 : 0.014;
+      veil.uniforms.clock.value = t;
+      flywheel.rotation.z = t * 0.055;
+      front.value = frame.y + 0.45;
+      actorCut.value.set(frame.x, frame.y);
+      water.material.uniforms.clock.value = t;
+      water.material.uniforms.wheel.value.set(x + 0.5, y + 0.5);
+      for (let i = 0; i < drains.length; i++) {
+        const flow = worksPower(frame, i);
+        drains[i].material.uniforms.clock.value = t;
+        drains[i].material.uniforms.volume.value = flow;
+        const splash = worksPower(frame, i, 0.657);
+        drains[i].material.uniforms.arrival.value = splash;
+        water.material.uniforms.flow.value.setComponent(i, splash);
+        wheels[i].rotation.z = wheelAngle(frame, i, t);
       }
-      liftCore.color.setHex(frame.liftUnlocked ? 0x98cbb2 : 0x425950);
-      liftCore.emissiveIntensity = frame.liftUnlocked ? 0.62 : 0.035;
-      frostSteps?.update(frame, h);
-      if (pontoons.update(frame)) {
-        for (const { instance, index, rest, x, z } of bridgeParts) {
-          deckMatrix.copy(rest);
-          deckMatrix.elements[13] += pontoons.surfaceAt(x, z);
-          instance.setMatrixAt(index, deckMatrix);
-        }
-        for (const batch of bridgeBatches) batch.instanceMatrix.needsUpdate = true;
-      }
-      pontoons.wakes.forEach((wake, i) => {
-        const age = Math.min(2, frame.now * 0.001 - wake.time);
-        channel.material.uniforms.wake.value[i].set(wake.x, wake.z, age, wake.strength);
+      const charge = frame.shortcutOpen,
+        bus = frame.power?.bus ?? 0.78,
+        phase = frame.power?.phase ?? 0.45;
+      enamel.uniforms.bus.value = bus;
+      enamel.uniforms.phase.value = phase;
+      enamel.uniforms.clock.value = t;
+      enamel.uniforms.aligned.value = Number(charge);
+      needle.rotation.z = (cold ? -1 : 1) * (0.12 + bus * 0.61 + phase * 0.07);
+      spheres.forEach((ring, i) => {
+        const [pitch, yaw, roll] = armillaryRotation(frame, i, t);
+        ring.rotation.set(pitch, yaw, roll, 'YXZ');
       });
+      palette.jade.emissiveIntensity = 0.21 + 0.62 * bus;
+      lantern.intensity = (cold ? 40 : 48) + bus * 18;
+      device.rotation.z = charge ? 0.87 + (frame.reduced ? 0 : Math.sin(t * 0.24) * 0.08) : 0;
       pools?.update(t, w, h, frame);
-      channel.material.uniforms.clock.value = t;
-      if (cascades) cascades.material.uniforms.clock.value = t;
-      if (moving[0]) moving[0].rotation.z = t * 0.39;
-      const age = frame.shortcutOpen ? Math.min(1, Math.max(0, (frame.gateAge ?? Infinity) / 0.53)) : 0;
-      const opened = frame.reduced ? Number(frame.shortcutOpen) : age * age * (3 - 2 * age);
-      switchWheel.rotation.z = -opened * Math.PI * 1.18;
-      signal.color.setHex(frame.shortcutOpen ? 0x8fcbbb : 0xd9b477);
-      signal.emissive.setHex(frame.shortcutOpen ? 0x3ba99c : 0xd79340);
-      if (frost) {
-        port.position.y = 2.07 + opened * 2.59;
-      } else {
-        const angle = (1 - opened) * Math.PI * 0.485;
-        port.rotation.z = angle;
-        cables.forEach((cable, i) => {
-          const side = i * 2 - 1;
-          cableStart.set(gx - 0.11, 1.1, gz + 0.5 + side * 0.48);
-          cableEnd.set(gx + 0.93 * Math.cos(angle), 0.047 + 0.93 * Math.sin(angle), gz + 0.5 + side * 0.4);
-          cable.position.addVectors(cableStart, cableEnd).multiplyScalar(0.5);
-          cableDirection.subVectors(cableEnd, cableStart);
-          cable.scale.set(0.016, cableDirection.length(), 0.016);
-          cable.quaternion.setFromUnitVectors(upVector, cableDirection.normalize());
-        });
-      }
-      guideLight.position.set(frame.x + 0.98, 3.1, frame.y + 1.14);
-      if (frost) gem.emissiveIntensity = 0.4 + 0.07 * Math.sin(t * 0.68);
+      frost?.update(frame, h);
+      beacon.opacity = frame.reduced ? 0.54 : 0.49 + 0.055 * Math.sin(t * 0.82);
     },
     dispose() {
-      scene.traverse((node) => {
-        if (node instanceof InstancedMesh) node.dispose();
+      scene.traverse((child) => {
+        if (child instanceof InstancedMesh) child.dispose();
       });
-      keyLight.shadow.dispose();
-      halo.dispose();
-      apron.geometry.dispose();
-      channel.geometry.dispose();
-      channel.material.uniforms.shore.value.dispose();
-      channel.material.dispose();
-      frostSteps?.dispose();
-      pools?.dispose();
+      key.shadow.dispose();
+      beacon.dispose();
+      spillGeometry.dispose();
+      veil.dispose();
+      royal.dispose();
+      basalt.dispose();
+      gilt.dispose();
+      copper.dispose();
+      for (const {material} of perimeter.values()) material.dispose();
+      for (const material of overhead.values()) material.dispose();
+      roof.dispose();
+      soffit.dispose();
+      linework.dispose();
+      enamel.dispose();
+      water.material.uniforms.shore.value.dispose();
+      water.material.dispose();
+      water.geometry.dispose();
       mirror?.geometry.dispose();
       mirror?.dispose();
-      cascades?.geometry.dispose();
-      cascades?.material.dispose();
-      palette.disposeMaps();
-      for (const material of mats) {
-        if (material instanceof MeshBasicMaterial && material.map) material.map.dispose();
+      pools?.dispose();
+      frost?.dispose();
+      for (const drain of drains) {
+        drain.geometry.dispose();
+        drain.material.dispose();
+      }
+      for (const sign of signs) {
+        const material = sign.material as MeshBasicMaterial;
+        material.map?.dispose();
         material.dispose();
       }
-      geometries.forEach((g) => g.dispose());
+      for (const g of Object.values(shapes)) g.dispose();
+      palette.disposeMaps();
+      for (const m of palette.mats) m.dispose();
     },
   };
 }

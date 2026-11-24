@@ -330,8 +330,6 @@ kbd { font-family: inherit; font-size: 12px; min-width: 20px; line-height: 19px;
 
 /* Game screen and menu rail */
 .game-frame { --route-light: #b8e4e8; --route-bright: #91bec8; }
-.game-frame[data-island=grove] { --route-light: #c4e8ca; --route-bright: #8eb7a7; }
-.game-frame[data-island=summit] { --route-light: #ebd7eb; --route-bright: #bd9fc3; }
 .game-frame { border-color: #58717d; box-shadow: 0 16px 49px #060b115e, 0 0 0 4px #9fbdce0e; }
 .game-bar { background: linear-gradient(180deg, #2b3e4d, #1c2c38); }
 .area-icon { color: var(--route-light); box-shadow: inset 0 -2px #111d2733; }
@@ -436,6 +434,9 @@ kbd { font-family: inherit; font-size: 12px; min-width: 20px; line-height: 19px;
 .city-walk-map { min-width: 0; display: grid; gap: 10px; }
 .city-chart-wrap { position: relative; }
 .city-chart-wrap canvas { display: block; }
+.city-pin-leader { position: absolute; height: 2px; transform-origin: left center; pointer-events: none; background: #d7ddbd; box-shadow: 0 0 0 1px #283e4599; }
+.city-pin-leader::before { content: ""; position: absolute; left: -2px; top: -1px; width: 4px; height: 4px; border-radius: 50%; background: #f2dfaa; }
+
 .city-chart-pin { position: absolute; display: grid; place-items: center; width: 25px; height: 25px; padding: 0; transform: translate(-50%, -50%); border-radius: 50%; border: 1px solid #9ac4c7; color: #bfe6e8; background: #203c49; box-shadow: 0 2px 3px #0a1e2bbf; }
 .city-chart-pin[data-survey=true] { background: #58463a; color: #ffe1ad; border-color: #c3ab83; }
 .city-chart-pin[data-visited=true]::after { content: ''; position: absolute; right: -2px; bottom: -1px; width: 7px; height: 7px; border: 1px solid #283c36; border-radius: 50%; background: #c7ed9e; }
@@ -591,3 +592,41 @@ kbd { font-family: inherit; font-size: 12px; min-width: 20px; line-height: 19px;
   .fortress-action, .fortress-replay, .fortress-meter { min-height: 38px; padding-inline: 7px; }
   .game-viewport:has(.fortress-replay) .map-district { display: none; }
 }
+
+.panel-back { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; border: 0; background: none; color: var(--lime); font: inherit; font-size: 13px; cursor: pointer; }
+.panel-heading:has(+ .panel-back) { margin-bottom: 5px; }
+.panel-back:hover, .save-status:hover { text-decoration: underline; }
+#panel-title:focus { outline: none; }
+button.save-status { border: 0; background: none; text-align: left; justify-self: start; cursor: pointer; min-height: 32px; }
+.save-panel { display: grid; gap: 14px; }
+.save-summary { display: grid; gap: 7px; margin: 0; }
+.save-summary div { display: grid; grid-template-columns: 6em 1fr; align-items: baseline; gap: 10px; }
+.save-summary dt, .save-scope, .save-confirm p, .pack-care { color: #b3c5cd; font-size: 13px; }
+.save-summary dd { margin: 0; color: #eef5ec; }
+.save-scope, .pack-care { margin: 0; line-height: 1.6; }
+.save-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.save-actions button { margin: 0; }
+.save-confirm { display: grid; gap: 10px; border: 1px solid #708d7a; border-radius: 6px; padding: 14px; background: #21383d; }
+.save-confirm h3, .save-confirm p { margin: 0; }
+.pack-care { margin: 10px 0 4px; }
+.pack-storage { justify-self: start; }
+.email-line a { min-width: 0; }
+
+.fortress-log { display: grid; gap: 14px; }
+.fortress-log-floors { display: grid; gap: 4px; }
+.log-floor { display: grid; grid-template-columns: 2em minmax(46px, 98px) minmax(0,1fr) auto; gap: 12px; align-items: center; text-align: left; border: 1px solid #405761; border-radius: 4px; padding: 8px 12px; color: #bad0cd; background: #1e303a; }
+.log-floor:disabled { opacity: 1; color: #84969e; background: #192832; }
+.log-floor[aria-pressed=true] { border-color: #9db797; background: #263c40; color: #d8edb5; }
+.log-floor svg { width: 100%; max-width: 98px; }
+.log-floor > span { display: grid; gap: 2px; }
+.log-floor small { font-size: 11px; }
+.log-floor strong { font-size: 14px; }
+.log-floor[data-current] small { color: #d8edb5; }
+.log-observation h3 { font-size: 17px; margin: 0 0 4px; }
+.log-observation p { color: #bdcdd2; font-size: 14px; line-height: 1.65; }
+
+.rampart-atlas { display:grid; gap:14px; }
+.rampart-atlas > svg { width:100%; border:1px solid #45606a; background:#1b2c34; border-radius:5px; }
+.rampart-stops { display:grid; grid-template-columns:repeat(auto-fit,minmax(125px,1fr)); gap:7px; }
+.rampart-stops button { margin:0; justify-content:flex-start; }
+.rampart-stops small { margin-left:auto; color:#aabdbb; }

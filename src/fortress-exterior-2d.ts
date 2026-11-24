@@ -1,3 +1,4 @@
+import { discharge, drainClock, spillwayFall, spillwayLevels, valveDelay, wakeDelay } from './fortress-spillway-flow';
 import { harborHeight } from './field-city-layout';
 import { fortressLiftDepth, type FortressView } from './field-fortress-state';
 import { ringAngle, ringRadius } from './field-ring-coordinates';
@@ -170,46 +171,62 @@ export function drawRasterBastion(ctx: CanvasRenderingContext2D, project: Projec
     }
   }
   const outlets=Array.from({length:8},(_,i)=>gate+(i+.5)*turn/8);
-  const pressure=fortress.phase==='open'?0:Math.min(1,Math.max(0,(fortress.lift-.12)*3.7))*(1-fortress.drain**1.6);
-  function cascade(a:number,r:number,lip:number,end:number,reach:number,halfWidth:number,id:number){
-    if(pressure<=.012||sea>=lip-.10)return;
-    const floor=Math.max(sea,end), drop=lip-floor;
-    const span=reach*Math.sqrt(drop/(lip-end))*(.62+.38*pressure);
-    const half=halfWidth*Math.sqrt(pressure);
-    const shot=(t:number,side:number):Vertex=>{
-      const d=r+span*t;
-      const wave=.048*t*Math.sin(seconds*5.2+t*13+id+side*3.4)+.035*t*Math.sin(t*37-seconds*3.7+id*.89);
-      const spread=half*(.78+.54*t+.08*Math.sin(t*13-seconds*2.1+id)*t)+wave;
-      return [a+(side*spread+wave)/d,d+.10*Math.sin(t*17-seconds*3.2+side*9)*t,lip-drop*t*t];
+  const elapsed = drainClock(fortress);
+  const pressure = fortress.phase === 'open' ? 0 : Math.max(...spillwayLevels.map(level => discharge(level,0,elapsed)));
+  function cascade(a:number, radius:number, halfWidth:number, tier:number, outlet:number) {
+    if (fortress.phase === 'open') return;
+    const level = spillwayLevels[tier], fall = spillwayFall(level,sea), id = outlet*3 + tier;
+    const {drop, flight, impact} = fall;
+    if (drop<=.015 || elapsed < level.uncovers + valveDelay[outlet] || elapsed > level.empties + valveDelay[outlet] + flight + wakeDelay) return;
+    const emitted = elapsed-valveDelay[outlet];
+    const head = Math.min(1,Math.max(0,(emitted-level.uncovers)/flight));
+    const tail = Math.max(0,Math.min(1,(emitted-level.empties)/flight));
+    const beam = (t:number) => {
+      const p = discharge(level,outlet,elapsed-t*flight);
+      return {power:p, distance:radius+fall.reach*t*(.57+.43*p), width:halfWidth*(.11+.89*Math.sqrt(p))};
     };
-    const colors=night?['#518f9c','#70a9af','#a7cecb','#81b6b6','#6ca4aa']:['#84babb','#9fc7c3','#bfdbd0','#a2ceca','#92c4c5'];
-    for(let j=0;j<10;j++){
-      const e=j*.2-1, v=Array.from({length:10},(_,i)=>shot(i/9,e));
-      v.push(...Array.from({length:10},(_,i)=>shot(1-i/9,e+.205)));
-      paint(v,colors[(j+id)%colors.length]);
+    const shot=(t:number,side:number):Vertex=>{
+      const flow=beam(t), d=flow.distance;
+      const wave=.048*t*Math.sin(seconds*5.2+t*13+id+side*3.4)+.035*t*Math.sin(t*37-seconds*3.7+id*.89);
+      const spread=flow.width*(.78+.54*t+.08*Math.sin(t*13-seconds*2.1+id)*t)+wave;
+      return [a+(side*spread+wave)/d,d+.10*Math.sin(t*17-seconds*3.2+side*9)*t,level.y-drop*t*t];
+    };
+    const colors=night?['#367989','#588f9b','#a7cecb','#81b6b6','#55909b']:['#568f99','#83b4b3','#bfdbd0','#a2ceca','#75adb0'];
+    if (head > tail) {
+      for(let j=0;j<10;j++){
+        const e=j*.2-1, v=Array.from({length:10},(_,i)=>shot(tail+(head-tail)*i/9,e));
+        v.push(...Array.from({length:10},(_,i)=>shot(head-(head-tail)*i/9,e+.205)));
+        paint(v,colors[(j+id)%colors.length]);
+      }
+      for(let i=0;i<38;i++){
+        const t=(seconds*(.63+i%3*.12)+i*.127+id*.173)%1, s=noise(i+id*47)*1.9-.95;
+        if(t<tail || t>head)continue;
+        line([shot(t,s),shot(Math.min(head,t+.055+.11*noise(i)),s)],i%5?'#eef5e49a':'#5e9da296',.031+.040*noise(i+3));
+      }
     }
-    for(let i=0;i<38;i++){
-      const t=(seconds*(.63+i%3*.12)+i*.127+id*.173)%1, s=noise(i+id*47)*1.9-.95;
-      line([shot(t,s),shot(Math.min(1,t+.055+.11*noise(i)),s)],i%5?'#eef5e49a':'#5e9da296',.031+.040*noise(i+3));
-    }
-    const p=screen(shot(1,0)),w=(half+.25)*size;
+    const hit=beam(1), wake=.71*hit.power+.29*discharge(level,outlet,elapsed-flight-wakeDelay);
+    if (wake<.003) return;
+    const p=screen(shot(1,0)),w=(hit.width+.25)*size;
     for(let i=0;i<3;i++){
       const age=(seconds*.78+i/3+id*.13)%1,ex=w*(.9+age*.78);
       ctx.beginPath();ctx.ellipse(p.x,p.y,ex,Math.max(.35,ex*flatten*.76),0,0,turn);
-      ctx.strokeStyle='rgba(208,242,230,'+(.62*(1-age))+')';ctx.lineWidth=Math.max(.7,size*.072);ctx.stroke();
+      ctx.strokeStyle='rgba(208,242,230,'+(.62*(1-age)*wake)+')';ctx.lineWidth=Math.max(.7,size*.072);ctx.stroke();
     }
+    ctx.save();
+    ctx.globalAlpha*=hit.power;
     for(let i=0;i<23;i++){
       const age=(seconds*(.56+noise(i+20)*.52)+noise(i+id*17))%1,dir=i*2.398+id;
-      const rr=r+span+(age*.8+.12)*Math.cos(dir), x=Math.sin(dir)*half*(.48+age);
-      const q=screen(at(a,x,rr,floor+.05+age*(1-age)*3.5*pressure));
+      const rr=hit.distance+(age*.8+.12)*Math.cos(dir), x=Math.sin(dir)*hit.width*(.48+age);
+      const q=screen(at(a,x,rr,impact+.05+age*(1-age)*3.5*hit.power));
       const s=Math.max(.45,(.045+(1-age)*.105)*size);
       ctx.fillStyle=i%3?'#e0f2e3a1':'#a7d2d8a6';ctx.fillRect(q.x,q.y,s*1.4,s);
     }
+    ctx.restore();
   }
   function drain(a:number,i:number){
-    cascade(a,25.83,-3.5,-9.98,2.22,1.03,i*3);
-    cascade(a,28.30,-10.58,-14.80,3.48,1.42,i*3+1);
-    cascade(a,32.05,-15.22,-.58-fortressLiftDepth,3.80,1.72,i*3+2);
+    cascade(a,25.83,1.03,0,i);
+    cascade(a,28.30,1.42,1,i);
+    cascade(a,32.05,1.72,2,i);
   }
   outlets.forEach((a,i)=>{if(!front(a))drain(a,i);});
   const skirt=sea>-5.65?bastionRadius:sea>-12.25?27.02:sea>-19.55?30.40:32.2;

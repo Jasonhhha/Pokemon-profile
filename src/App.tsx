@@ -1,33 +1,42 @@
+import { PalaceSection } from './palace-section';
+import { RampartAtlas } from './rampart-atlas';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, BookMarked, BookOpen, Castle, Check, Compass, Crosshair, DoorOpen, Flag, Github, Heart, House, Mail, Map, MapPin, Maximize, Minimize, Moon, Orbit, Plus, Radio, Sun, Volume2, VolumeX, Waves, Zap } from 'lucide-react';
 import { createField, fieldAreas, type Direction, type EncounterKind, type FieldArea, type FieldEvent } from './field';
 import { BattleOverlay, type BattleEncounter, type BattleResult } from './battle';
+import { beginCheckpoint, type BattleCheckpoint } from './battle-checkpoint';
+import type { BattleState } from './battle-turn';
 import { CreatureSprite } from './creature-art';
 import { creatures, givePotion, healTeam, maxHp, potionHp, type CreatureId } from './creatures';
-import { addSeen, areas, chooseEncounter, entrance, loadAdventure, recordCourt, saveKey } from './adventure';
+import { addSeen, areas, chooseEncounter, deepestVisited, recordCourt, saveKey, type AdventureSave } from './adventure';
 import { areaIcons, HpBar, Pokedex, RouteAtlas, TeamPanel } from './adventure-menu';
 import { fortressLiftStops, fortressPier, fortressRooms, openFortress, sleepingFortress, type RoarPhase } from './field-fortress-state';
 import { rooms } from './field-rooms';
 import { isMazeRoom, mazeFloors, type MazePoint } from './fortress-maze';
 import { MazeAtlas, MazeMinimap } from './maze-atlas';
 import { quietReading, type WardReading } from './fortress-ward-service';
+import { GridMonitor } from './fortress-power-monitor';
 import { WardMonitor } from './ward-monitor';
 import { recordMazeStep } from './fortress-survey';
 import { cityDistrict } from './field-city-layout';
 import { courtNotes, surveyStops, type CityStop, type CityStopId, type SurveyId } from './field-city-walks';
+import { wallSection, wallPoint } from './fortress-wall-walk';
 import { FieldDialogue } from './field-dialogue';
 import { FieldEncounterTransition } from './field-encounter-transition';
 import { About, Contact, Panel, ProfileForm, Research, loadProfile, type Profile } from './portfolio';
 import { useSound } from './sound';
+import { readSession, writeSession, type SaveSession, type SaveStatus } from './save-store';
+import { SavePanel } from './save-panel';
+import { FortressLog } from './fortress-log';
 
-type PanelId = 'about' | 'projects' | 'contact' | 'edit' | 'map' | 'pack' | 'dex' | 'maze';
+type PanelId = 'about' | 'projects' | 'contact' | 'edit' | 'map' | 'pack' | 'dex' | 'maze' | 'storage' | 'fortress-log' | 'palace-section';
 type Encounter = BattleEncounter & { area: FieldArea; firstPractice?: boolean };
 type Dialogue = { speaker: string; lines: string[]; index: number; choice?: { label: string; accept: () => void } };
 
 const places = [
   { id: 'about', name: '关于我', place: '潮汐环城 · 潮汐档案屋', copy: '学习经历、量化研究方向与技术栈。', icon: House },
-  { id: 'projects', name: '研究档案', place: '雾杉小径 · 雾杉观测室', copy: '基本面因子研究与集成 EWRLS 项目。', icon: BookOpen },
-  { id: 'contact', name: '联系我', place: '风语高地 · 风语天文台', copy: '聊聊研究、机器学习和合作。', icon: Radio },
+  { id: 'projects', name: '研究档案', place: '潮汐环城 · 市集研究室', copy: '基本面因子研究与集成 EWRLS 项目。', icon: BookOpen },
+  { id: 'contact', name: '联系我', place: '潮汐环城 · 车站信号室', copy: '聊聊研究、机器学习和合作。', icon: Radio },
 ] as const;
 
 const directions = {
@@ -43,7 +52,23 @@ function loadNight() {
 }
 
 export default function App() {
-  const [save, setSave] = useState(loadAdventure);
+  const [session, setSession] = useState(readSession);
+  const [version, setVersion] = useState(0);
+  const [previous, setPrevious] = useState<AdventureSave | null>(null);
+  const [message, setMessage] = useState('');
+  function resume(next: SaveSession, before: AdventureSave) {
+    setPrevious(before);
+    setSession(next);
+    setVersion(generation => generation + 1);
+  }
+  return <Expedition key={version} session={session} resume={resume} previous={previous} message={message} setMessage={setMessage}/>;
+}
+
+function Expedition({ session, resume, previous: previousSave, message, setMessage }: {
+  session: SaveSession; resume: (next: SaveSession, before: AdventureSave) => void;
+  previous: AdventureSave | null; message: string; setMessage: (message: string) => void;
+}) {
+  const [save, setSave] = useState(session.initial);
   const [fortress, setFortress] = useState(save.fortressOpened ? openFortress : sleepingFortress);
   const [liftMoving, setLiftMoving] = useState(false);
   const [roarPhase, setRoarPhase] = useState<RoarPhase>('quiet');
@@ -51,10 +76,16 @@ export default function App() {
   const cryAttempt = useRef(0);
   const [inspectingSeal, setInspectingSeal] = useState(false);
   const [wardReading, setWardReading] = useState<WardReading>(quietReading);
-  const [canSave, setCanSave] = useState(true);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(session.status);
+  const commit = useCallback((next: AdventureSave) => setSaveStatus(writeSession(session, next)), [session]);
   const [profile, setProfile] = useState(loadProfile);
   const [panel, setPanel] = useState<PanelId | null>(null);
-  const [encounter, setEncounter] = useState<Encounter | null>(null);
+  const [parents, setParents] = useState<{ panel: PanelId; opener?: string }[]>([]);
+  const outerOpener = useRef<HTMLElement | null>(null);
+  const [packSelection, setPackSelection] = useState(save.battle.lead);
+  const [encounter, setEncounter] = useState<Encounter | null>(() => save.pendingBattle
+    ? { ...save.pendingBattle.encounter, firstPractice: Boolean(save.pendingBattle.encounter.trainer) && !save.sparWon } : null);
+  const [shownBattle, setShownBattle] = useState<BattleState | undefined>(save.pendingBattle?.state);
   const [enteringBattle, setEnteringBattle] = useState(false);
   const [dialogue, setDialogue] = useState<Dialogue | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -75,29 +106,34 @@ export default function App() {
   current.current = save;
   const activeEncounter = useRef(encounter);
   activeEncounter.current = encounter;
-  const visitedScene = useRef(save.location.fortressRoom ?? save.location.room ?? save.location.area);
+  const visitedScene = useRef(save.location.fortressRoom ?? save.location.room ?? (save.location.wallPassage ? 'rampart' : save.location.area));
   const nightNow = useRef(night);
   nightNow.current = night;
   const locked = useRef(false);
   const area = encounter?.area ?? save.location.area;
   const room = !encounter && save.location.room ? rooms[save.location.room] : undefined;
   const floor = !encounter ? save.location.fortressRoom : undefined;
+  const wall = !encounter && save.location.wallPassage === true;
   const maze = isMazeRoom(floor) ? floor : undefined;
+  const fieldMapPanel = maze ? 'maze' : floor ? 'palace-section' : 'map';
+  const mapTitle = wall ? '外壁长阶剖面图' : floor ? '地宫纵剖图' : '环城地图';
   const plan = maze ? mazeFloors[maze] : undefined;
   const near = (point: MazePoint) => Math.abs(save.location.x - point.x) + Math.abs(save.location.y - point.y) <= 1;
-  const liftAvailable = (floor === 'sluice' || floor === 'catacomb') && save.shortcuts.includes('catacomb') && near(fortressLiftStops[floor]);
+  const liftAvailable = (floor === 'sluice' || floor === 'catacomb') && near(fortressLiftStops[floor]);
   const shortcutOpen = Boolean(maze && save.shortcuts.includes(maze));
   const mazeAction = plan && (near(plan.down) ? '沿阶梯下行' : !shortcutOpen && near(plan.switch) ? '操作' + plan.switchName : undefined);
-  const returnLabel = floor === 'seal' ? '返回陵廊' : floor === 'catacomb' ? '返回水渠' : floor === 'aqueduct' ? '返回水殿' : '返回栈桥';
-  const interior = Boolean(floor || room);
+  const returnLabel = floor === 'seal' ? '返回陵宫' : floor === 'catacomb' ? '返回长庭' : floor === 'aqueduct' ? '返回水殿' : '返回下层王门';
+  const interior = Boolean(floor || room || wall);
   const atPier = !interior && area === 'harbor' && Math.abs(save.location.x - fortressPier.x) + Math.abs(save.location.y - fortressPier.y) <= 1;
-  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor === 'seal' ? 'sanctum' : floor ? 'fortress' : room ? 'interior' : area, floor);
-  const scene = floor ? fortressRooms[floor] : room ?? fieldAreas[area];
-  const AreaIcon = floor ? Castle : room ? House : areaIcons[area];
-  const overviewLabel = overview ? '返回街道' : fortress.phase === 'open' ? '环看海宫' : '俯瞰环城';
+  const readPower = useCallback(() => controller.current?.powerReading(), []);
+  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor === 'seal' ? 'sanctum' : floor ? 'fortress' : room ? 'interior' : area, floor, readPower);
+  const scene = wall ? { name: wallSection(save.location.y), english:'WEST RAMPART' } : floor ? fortressRooms[floor] : room ?? fieldAreas[area];
+  const AreaIcon = floor || wall ? Castle : room ? House : areaIcons[area];
+  const overviewLabel = maze ? (overview ? '返回仪道' : '俯瞰宫殿') : overview ? '返回街道' : fortress.phase === 'open' ? '环看海宫' : '俯瞰环城';
   const areaNumber = String(areas.indexOf(area) + 1).padStart(2, '0');
-  const progress = save.battle;
-  const lead = progress.team.find(member => member.id === progress.lead) ?? progress.team[0];
+  const activeBattle = encounter ? shownBattle : undefined;
+  const progress = activeBattle?.progress ?? save.battle;
+  const lead = progress.team.find(member => member.id === (activeBattle?.active ?? progress.lead)) ?? progress.team[0];
   const leadInfo = creatures[lead.id];
   const paused = Boolean(panel || encounter || dialogue);
   const focusField = useCallback(() => requestAnimationFrame(() => canvas.current?.focus({ preventScroll: true })), []);
@@ -123,7 +159,8 @@ export default function App() {
   const startEncounter = useCallback((next: Encounter) => {
     locked.current = true;
     controller.current?.setPaused(true);
-    setSave(previous => addSeen(previous, next.creature));
+    setSave(previous => ({ ...addSeen(previous, next.creature), pendingBattle: beginCheckpoint(next, previous.battle) }));
+    setShownBattle(undefined);
     setEnteringBattle(!matchMedia('(prefers-reduced-motion: reduce)').matches);
     setEncounter(next);
   }, []);
@@ -142,26 +179,28 @@ export default function App() {
       const captureTip = current.current.battle.lead === 'piplup'
         ? '遇到姆克儿，可以先让波加曼用拍击削弱它，再投出精灵球。'
         : '先用威力较低的招式削弱野生宝可梦，再投出精灵球。';
-      say('韩怡萱', '仙子伊布和我在这儿等你。外环绿廊的高草里能遇到姆克儿和小猫怪，穿过东站的桥就是雾杉小径。',
+      say('韩怡萱', '仙子伊布和我在这儿等你。外环绿廊的高草里能遇到姆克儿和小猫怪，绿廊北侧有位陪练，东渡口还有一位守望员。',
         `${captureTip}伙伴累了，就到环城大道的补给站休息。`);
     } else if (event === 'healer') {
       setSave(previous => ({ ...previous, battle: healTeam(previous.battle) }));
       say('补给员', '宝可梦的体力和招式 PP 已恢复，伤药和精灵球也补上了。一路顺风！');
     } else if (event === 'spar') {
-      offerBattle('林间陪练', '我和利欧路在这儿练习招式。要不要打一场？第一次赢下切磋后，我会帮你的队伍休整。', '开始切磋',
-        { creature: 'riolu', level: 4, trainer: '林间陪练', area: 'grove', firstPractice: !current.current.sparWon });
+      offerBattle('绿廊陪练', '我和利欧路在这儿练习招式。要不要打一场？第一次赢下切磋后，我会帮你的队伍休整。', '开始切磋',
+        { creature: 'riolu', level: 4, trainer: '绿廊陪练', area: 'harbor', firstPractice: !current.current.sparWon });
     } else if (event === 'trial') {
       if (current.current.battle.trialWon) {
-        say('高地守望员', '你通过了风语高地的试炼。风塔已经点亮，随时欢迎你再回来。');
+        say('东渡口守望员', '你通过了东渡口的试炼。信号灯已经点亮，随时欢迎你再回来。');
       } else if (current.current.battle.team.length < 2) {
-        say('高地守望员', '来参加试炼吗？先在草丛里捕捉一只宝可梦，带两位伙伴来见我。');
+        say('东渡口守望员', '来参加试炼吗？先在草丛里捕捉一只宝可梦，带两位伙伴来见我。');
       } else {
-        offerBattle('高地守望员', '圆陆鲨是龙和地面双属性，特别怕冰。准备好了，就来挑战我们吧。', '开始试炼',
-          { creature: 'gible', level: 6, trial: true, area: 'summit' });
+        offerBattle('东渡口守望员', '圆陆鲨是龙和地面双属性，特别怕冰。准备好了，就来挑战我们吧。', '开始试炼',
+          { creature: 'gible', level: 6, trial: true, area: 'harbor' });
       }
     } else {
       locked.current = true;
       controller.current?.setPaused(true);
+      setParents([]);
+      outerOpener.current = canvas.current;
       setPanel(event);
     }
   }, [offerBattle, say]);
@@ -199,6 +238,7 @@ export default function App() {
       fortressOpened: current.current.fortressOpened,
       fortressStartedAt: current.current.fortressStartedAt,
       tideDialAwake: current.current.tideDialAwake,
+      gridLimited: current.current.gridLimited, onGridLoad: limited => setSave(previous => ({ ...previous, gridLimited: limited || undefined })),
       shortcuts: current.current.shortcuts, onLiftTravel: setLiftMoving,
       ward: current.current.ward, onWardReading: setWardReading,
       onWardChanged: ward => setSave(previous => ({ ...previous, ward })),
@@ -221,14 +261,16 @@ export default function App() {
       onReady: () => setReady(true),
       onOverview: setOverview,
       onLocation: location => {
-        const key = location.fortressRoom ?? location.room ?? location.area;
+        const key = location.fortressRoom ?? location.room ?? (location.wallPassage ? 'rampart' : location.area);
         if (visitedScene.current !== key) {
           visitedScene.current = key;
-          const destination = location.fortressRoom ? fortressRooms[location.fortressRoom] : location.room ? rooms[location.room] : fieldAreas[location.area];
+          const destination = location.wallPassage ? { name:'西栈桥外壁长阶', english:'WEST RAMPART' } : location.fortressRoom ? fortressRooms[location.fortressRoom] : location.room ? rooms[location.room] : fieldAreas[location.area];
           setArrival({ key, name: destination.name, english: destination.english });
         }
         setSave(previous => ({
-          ...previous, location, mazeTrail: recordMazeStep(previous.mazeTrail, location), visited: previous.visited.includes(location.area) ? previous.visited : [...previous.visited, location.area],
+          ...previous, location,
+          deepestFloor: location.fortressRoom ? deepestVisited(previous.deepestFloor, location.fortressRoom) : previous.deepestFloor,
+          mazeTrail: recordMazeStep(previous.mazeTrail, location), visited: previous.visited.includes(location.area) ? previous.visited : [...previous.visited, location.area],
         }));
       },
       onHint: setHint,
@@ -255,7 +297,7 @@ export default function App() {
     controller.current?.setPaused(paused);
   }, [paused]);
 
-  useEffect(() => { controller.current?.setCompanion(lead.id); }, [lead.id]);
+  useEffect(() => { controller.current?.setCompanion(save.battle.lead); }, [save.battle.lead]);
   useEffect(() => { controller.current?.setBeaconLit(progress.trialWon); }, [progress.trialWon]);
   useEffect(() => { controller.current?.setRunning(running); }, [running]);
   useEffect(() => { controller.current?.setCovered(Boolean(encounter) && !enteringBattle); }, [encounter, enteringBattle]);
@@ -272,10 +314,21 @@ export default function App() {
     catch { /* The display changes even when storage is unavailable. */ }
   }, [night]);
 
+  useEffect(() => { commit(save); }, [commit, save]);
+
   useEffect(() => {
-    try { localStorage.setItem(saveKey, JSON.stringify(save)); }
-    catch { setCanSave(false); }
-  }, [save]);
+    function observeStorage(event: StorageEvent) {
+      if (event.key !== saveKey && event.key !== null) return;
+      try {
+        if (localStorage.getItem(saveKey) !== session.baseline) {
+          session.status = 'conflict';
+          setSaveStatus('conflict');
+        }
+      } catch { setSaveStatus('unavailable'); }
+    }
+    window.addEventListener('storage', observeStorage);
+    return () => window.removeEventListener('storage', observeStorage);
+  }, [session]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -302,10 +355,17 @@ export default function App() {
     return () => { document.body.style.overflow = before; window.removeEventListener('keydown', expandedKeys); };
   }, [expanded, focusField]);
 
-  function openPanel(next: PanelId) {
+  function openPanel(next: PanelId, opener?: HTMLElement) {
     if (fortress.cinematic || liftMoving) return;
     locked.current = true;
     controller.current?.setPaused(true);
+    if (panel && panel !== next) {
+      setParents(history => [...history, { panel, opener: opener?.dataset.panelEntry }]);
+    } else if (!panel) {
+      setParents([]);
+      outerOpener.current = opener ?? canvas.current;
+      if (next === 'pack') setPackSelection(current.current.battle.lead);
+    }
     setPanel(next);
   }
 
@@ -336,14 +396,28 @@ export default function App() {
     focusField();
   }
 
-  function openDex(id?: CreatureId) {
+  function openDex(id?: CreatureId, opener?: HTMLElement) {
     setDexEntry(id ?? (floor === 'seal' && save.kyuremObserved ? 'kyurem' : undefined));
-    openPanel('dex');
+    openPanel('dex', opener);
+  }
+
+  function backPanel() {
+    const previous = parents.at(-1);
+    if (!previous) { closePanel(); return; }
+    setParents(history => history.slice(0, -1));
+    setPanel(previous.panel);
+    if (previous.opener) requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`dialog [data-panel-entry="${previous.opener}"]`)?.focus({ preventScroll: true });
+    });
   }
 
   function closePanel() {
+    setParents([]);
     setPanel(null);
-    if (encounter || dialogue) {
+    const opener = outerOpener.current;
+    if (opener?.isConnected && opener !== canvas.current && !opener.matches(':disabled')) {
+      requestAnimationFrame(() => opener.focus({ preventScroll: true }));
+    } else if (encounter || dialogue) {
       requestAnimationFrame(() => {
         const target = encounter ? canvas.current?.parentElement?.querySelector<HTMLElement>('.battle-overlay') : dialogueButton.current;
         target?.focus({ preventScroll: true });
@@ -380,25 +454,33 @@ export default function App() {
     if (key === 'm' || key === 'q' || key === 'j') {
       event.preventDefault();
       if (key === 'j') openDex();
-      else openPanel(key === 'm' ? maze ? 'maze' : 'map' : 'pack');
+      else openPanel(key === 'm' ? fieldMapPanel : 'pack');
     }
   }
 
   function finishBattle(result: BattleResult) {
     setEncounter(null);
+    setShownBattle(undefined);
     if (result.outcome === 'win' || result.outcome === 'caught') sound.play('win');
     if (result.outcome === 'lost') {
       controller.current?.setPaused(false);
-      controller.current?.travel('harbor');
+      controller.current?.recoverAtClinic();
       say('补给员', '你和伙伴们回到了潮汐环城。体力和补给都已恢复，随时可以再出发。');
     } else if (encounter?.trial && result.outcome === 'win') {
-      say('高地守望员', '风塔亮起来了！港口的伙伴会看见你的信号。你已经完成了群岛试炼。');
+      say('东渡口守望员', '东渡口的信号灯亮起来了！港口的伙伴会看见你的信号。你已经完成了环城试炼。');
     } else if (encounter?.trainer && result.outcome === 'win') {
       say(encounter.trainer, encounter.firstPractice ? '队伍已经休整好了。这两颗精灵球也带上，留给接下来的旅程。' : '这场又学到了新东西。路过这里时，还可以来找我切磋。');
     } else {
       focusField();
     }
   }
+
+  const checkpointBattle = useCallback((pendingBattle: BattleCheckpoint) => {
+    const next = { ...current.current, pendingBattle };
+    current.current = next;
+    setSave(next);
+    commit(next);
+  }, [commit]);
 
   const saveBattle = useCallback((result: BattleResult) => {
     const previous = current.current;
@@ -407,28 +489,22 @@ export default function App() {
     const battle = result.outcome === 'lost' || firstSpar ? healTeam(result.progress) : result.progress;
     const next = {
       ...previous,
-      location: result.outcome === 'lost' ? entrance : previous.location,
+      pendingBattle: undefined,
+      location: result.outcome === 'lost' ? {area:'harbor' as const,x:18,y:11} : previous.location,
       sparWon: previous.sparWon || sparWon,
       battle: firstSpar ? { ...battle, charms: Math.min(Number.MAX_SAFE_INTEGER, battle.charms + 2) } : battle,
     };
     current.current = next;
     setSave(next);
-    try { localStorage.setItem(saveKey, JSON.stringify(next)); }
-    catch { setCanSave(false); }
-  }, []);
-
-  function fastTravel(next: FieldArea) {
-    setPanel(null);
-    controller.current?.setPaused(false);
-    controller.current?.travel(next);
-    focusField();
-  }
+    commit(next);
+  }, [commit]);
 
   function walkTo(stop: CityStop) {
     const field = controller.current;
     if (!field) return false;
     field.setPaused(false);
-    if (!field.walkToStop(stop)) { field.setPaused(true); return false; }
+    const started = field.walkToStop(stop);
+    if (!started) { field.setPaused(true); return false; }
     setAtlasStop(stop.id);
     setPanel(null);
     requestAnimationFrame(() => {
@@ -450,10 +526,11 @@ export default function App() {
   }
 
   function storeProfile(next: Profile) {
-    setProfile(next);
     try { localStorage.setItem('yu-world-profile', JSON.stringify(next)); }
-    catch { setCanSave(false); }
-    setPanel('about');
+    catch { return false; }
+    setProfile(next);
+    backPanel();
+    return true;
   }
 
   function closeDialogue() {
@@ -464,18 +541,21 @@ export default function App() {
   const tasks = [
     { id: 'guide', label: '与韩怡萱交谈', description: '环城大道 · 起点东侧', done: save.greeted },
     { id: 'catch', label: '捕捉一只宝可梦', description: '外环绿廊 · 高草花园', done: progress.team.length > 1 },
-    { id: 'trial', label: '完成风语高地试炼', description: '带至少两位伙伴登顶', done: progress.trialWon },
+    { id: 'trial', label: '完成东渡口试炼', description: '带两位伙伴到东渡口', done: progress.trialWon },
   ];
   const activeTask = tasks.find(task => !task.done)?.id;
   const panelTitles: Record<PanelId, { title: string; label: string }> = {
-    maze: { title: '迷宫行迹图', label: 'SURVEY MAP' },
+    'palace-section': { title: '地宫纵剖图', label: 'PALACE SECTION' },
+    'fortress-log': { title: '海宫勘察手记', label: 'FORTRESS SURVEY' },
+    storage: { title: '冒险存档', label: 'SAVE FILE' },
+    maze: { title: '地宫行迹图', label: 'SURVEY MAP' },
     about: { title: profile.name, label: 'ABOUT ME' },
     projects: { title: '研究档案', label: 'RESEARCH ARCHIVE' },
     contact: { title: '联系我', label: 'SIGNAL STATION' },
     edit: { title: '编辑个人资料', label: 'PROFILE' },
-    map: { title: '群岛航线', label: 'ISLAND MAP' },
+    map: { title: wall ? '外壁长阶剖面图' : '环城地图', label: wall ? 'RAMPART SECTION' : 'CITY MAP' },
     pack: { title: '伙伴与补给', label: 'BACKPACK' },
-    dex: { title: '群岛图鉴', label: 'FIELD POKÉDEX' },
+    dex: { title: '环城图鉴', label: 'FIELD POKÉDEX' },
   };
 
   const audioToggle = <button type="button" className="icon-button" aria-label={sound.enabled ? '关闭声音' : '开启声音'} title={sound.enabled ? '关闭声音' : '开启声音'} aria-pressed={sound.enabled} onClick={sound.toggle}>{sound.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}</button>;
@@ -486,8 +566,8 @@ export default function App() {
         <a href="#top" className="wordmark"><span className="brand-symbol"><Compass size={22} strokeWidth={2.4} /></span><span className="pixel">TIDEBOUND<span className="brand-period">.</span></span></a>
         <nav aria-label="主导航">
           <a className="nav-link nav-current" href="#expedition" onClick={() => { if (!paused) focusField(); }}><Compass size={16} />环城探索</a>
-          <button className="nav-link" type="button" onClick={() => openPanel('projects')}><BookOpen size={16} />研究档案</button>
-          <button className="nav-link" type="button" onClick={() => openPanel('about')}><House size={16} />关于我</button>
+          <button className="nav-link" type="button" onClick={event => openPanel('projects', event.currentTarget)}><BookOpen size={16} />研究档案</button>
+          <button className="nav-link" type="button" onClick={event => openPanel('about', event.currentTarget)}><House size={16} />关于我</button>
         </nav>
         <div className="top-actions">
           {!expanded && audioToggle}
@@ -506,34 +586,34 @@ export default function App() {
       </section>
 
       <div id="expedition" className="expedition">
-        <section ref={frame} className={`game-frame${expanded ? ' game-expanded' : ''}`} data-island={area} data-city={area === 'harbor' && !interior || undefined} aria-label="潮汐群岛游戏"
+        <section ref={frame} className={`game-frame${expanded ? ' game-expanded' : ''}`} data-island={area} data-city={area === 'harbor' && !interior || undefined} aria-label="潮汐环城游戏"
           role={expanded ? 'dialog' : undefined} aria-modal={expanded || undefined}>
           <header className="game-bar">
             <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
             <div className="game-tools">
               {expanded && audioToggle}
-              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused || liftMoving}><DoorOpen size={16} />{floor ? returnLabel : '离开室内'}</button> :
+              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused || liftMoving}><DoorOpen size={16} />{wall ? '沿阶返回西栈桥' : floor ? returnLabel : '离开室内'}</button> :
               <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
-                {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
+                {night ? <Moon size={16} /> : <Sun size={16} />}{night ? '夜间' : '晴朗'}
               </button>}
-              {area === 'harbor' && !interior && <button type="button" className="icon-button overview-button" aria-label={overviewLabel}
+              {((area === 'harbor' && !interior) || maze) && <button type="button" className="icon-button overview-button" aria-label={overviewLabel}
                 aria-pressed={overview} title={overviewLabel} disabled={!ready || paused || fortress.cinematic || liftMoving}
                 onClick={() => { controller.current?.setOverview(!overview); focusField(); }}>
                 <Orbit size={17} /><span>{overviewLabel}</span>
               </button>}
-              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('map')}><Map size={17} /></button>
+              <button type="button" className="icon-button" aria-label={mapTitle} title={mapTitle} disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel(floor ? 'palace-section' : 'map', event.currentTarget)}><Map size={17} /></button>
               <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
             </div>
           </header>
 
           <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
-            data-room={floor ?? save.location.room} data-ward-phase={floor === 'seal' ? save.ward.phase : undefined} data-ward-testing={floor === 'seal' && wardReading.testing || undefined} data-lift-moving={liftMoving || undefined} data-shortcut={maze ? shortcutOpen ? 'open' : 'closed' : undefined} data-roar-phase={floor === 'seal' ? roarPhase : undefined} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
-            <div className="game-canvas" ref={canvas} role="application" data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
-              aria-label={`游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开${maze ? '本层行迹图' : '航线'}，Q 打开队伍，J 打开图鉴。`} />
+            data-wall-passage={wall || undefined} data-room={floor ?? save.location.room} data-ward-phase={floor === 'seal' ? save.ward.phase : undefined} data-ward-testing={floor === 'seal' && wardReading.testing || undefined} data-lift-moving={liftMoving || undefined} data-shortcut={maze ? shortcutOpen ? 'open' : 'closed' : undefined} data-roar-phase={floor === 'seal' ? roarPhase : undefined} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
+            <div className="game-canvas" ref={canvas} role="application" data-grid-load={save.gridLimited ? 'limited' : 'normal'} data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
+              aria-label={`游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开${maze ? '本层行迹图' : mapTitle}，Q 打开队伍，J 打开图鉴。`} />
             {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
             {ready && !encounter && !dialogue && <div className="map-coordinate" aria-hidden="true"><Crosshair size={14} />
               {area === 'harbor' && !interior && <span className="map-district">{cityDistrict(save.location.x, save.location.y)}</span>}
-              <span className="pixel">{floor ? fortressRooms[floor].level : areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
+              <span className="pixel">{wall ? Math.max(0,-wallPoint(3,save.location.y).y).toFixed(1)+' m' : floor ? fortressRooms[floor].level : areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
             </div>}
             {ready && !paused && !liftMoving && !inspectingSeal && area === 'harbor' && !room && <div className="fortress-controls">
               {fortress.cinematic ? <div className="fortress-meter">
@@ -542,7 +622,7 @@ export default function App() {
               </div> : <>
                 {(!maze || mazeAction) && <button type="button" className="fortress-action" onClick={() => { controller.current?.approachFortress(); focusField(); }}>
                   {floor === 'seal' ? <Waves size={16} /> : <Castle size={16} />}
-                  {mazeAction ?? (floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '进入堡垒' : '升起堡垒') : '前往西栈桥')}
+                  {mazeAction ?? (wall ? '沿阶前往下层王门' : floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '踏上外壁长阶' : '升起堡垒') : '前往西栈桥')}
                 </button>}
                 {atPier && fortress.phase === 'open' && <button type="button" className="fortress-replay" onClick={() => { controller.current?.replayFortress(); focusField(); }}>重看浮升</button>}
                 {liftAvailable && <button type="button" className="fortress-replay" onClick={() => { controller.current?.rideFortressLift(); focusField(); }}>乘升降台</button>}
@@ -557,13 +637,16 @@ export default function App() {
               actionRef={dialogueButton} advance={nextLine} decline={dialogue.choice ? closeDialogue : undefined} />}
             {encounter && <FieldEncounterTransition kind={encounter.trial ? 'trial' : encounter.trainer ? 'trainer' : 'wild'}
               night={night} onCovered={() => setEnteringBattle(false)}>
-              <BattleOverlay encounter={encounter} progress={progress} night={night} onResolve={saveBattle} onFinish={finishBattle} onCue={sound.play} />
+              <BattleOverlay encounter={encounter} progress={save.battle} checkpoint={save.pendingBattle} night={night}
+                onCheckpoint={checkpointBattle} onPresent={setShownBattle} onResolve={saveBattle} onFinish={finishBattle}
+                onCue={sound.play} onSpeciesCry={sound.playSpeciesCry} />
             </FieldEncounterTransition>}
           </div>
 
           {inspectingSeal ? <div className="game-controls seal-console">
             <div className="seal-specimen"><small>#0646 · 龙 / 冰</small><strong>酋雷姆</strong></div>
             <span className="seal-caption" role="status">{wardReading.testing ? '复测中，等待锚柱回震……' : cryPlayback === 'loading' ? '正在载入叫声……' : cryPlayback === 'unavailable' ? '叫声未载入，可再试一次' : roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : save.ward.phase === 'stable' ? '四根锁链受力均匀，封印稳定' : save.ward.phase === 'braced' ? '绞盘已锁定，等待复测' : '能量罩稳定'}</span>
+            <GridMonitor controller={controller} limited={Boolean(save.gridLimited)} disabled={paused || wardReading.testing} />
             <button type="button" className="fortress-action" disabled={paused || wardReading.testing || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
             {save.ward.phase === 'idle' && <button type="button" className="fortress-replay" disabled={paused} onClick={() => { controller.current?.startWardSurvey(); focusField(); }}>巡查锁链</button>}
             {(save.ward.phase === 'braced' || save.ward.phase === 'stable') && <button type="button" className="fortress-replay" disabled={paused || wardReading.testing || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearChains}>复测封印</button>}
@@ -605,9 +688,9 @@ export default function App() {
             </div>
           </div>}
           <div className="field-dock" role="group" aria-label="冒险菜单">
-            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel(maze ? 'maze' : 'map')}><Map size={16} /><span>{maze ? '行迹图' : '航线'}</span><kbd aria-hidden="true">M</kbd></button>
-            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
-            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
+            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel(fieldMapPanel, event.currentTarget)}><Map size={16} /><span>{wall ? '外壁剖面' : maze ? '行迹图' : floor ? '地宫纵剖' : '地图'}</span><kbd aria-hidden="true">M</kbd></button>
+            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel('pack', event.currentTarget)}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
+            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openDex(undefined, event.currentTarget)}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
             <button type="button" className="field-dock-run" disabled={!ready || paused || fortress.cinematic || liftMoving} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
           </div>
         </section>
@@ -621,46 +704,73 @@ export default function App() {
                 <div><strong>{task.label}</strong><small>{task.description}</small></div>
               </li>)}
             </ol>
-            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('map')}>
+            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel('map', event.currentTarget)}>
               <BookOpen size={14} /><span>街区手记</span><b>{save.courtVisits.length} / {surveyStops.length}</b><ArrowUpRight size={13} />
+            </button>
+            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel('fortress-log', event.currentTarget)}>
+              <Castle size={14}/><span>海宫勘察手记</span><b>{save.deepestFloor ? fortressRooms[save.deepestFloor].level : save.fortressOpened ? '已升起' : '西栈桥'}</b><ArrowUpRight size={13}/>
             </button>
           </section>
 
           <section className="side-card companion">
-            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
-            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openDex(lead.id)}>
+            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openPanel('pack', event.currentTarget)}><Backpack size={18} /></button></div>
+            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={event => openDex(lead.id, event.currentTarget)}>
               <span className="lead-element">{leadInfo.element}</span><CreatureSprite id={lead.id} /><span className="lead-code pixel">{leadInfo.english}</span>
             </button>
             <div className="lead-status"><strong>{leadInfo.name}</strong><span className="pixel">LV. {lead.level}</span></div>
             <div className="lead-health"><span className="pixel">HP</span><HpBar value={lead.hp} total={maxHp(lead)} /><span>{lead.hp}/{maxHp(lead)}</span></div>
             <div className="field-supplies"><span title={`回复 ${potionHp} 点体力`}><Plus size={15} />伤药 <b>{progress.medicine}</b></span><span title="捕捉野生宝可梦"><Compass size={15} />精灵球 <b>{progress.charms}</b></span></div>
           </section>
-          <div className="save-status"><span className={canSave ? 'live-dot' : 'save-offline'} />{canSave ? '进度保存在当前浏览器' : '当前浏览器无法保存进度'}</div>
+          <button type="button" className="save-status" disabled={fortress.cinematic || liftMoving} onClick={event => openPanel('storage', event.currentTarget)}>
+            <span className={saveStatus === 'saved' ? 'live-dot' : 'save-offline'} />{saveStatus === 'saved' ? '进度保存在当前浏览器' : saveStatus === 'conflict' ? '另一页已有新进度' : saveStatus === 'damaged' ? '浏览器存档需要恢复' : '当前浏览器无法保存进度'}<ArrowUpRight size={13} />
+          </button>
         </aside>
       </div>
 
       <section className="landmarks" aria-labelledby="landmarks-title" inert={expanded}>
-        <div className="landmarks-heading"><div><span className="pixel">FIELD NOTES</span><h2 id="landmarks-title">岛上的三个坐标</h2></div><p>也可以直接翻看我的资料与项目。</p></div>
+        <div className="landmarks-heading"><div><span className="pixel">FIELD NOTES</span><h2 id="landmarks-title">城里的三个坐标</h2></div><p>也可以直接翻看我的资料与项目。</p></div>
         <div className="place-list">
-          {places.map(({ id, name, place, copy, icon: Icon }) => <button type="button" key={id} data-place={id} className="place-card" onClick={() => openPanel(id)}>
+          {places.map(({ id, name, place, copy, icon: Icon }) => <button type="button" key={id} data-place={id} className="place-card" onClick={event => openPanel(id, event.currentTarget)}>
             <span className="place-icon"><Icon size={23} strokeWidth={1.8} /></span>
             <span className="place-content"><small>{place}</small><strong>{name}</strong><span>{copy}</span></span>
             <ArrowUpRight className="place-arrow" size={18} />
           </button>)}
         </div>
       </section>
-      <footer className="footer" inert={expanded}><span className="pixel">TIDEBOUND.</span><span>© 2026 {profile.name}</span><button type="button" onClick={() => openPanel('contact')}><Mail size={15} />联系我</button></footer>
+      <footer className="footer" inert={expanded}><span className="pixel">TIDEBOUND.</span><span>© 2026 {profile.name}</span><button type="button" onClick={event => openPanel('contact', event.currentTarget)}><Mail size={15} />联系我</button></footer>
     </main>
 
-    {panel && <Panel title={panelTitles[panel].title} label={panelTitles[panel].label} close={closePanel}>
+    {panel && <Panel title={panelTitles[panel].title} label={panelTitles[panel].label} close={closePanel} back={parents.length ? backPanel : undefined} backLabel={parents.length ? panelTitles[parents[parents.length - 1].panel].title : ''}>
+      {panel === 'palace-section' && floor && <PalaceSection room={floor} power={readPower} openPlan={button => openPanel('maze', button)} openCity={button => openPanel('map', button)} />}
       {panel === 'maze' && maze && <MazeAtlas room={maze} position={save.location} walked={save.mazeTrail[maze]} open={shortcutOpen} walk={walkBackTo} />}
-      {panel === 'about' && <About profile={profile} edit={() => setPanel('edit')} />}
+      {panel === 'about' && <About profile={profile} edit={opener => openPanel('edit', opener)} />}
       {panel === 'projects' && <Research />}
-      {panel === 'contact' && <Contact profile={profile} edit={() => setPanel('edit')} />}
+      {panel === 'contact' && <Contact message={message} setMessage={setMessage} profile={profile} edit={opener => openPanel('edit', opener)} />}
       {panel === 'edit' && <ProfileForm profile={profile} save={storeProfile} />}
-      {panel === 'map' && <RouteAtlas save={save} travel={fastTravel} walkTo={walkTo} lastStop={atlasStop} />}
+      {panel === 'map' && wall && <RampartAtlas row={save.location.y} walk={row => {
+        const field=controller.current;
+        if (!field) return;
+        field.setPaused(false);
+        if (field.walkWallTo(row)) { setPanel(null); focusField(); }
+        else field.setPaused(true);
+      }}/>}
+      {panel === 'map' && !wall && <RouteAtlas save={save} walkTo={walkTo} lastStop={atlasStop} />}
       {panel === 'dex' && <Pokedex save={save} entry={dexEntry} />}
-      {panel === 'pack' && <TeamPanel progress={progress} heal={giveMedicine} inspect={openDex}
+      {panel === 'fortress-log' && <FortressLog save={save} chart={opener => { setAtlasStop('fortress'); openPanel('map', opener); }}
+        maze={opener => openPanel('maze', opener)} dex={opener => { setDexEntry('kyurem'); openPanel('dex', opener); }}/>}
+      {panel === 'storage' && <SavePanel save={save} status={saveStatus} original={session.baseline} previous={previousSave}
+        retry={() => commit(current.current)} latest={() => {
+          const latest = readSession();
+          if (latest.status !== 'unavailable') resume(latest, current.current);
+          else setSaveStatus('unavailable');
+        }} apply={next => {
+          const candidate = { ...session, initial: next, status: 'saved' as SaveStatus };
+          const status = writeSession(candidate, next);
+          if (status === 'conflict') { setSaveStatus(status); return false; }
+          resume(candidate, current.current);
+          return true;
+        }}/>}
+      {panel === 'pack' && <TeamPanel selection={packSelection} select={setPackSelection} storage={opener => openPanel('storage', opener)} progress={progress} heal={giveMedicine} inspect={openDex}
         setLead={id => setSave(previous => ({ ...previous, battle: { ...previous.battle, lead: id } }))} />}
     </Panel>}
   </div>;

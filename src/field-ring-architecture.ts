@@ -4,6 +4,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCityArchitecture } from './field-city-models';
+import type { GridReading } from './fortress-power';
 import { bendCityGeometry, ringAngle, ringPosition } from './field-ring-space';
 
 type Point = [x: number, y: number, z: number];
@@ -26,6 +27,7 @@ const innerGlass = new MeshStandardMaterial({
   color: 0x7a9a92, emissive: 0xe7b46c, emissiveIntensity: 0, metalness: .08, roughness: .38,
 });
 const clockIvory = new MeshStandardMaterial({ color: 0xe4cea0, roughness: .67, emissive: 0xf4cc84, emissiveIntensity: 0 });
+const feederGlass = new MeshStandardMaterial({ color: 0x29454b, emissive: 0x71ddc9, emissiveIntensity: .94, roughness: .33, metalness: .38 });
 const domeSlate = new MeshStandardMaterial({ color: 0x375358, roughness: .74, metalness: .20 });
 const domeCopper = new MeshStandardMaterial({ color: 0x658479, roughness: .64, metalness: .33 });
 const brightBrass = new MeshStandardMaterial({ color: 0xd3af71, roughness: .52, metalness: .38 });
@@ -435,6 +437,14 @@ function verdigrisCupola(kit: Monument) {
   const profile = [[1.703, 7.900], [1.653, 8.072], [1.565, 8.271], [1.441, 8.470],
     [1.254, 8.675], [.994, 8.853], [.684, 8.991], [.391, 9.080]] as const;
   kit.profile(domeSlate, profile, 32);
+  kit.profile(feederGlass, [[1.688, 8.010], [1.687, 8.052], [1.675, 8.078]], 32);
+  for (let side = 0; side < 8; side++) {
+    const a = side * Math.PI / 4;
+    for (let i = 1; i < profile.length; i++) {
+      const [r0, y0] = profile[i - 1], [r1, y1] = profile[i];
+      kit.beam(feederGlass, radial(a, r0 + .03, y0), radial(a, r1 + .03, y1), .023);
+    }
+  }
   // Raised copper seams follow the dome over continuously curved slate panels.
   for (let side = 0; side < 12; side++) {
     const angle = side * Math.PI / 6;
@@ -808,16 +818,17 @@ export function buildRingArchitecture() {
   }
   const monument = observatory();
   city.add(monument.shape, tideGate(), tideGateApron(), breakwater(), servicePier(), pilotsStation(), boardingSpur(), abutmentRail());
-  city.userData.update = (time: number, darkness: number) => {
+  city.userData.update = (time: number, darkness: number, power?: GridReading) => {
     monument.tick(time);
-    updateRingArchitecture(darkness);
+    updateRingArchitecture(darkness, power?.city);
   };
   return city;
 }
 
-export function updateRingArchitecture(darkness: number) {
+export function updateRingArchitecture(darkness: number, load = .73) {
   const night = Math.max(0, Math.min(1, darkness));
-  lantern.emissiveIntensity = .015 + night * 1.03;
-  innerGlass.emissiveIntensity = night * .46;
-  clockIvory.emissiveIntensity = night * .30;
+  feederGlass.emissiveIntensity = .015 + load * (1.28 + night * .36);
+  lantern.emissiveIntensity = .012 + night * 1.33 * load;
+  innerGlass.emissiveIntensity = night * .58 * load;
+  clockIvory.emissiveIntensity = night * .40 * load;
 }
