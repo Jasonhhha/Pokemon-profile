@@ -45,7 +45,7 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
     const follower = companionPosition(view, fraction);
     const alternatingFoot = step ? (step.from.x + step.from.y) % 2 : 0;
     frame = {
-      room, now, reduced, facing: view.facing, inspecting: view.inspectingSeal,
+      room, now, reduced, facing: view.facing, inspecting: view.inspectingSeal, resonance: view.resonance,
       x: .5 + (step ? step.from.x + (step.to.x - step.from.x) * fraction : view.location.x),
       y: .5 + (step ? step.from.y + (step.to.y - step.from.y) * fraction : view.location.y),
       stride: step ? Math.sin(Math.PI * fraction) * (alternatingFoot ? -1 : 1) : 0,

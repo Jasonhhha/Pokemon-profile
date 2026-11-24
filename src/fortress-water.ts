@@ -9,9 +9,13 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   Points,
+  Path,
+  Shape,
+  ShapeGeometry,
   ShaderMaterial,
   Vector2,
 } from 'three';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { FortressRoom, FortressInteriorFrame } from './field-fortress-state';
 
 const tau = Math.PI * 2;
@@ -33,7 +37,7 @@ const waterVertex = `
   }`;
 
 const waterFragment = `
-  uniform float clock; uniform float whirl;
+  uniform float clock; uniform float whirl; uniform float response;
   varying vec3 point;
   float hash(vec2 p){return fract(sin(dot(p,vec2(73.17,31.79)))*41791.27);}
   float noise(vec2 p){
@@ -75,9 +79,9 @@ const waterFragment = `
       water=mix(vec3(.003,.027,.054),vec3(.007,.148,.177),shallow*.54+crest*.46);
       water+=vec3(.030,.133,.14)*lines+vec3(.17,.47,.43)*foam+vec3(.21,.44,.42)*torn+vec3(.08,.20,.19)*glimmer;
       float seal=band(r-4.91,.024)+.71*band(r-5.01,.012);
-      water+=vec3(.015,.22,.195)*seal;
+      water+=vec3(.035,.125,.086)*seal*(.40+response*1.28);
       gl_FragColor=vec4(water,.18+outer*.67);
-    }else gl_FragColor=vec4(water,.96);
+    }else gl_FragColor=vec4(water,.38+.17*chop);
     #include <colorspace_fragment>
   }`;
 
@@ -328,24 +332,83 @@ function wetFootfalls(puddles: Puddle[]) {
   };
 }
 
+function cisternSurface() {
+  const outline = new Shape();
+  outline.moveTo(-21, -21);
+  outline.lineTo(-21, 21);
+  outline.lineTo(21, 21);
+  outline.lineTo(21, -21);
+  outline.closePath();
+  // The open stair trench drops below the surrounding reservoir's waterline.
+  const trench = new Path();
+  trench.moveTo(-1.64, -1.15);
+  trench.lineTo(1.64, -1.15);
+  trench.lineTo(1.64, 8.9);
+  trench.lineTo(-1.64, 8.9);
+  trench.closePath();
+  outline.holes.push(trench);
+  return new ShapeGeometry(outline);
+}
+
 export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
   const group = new Group();
   const clock = { value: 0 };
   const steps = wetFootfalls(puddles);
   group.add(steps.mesh);
   const seaMaterial = new ShaderMaterial({
-    uniforms: { clock, whirl: { value: Number(room === 'seal') } },
+    uniforms: { clock, whirl: { value: Number(room === 'seal') }, response: { value: 0 } },
     vertexShader: waterVertex,
     fragmentShader: waterFragment,
     transparent: true,
     depthWrite: false,
     side: DoubleSide,
   });
-  const seaGeometry = room === 'seal' ? sealSurface() : new PlaneGeometry(13.5, 19.0).rotateX(-Math.PI / 2);
+  const seaGeometry = room === 'seal' ? sealSurface() : cisternSurface().rotateX(-Math.PI / 2);
   const water = new Mesh(seaGeometry, seaMaterial);
-  water.position.set(8.5, room === 'seal' ? -0.8 : -0.57, room === 'seal' ? 6.5 : 10);
+  water.position.set(8.5, room === 'seal' ? -0.8 : -0.57, room === 'seal' ? 6.5 : 2.0);
   water.renderOrder = 2;
   group.add(water);
+  // One small planar capture reflects the real column grid and arches across the shallow upper cistern.
+  // The seal has its own cloudy, deep vortex and does not need this pass.
+  const mirrorGeometry = room === 'sluice' ? cisternSurface() : undefined;
+  const mirror = mirrorGeometry
+    ? new Reflector(mirrorGeometry, {
+        color: 0xa7b9a7,
+        clipBias: 0.002,
+        textureWidth: 448,
+        textureHeight: 288,
+        multisample: 0,
+      })
+    : undefined;
+  if (mirror) {
+    mirror.rotation.x = -Math.PI / 2;
+    mirror.position.set(8.5, -0.585, 2);
+    const material = mirror.material as ShaderMaterial;
+    material.onBeforeCompile = shader => {
+      shader.uniforms.waterTime = clock;
+      shader.fragmentShader =
+        'uniform float waterTime;\n' +
+        shader.fragmentShader.replace(
+          'vec4 base = texture2DProj( tDiffuse, vUv );',
+          `
+        vec2 q=vUv.xy/vUv.w;
+        q.x+=.0013*sin(q.y*158.+waterTime*1.12)+.00050*sin(q.y*478.-waterTime*.8);
+        q.y+=.00046*sin(q.x*120.+waterTime);
+        vec4 base=texture2D(tDiffuse,q);
+      `,
+        );
+    };
+    const capture = mirror.onBeforeRender.bind(mirror);
+    mirror.onBeforeRender = (...args) => {
+      water.visible = false;
+      try {
+        capture(...args);
+      } finally {
+        water.visible = true;
+      }
+    };
+    group.add(mirror);
+  }
   const puddleMaterial = new ShaderMaterial({
     uniforms: { clock },
     vertexShader: puddleVertex,
@@ -398,6 +461,7 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
     update(time: number, width: number, height: number, frame: FortressInteriorFrame) {
       steps.update(frame);
       clock.value = time;
+      seaMaterial.uniforms.response.value = frame.resonance ?? 0;
       drops.uniforms.viewport.value.set(width, height);
       if (ribbons) ribbons.rotation.y = time * 2.08;
       if (crests) crests.rotation.y = time * 2.08;
@@ -421,6 +485,8 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
     },
     dispose() {
       steps.dispose();
+      mirror?.dispose();
+      mirrorGeometry?.dispose();
       seaGeometry.dispose();
       seaMaterial.dispose();
       plane.dispose();

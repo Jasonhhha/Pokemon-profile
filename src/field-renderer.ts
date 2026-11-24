@@ -14,6 +14,7 @@ export type FieldView = {
   location: FieldLocation;
   fortress: FortressView;
   inspectingSeal: boolean;
+  resonance: number;
   overview: boolean;
   orbitOffset: number;
   orbitTilt: number;

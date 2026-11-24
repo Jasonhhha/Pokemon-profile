@@ -123,6 +123,9 @@ function createKyogre() {
             // At rest the markings are the red lines on the underlying diffuse textures.
             if (/^Material_(49|50|51)$/.test(skin.name)) object.visible = false;
             skin.roughness = 0.53;
+            skin.emissiveMap = skin.map;
+            skin.emissive.setHex(0xb4cfca);
+            skin.emissiveIntensity = 0.14;
             skin.onBeforeCompile = shader => {
               shader.uniforms.vaultClock = seaClock;
               shader.vertexShader =
@@ -217,14 +220,14 @@ function createKyogre() {
 function buildRoom(room: FortressRoom, glow: Texture) {
   const scene = new Scene();
   const seal = room === 'seal';
-  const ambient = seal ? 0x172d37 : 0x192c32;
+  const ambient = seal ? 0x172725 : 0x152320;
   scene.background = new Color(ambient);
-  scene.fog = new FogExp2(ambient, seal ? 0.023 : 0.032);
+  scene.fog = new FogExp2(ambient, seal ? 0.037 : 0.039);
   const stone = buildFortressStonework(room);
   const water = buildFortressWater(room, stone.puddles);
   scene.add(stone.group, water.group);
-  scene.add(new HemisphereLight(0xc3dfe5, 0x47555b, 1.0));
-  const key = new DirectionalLight(0xffdaa3, 1.55);
+  scene.add(new HemisphereLight(0xcbd7c9, 0x45534b, 0.84));
+  const key = new DirectionalLight(0xffdfa9, 1.51);
   key.position.set(2.8, 12.8, 13.3);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
@@ -234,7 +237,7 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   key.shadow.camera.updateProjectionMatrix();
   key.target.position.set(9, 0, 5);
   scene.add(key, key.target);
-  const rim = new DirectionalLight(0x88bec4, 1.1);
+  const rim = new DirectionalLight(0x8aaea0, 0.84);
   rim.position.set(14, 8, -4);
   rim.target.position.set(7, 0, 11);
   scene.add(rim, rim.target);
@@ -257,11 +260,22 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   const near = new PointLight(0xffc681, 22, 12, 2);
   near.position.set(seal ? 11.2 : 3, 2.8, seal ? 15 : 13.2);
   scene.add(near);
+  const lampLight = new PointLight(0xffb66d, seal ? 92 : 25, 13, 2);
+  lampLight.position.set(seal ? 8.9 : 4.8, seal ? 3.9 : 2.85, seal ? -2.65 : 12.3);
+  scene.add(lampLight);
+  if (!seal) {
+    const stairLamp = new PointLight(0xf2b873, 27, 8, 2);
+    stairLamp.position.set(8.4, 0.75, -0.86);
+    scene.add(stairLamp);
+  }
   const monster = seal ? createKyogre() : undefined;
   if (monster) scene.add(monster.root);
   return {
     scene,
     update(t: number, w: number, h: number, frame: FortressInteriorFrame) {
+      const resonance = frame.resonance ?? 0;
+      stone.update(resonance, t, frame.x, frame.y);
+      point.intensity = (seal ? 39 : 19) + resonance * (seal ? 15 : 9);
       water.update(t, w, h, frame);
       monster?.update(t);
     },
@@ -303,6 +317,9 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
   let active: FortressRoom | undefined;
   let lastFrame = -Infinity;
   let closeBlend = 0;
+  let entryTime = -Infinity;
+  let entryX = 0,
+    entryZ = 0;
   let disposed = false;
   return {
     draw(frame: FortressInteriorFrame) {
@@ -324,6 +341,9 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         room.scene.add(traveler.model, companion.root, actorShadow);
         companion.reset();
         active = frame.room;
+        entryTime = frame.now;
+        entryX = frame.x;
+        entryZ = frame.y;
       }
       const isSeal = frame.room === 'seal';
       const requested = Number(isSeal && frame.inspecting);
@@ -331,14 +351,27 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       if (entering || frame.reduced || elapsed < 0 || elapsed > 260) closeBlend = requested;
       else closeBlend += (requested - closeBlend) * (1 - Math.exp(-elapsed / 105));
       lastFrame = frame.now;
-      const focusX = isSeal ? 8.5 + (frame.x - 8.5) * 0.32 * (1 - closeBlend) : 8.5 + (frame.x - 8.5) * 0.68;
-      const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * 0.6 : frame.y - 2.85;
-      const focusZ = wideZ + (5.9 - wideZ) * closeBlend;
+      if (
+        frame.reduced ||
+        frame.inspecting ||
+        frame.gaitPhase !== undefined ||
+        Math.hypot(frame.x - entryX, frame.y - entryZ) > 0.1
+      )
+        entryTime = -Infinity;
+      const progress = Math.min(1, Math.max(0, (frame.now - entryTime) / 1000));
+      const entry = 1 - progress * progress * (3 - 2 * progress);
+      const focusX = isSeal ? 8.5 + (frame.x - 8.5) * 0.32 * (1 - closeBlend) : frame.x;
+      const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * 0.6 : frame.y - 3.89;
+      const focusZ = wideZ + (5.9 - wideZ) * closeBlend - entry * 0.58;
       const fit = Math.max(1, (isSeal ? 1.49 : 1.2) / camera.aspect);
-      const eyeZ = isSeal ? 11.4 - 0.3 * closeBlend : 8.9;
-      const eyeY = isSeal ? 9.7 - 3.1 * closeBlend : 7.3;
-      camera.position.set(focusX + (isSeal ? 1.15 - 3.25 * closeBlend : 1.65), eyeY * fit, focusZ + eyeZ * fit);
-      camera.lookAt(focusX, 0.29 - 0.84 * closeBlend, focusZ);
+      const eyeZ = isSeal ? 12.3 - 0.75 * closeBlend : 11.0;
+      const eyeY = isSeal ? 8.0 - 2.25 * closeBlend : 5.83;
+      camera.position.set(
+        focusX + (isSeal ? 1.15 - 3.25 * closeBlend : 0.48),
+        (eyeY + entry * 0.77) * fit,
+        focusZ + (eyeZ + entry * 1.34) * fit,
+      );
+      camera.lookAt(focusX, (isSeal ? 0.66 : 0.71) - 0.92 * closeBlend + entry * 0.47, focusZ);
       camera.updateMatrixWorld();
       const time = frame.reduced ? 1.75 : frame.now / 1000;
       room.update(time, width, height, frame);

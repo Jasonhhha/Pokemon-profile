@@ -22,6 +22,8 @@ import {
   type Material,
 } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { createWaterRelief } from './fortress-relief';
+import { carvedDrum, createTideDial } from './fortress-tide-dial';
 import type { FortressRoom } from './field-fortress-state';
 
 const tau = Math.PI * 2;
@@ -98,31 +100,61 @@ type Point = [number, number, number];
 export function buildFortressStonework(room: FortressRoom) {
   const group = new Group();
   const grainMap = mineralTexture();
-  const stone = new MeshStandardMaterial({ color: 0xb0bcad, map: grainMap, roughness: 0.85, side: DoubleSide });
+  const relief = createWaterRelief();
+  const stone = new MeshStandardMaterial({ color: 0x9a9883, map: grainMap, roughness: 0.85, side: DoubleSide });
   const wet = new MeshStandardMaterial({
-    color: 0x546e71,
+    color: 0x445c58,
     map: grainMap,
     roughness: 0.29,
     metalness: 0.19,
     side: DoubleSide,
   });
-  const pale = new MeshStandardMaterial({ color: 0xb9bb9d, map: grainMap, roughness: 0.69, side: DoubleSide });
-  const floor = new MeshStandardMaterial({ color: 0x93a39d, map: grainMap, roughness: 0.55, metalness: 0.11 });
+  const pale = new MeshStandardMaterial({ color: 0xd2c49d, map: grainMap, roughness: 0.69, side: DoubleSide });
+  const floor = new MeshStandardMaterial({ color: 0xa29e86, map: grainMap, roughness: 0.55, metalness: 0.11 });
   const iron = new MeshStandardMaterial({ color: 0x384c52, roughness: 0.52, metalness: 0.39 });
   const bronze = new MeshStandardMaterial({ color: 0xb18a51, roughness: 0.48, metalness: 0.43 });
   const patina = new MeshStandardMaterial({ color: 0x528178, map: grainMap, roughness: 0.5, metalness: 0.28 });
   const dark = new MeshStandardMaterial({ color: 0x26393f, roughness: 0.88 });
   const glass = new MeshBasicMaterial({ color: 0xffd89b });
-  const sealLight = new MeshBasicMaterial({ color: 0x88f3eb });
+  const sealLight = new MeshBasicMaterial({ color: 0x719686 });
+  const serpentine = new MeshStandardMaterial({ color: 0x728078, map: grainMap, roughness: 0.62, metalness: 0.09 });
+  const weathered = new MeshStandardMaterial({ color: 0xaa9a79, map: grainMap, roughness: 0.7 });
   const seaGlass = new MeshBasicMaterial({ color: 0x738f8d });
   const windows: Point[] = [];
   const geom = {
     cube: new BoxGeometry(),
+    shaft: carvedDrum(
+      [
+        [0, 1],
+        [0.035, 1],
+        [0.1, 0.92],
+        [0.38, 0.91],
+        [0.73, 0.86],
+        [0.96, 0.8],
+        [1, 0.82],
+      ],
+      16,
+      0.069,
+    ),
+    bell: carvedDrum(
+      [
+        [0, 0.55],
+        [0.16, 0.62],
+        [0.23, 0.68],
+        [0.5, 0.68],
+        [0.88, 1.02],
+        [1, 1.04],
+      ],
+      12,
+      0.13,
+    ),
+    largeArch: voussoir(0.965, 1.13, Math.PI / 15 - 0.012, 0.23),
+    fineArch: voussoir(0.982, 1.017, Math.PI / 15 - 0.01, 0.27),
+    panel: relief.geometry,
     ashlar: new RoundedBoxGeometry(1, 1, 1, 1, 0.033),
     column: new CylinderGeometry(1, 1, 1, 16),
     nut: new CylinderGeometry(1, 1, 1, 6),
     torus: new TorusGeometry(1, 0.072, 6, 32),
-    wideArch: voussoir(1.61, 1.99, Math.PI / 13 - 0.014, 0.52),
     niche: voussoir(0.64, 0.85, Math.PI / 9 - 0.023, 0.3),
   };
   const sets = new Map<BufferGeometry, Map<Material, Instance[]>>();
@@ -136,10 +168,14 @@ export function buildFortressStonework(room: FortressRoom) {
     if (!mats) sets.set(shape, (mats = new Map()));
     let list = mats.get(material);
     if (!list) mats.set(material, (list = []));
-    list.push({ matrix: placer.matrix.clone(), shade });
+    const outer = Math.min(1, Math.max(0, (Math.abs(p[0] - 8.5) - 5) / 12));
+    const depth = Math.min(1, Math.max(0, -p[2] / 15));
+    list.push({ matrix: placer.matrix.clone(), shade: shade * (1 - 0.57 * outer) * (1 - 0.32 * depth) });
   }
   function box(m: Material, x: number, y: number, z: number, w: number, h: number, d: number, shade = 1) {
-    const shape = (m === stone || m === pale || m === wet || m === floor) && h > 0.065 ? geom.ashlar : geom.cube;
+    const distant = Math.abs(x - 8.5) > 12 || z < -7;
+    const shape =
+      !distant && (m === stone || m === pale || m === wet || m === floor) && h > 0.065 ? geom.ashlar : geom.cube;
     put(shape, m, [x, y, z], [w, h, d], [0, 0, 0], shade);
   }
   function cyl(m: Material, x: number, y: number, z: number, r: number, h: number, rot: Point = [0, 0, 0]) {
@@ -181,41 +217,6 @@ export function buildFortressStonework(room: FortressRoom) {
     box(pale, x, cap, z, side ? 0.68 : length + 0.14, 0.17, side ? length + 0.14 : 0.68, 0.83);
     box(patina, x, 0.45, z, side ? 0.54 : length, 0.065, side ? length : 0.54, 0.86);
   }
-  function pier(x: number, z: number, h: number) {
-    box(wet, x, 0.18, z, 0.88, 0.37, 0.85);
-    box(pale, x, 0.4, z, 0.78, 0.11, 0.76);
-    for (let i = 0; i < 6; i++)
-      box(
-        stone,
-        x,
-        0.52 + ((i + 0.5) * (h - 0.72)) / 6,
-        z,
-        0.66,
-        (h - 0.72) / 6 - 0.022,
-        0.68,
-        0.76 + grain(i + z + x) * 0.17,
-      );
-    box(pale, x, h - 0.12, z, 0.85, 0.17, 0.8);
-    box(wet, x, h + 0.005, z, 0.91, 0.092, 0.88);
-  }
-  function doorway(z: number, x = 8.5, threshold = true) {
-    for (const offset of [-1, 1]) {
-      pier(x + offset * 1.82, z, 1.85);
-      box(dark, x + offset * 1.95, 1, z + 0.04, 0.21, 1.9, 0.54);
-    }
-    for (let i = 0; i < 13; i++) {
-      const turn = -Math.PI / 2 + ((i + 0.5) * Math.PI) / 13;
-      put(
-        geom.wideArch,
-        i === 6 ? pale : stone,
-        [x, 1.85, z],
-        [1, i === 6 ? 1.037 : 1, 1],
-        [0, 0, turn],
-        0.8 + 0.19 * grain(i + z),
-      );
-    }
-    if (threshold) box(dark, x, 0.03, z - 0.3, 3.12, 0.12, 0.67);
-  }
   function sideNiche(x: number, z: number, sign: number) {
     box(dark, x - sign * 0.08, 1.36, z, 0.06, 2.12, 1.31);
     if (z > 2 && z < 15 && (sign > 0 ? z < 8 : z > 8)) {
@@ -243,49 +244,161 @@ export function buildFortressStonework(room: FortressRoom) {
   }
   function rail(x: number, z1: number, z2: number) {
     for (let z = z1; z < z2 + 0.01; z += 1) {
-      box(iron, x, 0.3, z, 0.075, 0.64, 0.075);
-      cyl(bronze, x, 0.62, z, 0.064, 0.055);
-      box(patina, x, 0.036, z, 0.145, 0.07, 0.14);
+      box(wet, x, 0.085, z, 0.22, 0.15, 0.21);
+      put(geom.bell, weathered, [x, 0.14, z], [0.102, 0.29, 0.102]);
+      cyl(pale, x, 0.46, z, 0.13, 0.061);
+      cyl(bronze, x, 0.52, z, 0.08, 0.052);
     }
-    box(bronze, x, 0.63, (z1 + z2) / 2, 0.065, 0.06, z2 - z1 + 0.06);
-    box(iron, x, 0.37, (z1 + z2) / 2, 0.042, 0.041, z2 - z1);
+    box(bronze, x, 0.52, (z1 + z2) / 2, 0.068, 0.057, z2 - z1 + 0.08);
   }
-  function lamp(x: number, z: number, y = 2.37) {
-    cyl(bronze, x, y - 0.26, z, 0.145, 0.09);
-    cyl(glass, x, y, z, 0.127, 0.43);
-    for (const a of [0, Math.PI / 2, Math.PI, 1.5 * Math.PI])
-      box(iron, x + Math.cos(a) * 0.127, y, z + Math.sin(a) * 0.127, 0.026, 0.46, 0.026);
-    cyl(iron, x, y + 0.252, z, 0.176, 0.084);
-    cyl(bronze, x, y + 0.32, z, 0.09, 0.055);
-    for (const offset of [-0.12, 0.12]) cyl(bronze, x, y + offset, z, 0.134, 0.018);
+  // Drum, echinus and abacus sit on a stepped plinth. Rings of flutes give the capitals a water-lily profile.
+  function palaceColumn(x: number, z: number, top: number, base: number, radius: number, alternate = false) {
+    const foot = radius * 2.82;
+    box(wet, x, base + 0.14, z, foot, 0.28, foot, 0.82);
+    box(stone, x, base + 0.34, z, foot * 0.9, 0.14, foot * 0.9, 0.87);
+    cyl(pale, x, base + 0.46, z, radius * 1.26, 0.115);
+    cyl(wet, x, base + 0.6, z, radius * 1.11, 0.15);
+    cyl(bronze, x, base + 0.695, z, radius * 1.02, 0.048);
+    const shoulder = top - 0.76;
+    put(
+      geom.shaft,
+      alternate ? serpentine : weathered,
+      [x, base + 0.71, z],
+      [radius, shoulder - base - 0.71, radius],
+      [0, z * 0.27, 0],
+    );
+    cyl(pale, x, shoulder, z, radius * 0.88, 0.13);
+    put(
+      geom.bell,
+      alternate ? stone : pale,
+      [x, shoulder + 0.07, z],
+      [radius * 1.36, 0.52, radius * 1.36],
+      [0, 0.17, 0],
+    );
+    cyl(stone, x, top - 0.145, z, radius * 1.42, 0.1);
+    box(pale, x, top - 0.046, z, radius * 2.9, 0.12, radius * 2.9, 0.96);
+    if (!alternate)
+      for (let i = 0; i < 8; i++) {
+        const a = (i * tau) / 8;
+        put(
+          geom.nut,
+          bronze,
+          [x + Math.cos(a) * radius * 0.945, base + 0.71, z + Math.sin(a) * radius * 0.945],
+          [0.026, 0.04, 0.026],
+        );
+      }
   }
-  function pressureValve(x: number, z: number, side: number) {
-    const y = 1.25;
-    box(iron, x - side * 0.16, 0.66, z - 0.17, 0.39, 1.15, 0.43);
-    cyl(patina, x, y, z - 0.08, 0.26, 0.43, [Math.PI / 2, 0, 0]);
-    cyl(bronze, x, y, z + 0.19, 0.13, 0.21, [Math.PI / 2, 0, 0]);
-    put(geom.torus, bronze, [x, y, z + 0.34], [0.39, 0.39, 0.66]);
-    for (let i = 0; i < 5; i++) {
-      const a = (i * tau) / 5;
-      beam(patina, [x, y, z + 0.34], [x + Math.sin(a) * 0.35, y + Math.cos(a) * 0.35, z + 0.34], 0.037, 0.044);
-    }
-    cyl(iron, x, y, z + 0.365, 0.085, 0.12, [Math.PI / 2, 0, 0]);
-    const gx = x - side * 0.27,
-      gy = y + 0.54;
-    cyl(iron, gx, gy, z + 0.06, 0.22, 0.14, [Math.PI / 2, 0, 0]);
-    cyl(pale, gx, gy, z + 0.14, 0.173, 0.035, [Math.PI / 2, 0, 0]);
-    for (let i = -2; i <= 2; i++) {
-      const a = i * 0.58;
+  function vaultArch(x: number, z: number, radius: number, spring: number, alongZ = false, ornate = false) {
+    const key = Math.floor(z * 11 + x * 7);
+    for (let i = 0; i < 15; i++) {
+      const a = -Math.PI / 2 + ((i + 0.5) * Math.PI) / 15;
+      placer.rotation.set(0, alongZ ? Math.PI / 2 : 0, 0);
+      placer.rotateZ(a);
+      const turn: Point = [placer.rotation.x, placer.rotation.y, placer.rotation.z];
+      const extent = radius * (i === 7 ? 1.027 : 1);
       put(
-        geom.cube,
-        iron,
-        [gx + Math.sin(a) * 0.139, gy + Math.cos(a) * 0.139, z + 0.161],
-        [0.012, 0.04, 0.007],
-        [0, 0, -a],
+        geom.largeArch,
+        i === 7 ? pale : stone,
+        [x, spring, z],
+        [extent, extent, radius],
+        turn,
+        0.73 + 0.23 * grain(key + i),
+      );
+      if (ornate) put(geom.fineArch, weathered, [x, spring, z], [radius, radius, radius], turn, 1.02);
+    }
+  }
+  function capitalLamp(x: number, z: number, y: number, scale = 1) {
+    const r = 0.24 * scale;
+    cyl(wet, x, y - 0.2 * scale, z, r, 0.39 * scale);
+    put(geom.bell, bronze, [x, y - 0.03 * scale, z], [r * 1.35, 0.18 * scale, r * 1.35]);
+    cyl(glass, x, y + 0.126 * scale, z, r * 0.77, 0.037 * scale);
+    for (let i = 0; i < 5; i++) {
+      const a = (tau * i) / 5;
+      put(
+        geom.nut,
+        bronze,
+        [x + Math.sin(a) * r * 0.98, y + 0.16 * scale, z + Math.cos(a) * r * 0.98],
+        [0.024, 0.09, 0.024],
       );
     }
-    beam(iron, [gx, gy, z + 0.171], [gx + 0.082, gy + 0.085, z + 0.171], 0.016, 0.016);
-    cyl(bronze, gx, gy, z + 0.182, 0.025, 0.017, [Math.PI / 2, 0, 0]);
+    lamps.push([x, y + 0.18 * scale, z]);
+  }
+  // Weathering is strongest in the waterline course. These fallen pieces are outside every walking route.
+  function fallenColumn(x: number, z: number, angle: number) {
+    put(geom.shaft, serpentine, [x, -0.62, z], [0.39, 1.74, 0.39], [Math.PI / 2 + 0.13, 0, angle], 0.76);
+    put(geom.bell, weathered, [x + 0.63, -0.47, z - 0.86], [0.48, 0.49, 0.48], [-0.76, 0.42, 0.95], 0.72);
+    for (let i = 0; i < 6; i++) {
+      const a = grain(i + x) * tau,
+        r = 0.4 + grain(i + z) * 0.74;
+      put(
+        geom.ashlar,
+        wet,
+        [x + Math.sin(a) * r, -0.52 + grain(i) * 0.06, z + Math.cos(a) * r],
+        [0.15 + grain(i + 3) * 0.29, 0.1 + grain(i + 4) * 0.21, 0.18 + grain(i + 8) * 0.21],
+        [0.15, a, 0.23],
+        0.66,
+      );
+    }
+  }
+  function carvedStele(x: number, z: number, base: number, w: number, h: number) {
+    box(wet, x, base + 0.12, z, w * 1.18, 0.24, 0.62, 0.85);
+    box(pale, x, base + 0.29, z, w * 1.09, 0.13, 0.55, 0.88);
+    box(stone, x, base + 0.36 + h / 2, z, w, h, 0.47, 0.9);
+    put(geom.panel, relief.material, [x, base + 0.36 + h / 2, z + 0.302], [w * 0.88, h * 0.92, 1]);
+    box(serpentine, x, base + h + 0.42, z, w * 1.08, 0.13, 0.57);
+    box(pale, x, base + h + 0.53, z, w * 1.19, 0.1, 0.63, 0.88);
+    for (const side of [-1, 1]) box(pale, x + side * w * 0.48, base + 0.36 + h * 0.5, z + 0.055, 0.07, h, 0.43, 0.72);
+  }
+  function wornBorders(from: number, to: number) {
+    for (const side of [-1, 1]) {
+      const x = 8.5 + side * 1.32;
+      box(wet, x, 0.02, (from + to) / 2, 0.168, 0.017, to - from, 0.87);
+      box(bronze, x + side * 0.079, 0.031, (from + to) / 2, 0.023, 0.019, to - from, 0.83);
+      for (let z = from + 0.24; z < to - 0.12; z += 0.52)
+        put(geom.cube, pale, [x, 0.035, z], [0.074, 0.011, 0.074], [0, Math.PI / 4, 0], 0.66 + grain(z) * 0.2);
+    }
+  }
+  function lintel(x: number, z: number, bottom: number, span: number) {
+    box(stone, x, bottom + 0.15, z, span, 0.3, 0.73, 0.86);
+    box(pale, x, bottom + 0.36, z, span + 0.21, 0.13, 0.84, 0.88);
+    box(wet, x, bottom + 0.52, z, span + 0.1, 0.18, 0.76);
+    for (let i = -4; i <= 4; i++) {
+      const offset = i * (span / 10);
+      put(geom.cube, bronze, [x + offset, bottom + 0.175, z + 0.371], [0.12, 0.13, 0.018], [0, 0, Math.PI / 4], 0.88);
+    }
+  }
+  function reflectedHall(seal: boolean) {
+    const axis = 8.5;
+    const rows = seal ? [-16, -11, -6, -1, 4, 9, 14, 19] : [-16.5, -11.5, -6.5, -1.5, 3.5, 8.5, 13.5, 18.5];
+    const offsets = seal ? [7.66, 12.6, 17.54] : [3.05, 7.95, 12.85, 17.75];
+    for (const side of [-1, 1]) {
+      for (let aisle = 0; aisle < offsets.length; aisle++) {
+        const x = axis + side * offsets[aisle];
+        const sprung = (seal ? 5.55 : 4.18) + (aisle === 0 ? 0 : -0.34);
+        const base = seal ? 0.09 + aisle * 0.48 : -0.87;
+        for (let bay = 0; bay < rows.length; bay++) {
+          const z = rows[bay];
+          palaceColumn(x, z, sprung, base, seal ? 0.53 : aisle === 0 ? 0.435 : 0.48, (bay + aisle) % 3 === 1);
+          if (bay < rows.length - 1) vaultArch(x, z + 2.5, 2.5, sprung, true, aisle === 0);
+          if (aisle < offsets.length - 1) {
+            const radius = (offsets[aisle + 1] - offsets[aisle]) * 0.5;
+            vaultArch(x + side * radius, z, radius, sprung, false, aisle === 0 && bay % 2 === 0);
+          }
+          if (aisle === 0 && bay % 2 === 1 && z < 17) capitalLamp(x - side * 0.84, z, 0.35, seal ? 1.04 : 0.9);
+        }
+      }
+      wall(axis + side * (offsets.at(-1)! + 2.24), 0.45, 38.0, 7.2, true);
+    }
+    for (const z of rows.slice(0, seal ? 3 : 4)) {
+      if (!seal) vaultArch(axis, z, offsets[0], 4.18, false, true);
+    }
+    wall(axis, -17.52, 39.6, 9.6);
+    // Recessed bays are genuinely several metres deep behind the inner rows.
+    for (const side of [-1, 1])
+      for (const z of [-12.8, -2.8, 7.2, 17.2]) {
+        const x = axis + side * (offsets.at(-1)! + 1.87);
+        sideNiche(x, z, -side);
+      }
   }
   function flagstones(x: number, z: number, w: number, length: number) {
     box(dark, x, -0.205, z, w, 0.39, length);
@@ -315,9 +428,6 @@ export function buildFortressStonework(room: FortressRoom) {
     box(bronze, x, 0.021, z, w, 0.019, 0.055);
     for (let offset = -w / 2 + 0.13; offset < w / 2; offset += 0.3)
       put(geom.nut, iron, [x + offset, 0.036, z], [0.023, 0.014, 0.023]);
-  }
-  function ring(x: number, y: number, z: number, r: number, material: Material, tube = 0.035) {
-    put(geom.torus, material, [x, y, z], [r, r, tube / 0.072], [-Math.PI / 2, 0, 0]);
   }
   const customGeometry: BufferGeometry[] = [];
   function basinSurround() {
@@ -385,30 +495,21 @@ export function buildFortressStonework(room: FortressRoom) {
   const lamps: Point[] = [];
   const puddles: { x: number; z: number; w: number; d: number; angle: number }[] = [];
   if (room === 'sluice') {
-    wall(8.5, 1.53, 14.8, 5.9);
+    reflectedHall(false);
+    carvedStele(4.74, 0.65, -0.53, 1.45, 2.02);
+    carvedStele(12.26, 0.65, -0.53, 1.45, 2.02);
+    wornBorders(3.15, 17.88);
+    box(dark, 8.5, -2.78, -1.95, 3.41, 0.19, 10.2, 0.66);
+    fallenColumn(1.7, 9.57, -0.43);
+    fallenColumn(15.05, 3.7, 0.32);
+    for (const x of [5.43, 11.57]) capitalLamp(x, -6.51, 1.08, 1.25);
+    lintel(8.5, -11.5, 7.61, 7.5);
     for (const side of [-1, 1]) {
-      const x = 8.5 + side * 6.77;
-      wall(x, 9.55, 15.7, 5.62, true);
-      for (const z of [4.2, 8.6, 13.2, 16.7]) {
-        pier(x - side * 0.34, z, 4.91);
-        sideNiche(x - side * 0.3, z - 1.14, -side);
-        lamp(x - side * 0.81, z, 2.36);
-        lamps.push([x - side * 0.95, 2.36, z]);
-      }
-      const pipeX = x - side * 0.65;
-      for (const y of [0.94, 3.22]) {
-        const r = y > 2 ? 0.145 : 0.23;
-        cyl(patina, pipeX, y, 9.7, r, 15.0, [Math.PI / 2, 0, 0]);
-        for (let z = 2.5; z < 17.1; z += 1.78) {
-          cyl(bronze, pipeX, y, z, r * 1.23, 0.076, [Math.PI / 2, 0, 0]);
-          box(iron, x - side * 0.37, y, z, 0.6, r * 0.72, 0.12);
-        }
-      }
-      for (const z of [7.1, 13.24]) {
-        const valveX = x - side * 1.06;
-        pressureValve(valveX, z, side);
-        cyl(patina, (pipeX + valveX) / 2, 1.04, z, 0.12, Math.abs(pipeX - valveX), [0, 0, Math.PI / 2]);
-      }
+      const x = 8.5 + side * 4.07;
+      box(wet, x, 0.29, -9.45, 0.91, 2.13, 1.2);
+      box(pale, x, 1.38, -9.45, 1.16, 0.12, 1.34);
+    }
+    for (const side of [-1, 1]) {
       flagstones(8.5 + side * 5, 10.5, 1, 11);
       for (const z of [6.5, 12.5]) {
         const crossing = 8.5 + side * 3;
@@ -423,33 +524,42 @@ export function buildFortressStonework(room: FortressRoom) {
         [13.1, 15.9],
       ])
         rail(8.5 + side * 1.48, a, b);
-      for (const z of [5.25, 9.4, 14.3]) {
-        const px = 8.5 + side * 3.17;
-        box(wet, px, -0.92, z, 0.72, 1.78, 0.76);
-        cyl(iron, px, -0.03, z, 0.33, 0.17);
-        cyl(bronze, px, 0.097, z, 0.211, 0.1);
-      }
     }
-    for (const x of [4.42, 12.58]) doorway(7.57, x, false);
     for (let n = 0; n < 4; n++) box(wet, 8.5, -0.11 - n * 0.145, 18.1 + n * 0.27, 3.1, 0.26, 0.3);
     flagstones(8.5, 10.5, 3, 15);
-    doorway(2.96);
-    box(dark, 8.5, 1.37, 2.66, 2.96, 2.79, 0.12);
-    for (let i = 0; i < 7; i++) box(i % 2 ? wet : iron, 8.5, 0.255 - i * 0.054, 3.18 + i * 0.159, 2.83, 0.15, 0.17);
-    for (const x of [6.37, 10.63]) {
-      box(iron, x, 1.53, 2.94, 0.24, 2.72, 0.25);
-      cyl(bronze, x, 2.96, 2.94, 0.19, 0.14);
-      lamp(x, 3.11, 1.67);
+    // A sunken processional passage recedes under several archivolts beyond the traversable landing.
+    for (let n = 0; n < 17; n++) {
+      const z = 3.13 - n * 0.4,
+        h = -0.055 - n * 0.106;
+      box(n % 4 === 0 ? wet : stone, 8.5, h - 0.085, z, 3.02, 0.17, 0.413, 0.94);
+      box(pale, 8.5, h, z + 0.15, 2.97, 0.035, 0.055, 0.8);
     }
-    // Slender transverse girders leave the centre of the playable aisle visible.
-    for (const z of [4.3, 9.0, 14.0]) {
-      for (const s of [-1, 1]) {
-        const x = 8.5 + s * 6.1;
-        beam(iron, [x, 4.28, z], [x - s * 2.6, 5.0, z], 0.17, 0.25);
-        beam(patina, [x, 3.61, z], [x - s * 1.75, 4.76, z], 0.09, 0.14);
-        box(bronze, x - s * 1.55, 4.73, z, 0.25, 0.28, 0.29);
+    for (const side of [-1, 1]) {
+      const x = 8.5 + side * 1.85;
+      for (let tier = 0; tier < 4; tier++) {
+        box(wet, x + side * tier * 0.36, -0.18 + tier * 0.14, 0.23, 0.4, 0.5, 6.2, 0.82);
+        box(pale, x + side * tier * 0.36, 0.1 + tier * 0.14, 0.23, 0.45, 0.071, 6.2, 0.72);
       }
     }
+    for (const z of [1.64, -2.67, -6.95]) {
+      for (const side of [-1, 1]) palaceColumn(8.5 + side * 1.85, z, 2.9, -0.41, 0.34);
+      vaultArch(8.5, z, 1.85, 2.9, false, true);
+    }
+    for (const side of [-1, 1])
+      for (const depth of [0, 1, 2]) {
+        const z = 1.2 - depth * 2.44,
+          h = -0.45 - depth * 0.63,
+          x = 8.5 + side * 1.35;
+        box(wet, x, h + 0.06, z, 0.28, 0.46, 0.34, 0.79);
+        capitalLamp(x, z, h + 0.39, 0.65);
+      }
+    box(stone, 8.5, -1.91, -6.23, 3.0, 0.25, 5.58, 0.83);
+    for (const side of [-1, 1]) {
+      box(wet, 8.5 + side * 1.62, -1.24, -4.9, 0.31, 1.26, 7.96, 0.91);
+      box(pale, 8.5 + side * 1.62, -0.58, -4.9, 0.39, 0.1, 7.96, 0.81);
+    }
+    capitalLamp(6.66, 3.27, 0.31);
+    capitalLamp(10.34, 3.27, 0.31);
     for (const [x, z, w, d, a] of [
       [8.1, 15.4, 1.09, 0.41, 0.26],
       [9, 13.8, 0.7, 0.27, -0.6],
@@ -462,21 +572,68 @@ export function buildFortressStonework(room: FortressRoom) {
     ])
       puddles.push({ x, z, w, d, angle: a });
   } else {
-    wall(8.5, -0.85, 16.8, 7.1);
+    reflectedHall(true);
+    carvedStele(3.44, -3.26, 0.55, 1.71, 2.42);
+    carvedStele(13.56, -3.26, 0.55, 1.71, 2.42);
+    wornBorders(11.05, 17.88);
+    fallenColumn(-1.36, 6.9, 0.7);
+    lintel(8.5, -4.84, 9.17, 8.08);
     for (const side of [-1, 1]) {
-      const x = 8.5 + side * 8;
-      wall(x, 8.65, 18.8, 6.44, true);
-      for (const z of [2.1, 6.5, 10.8, 15.0]) {
-        pier(x - side * 0.4, z, 5.75);
-        sideNiche(x - side * 0.32, z + 1.28, -side);
-        lamp(x - side * 0.85, z, 3.12);
-        lamps.push([x - side * 0.85, 3.12, z]);
+      const px = 8.5 + side * 2.64;
+      box(wet, px, 1.86, -4.89, 0.92, 1.22, 0.88);
+      box(pale, px, 2.48, -4.89, 1.06, 0.16, 0.98);
+      put(geom.ashlar, weathered, [px - side * 0.105, 2.76, -4.9], [0.42, 0.81, 0.59], [0, 0, side * 0.25], 0.93);
+      cyl(bronze, px - side * 0.18, 3.12, -4.8, 0.19, 0.32, [Math.PI / 2, 0, 0]);
+    }
+    // Stepwell terraces rise from the deep seal basin to galleries above, with narrow dry landings between flights.
+    for (const side of [-1, 1])
+      for (let n = 0; n < 7; n++) {
+        const x = 8.5 + side * (6.64 + n * 0.53),
+          h = -0.62 + n * 0.28;
+        for (const [z, d] of [
+          [2.3, 6.4],
+          [9.1, 6.9],
+          [15.7, 5.9],
+        ] as const) {
+          box(n % 3 === 0 ? stone : wet, x, (h - 1.46) * 0.5, z, 0.63, h + 1.46, d, 0.86);
+          box(pale, x, h + 0.013, z, 0.65, 0.058, d, 0.78);
+        }
       }
-      for (const offset of [2.4, 5.2]) {
-        const bx = 8.5 + side * offset;
-        pier(bx, -0.5, 5.6);
-        lamp(bx, 0.05, 3.02);
+    for (let n = 0; n < 9; n++) {
+      const z = -0.06 - 0.49 * n,
+        h = -0.59 + n * 0.24;
+      for (const side of [-1, 1]) {
+        const w = 5.73 + n * 0.075,
+          x = 8.5 + side * (w / 2 + 0.13);
+        box(n % 3 === 0 ? stone : weathered, x, (h - 1.46) * 0.5, z, w, h + 1.46, 0.54, 0.87);
+        box(pale, x, h + 0.02, z + 0.13, w, 0.075, 0.22, 0.8);
       }
+      box(patina, 8.5, h - 0.16, z, 0.22, 0.21, 0.57);
+      if (n === 2 || n === 6)
+        for (let badge = -6; badge <= 6; badge++) {
+          if (!badge) continue;
+          put(
+            geom.cube,
+            bronze,
+            [8.5 + badge * 0.72, h - 0.095, z + 0.273],
+            [0.083, 0.083, 0.016],
+            [0, 0, Math.PI / 4],
+            0.83,
+          );
+        }
+    }
+    box(wet, 8.5, 1.06, -5.35, 13.9, 0.61, 2.85, 0.82);
+    for (const x of [5.14, 11.86]) {
+      palaceColumn(x, -4.82, 5.42, 1.25, 0.65);
+      palaceColumn(x, -7.94, 5.42, 0.37, 0.56, true);
+      capitalLamp(x, -3.89, 1.9, 1.2);
+    }
+    vaultArch(8.5, -4.82, 3.36, 5.42, false, true);
+    vaultArch(8.5, -7.94, 3.36, 5.42, false, true);
+    // The opening behind the calendar continues through two more bays into a dark sanctuary.
+    for (const z of [-10.8, -14.0]) {
+      for (const x of [6.21, 10.79]) palaceColumn(x, z, 3.19, -0.28, 0.4, true);
+      vaultArch(8.5, z, 2.29, 3.19, false, true);
     }
     surround = basinSurround();
     box(dark, 8.5, -2.17, 9.2, 16.0, 0.4, 20.4);
@@ -520,12 +677,14 @@ export function buildFortressStonework(room: FortressRoom) {
         z = cz + Math.cos(a) * 5.85;
       cyl(wet, x, -0.74, z, 0.62, 1.6);
       cyl(pale, x, 0.1, z, 0.55, 0.13);
-      cyl(iron, x, 0.68, z, 0.33, 1.11);
-      for (const h of [0.22, 1.15]) cyl(bronze, x, h, z, 0.39, 0.11);
-      cyl(patina, x, 1.44, z, 0.28, 0.45);
-      cyl(sealLight, x, 1.49, z, 0.288, 0.118);
-      cyl(bronze, x, 1.69, z, 0.36, 0.12);
-      ring(x, 1.77, z, 0.22, sealLight);
+      put(geom.shaft, serpentine, [x, 0.17, z], [0.35, 0.94, 0.35], [0, a * 0.5, 0]);
+      cyl(bronze, x, 0.23, z, 0.385, 0.08);
+      put(geom.bell, pale, [x, 1.07, z], [0.37, 0.34, 0.37], [0, a, 0]);
+      box(wet, x, 1.44, z, 0.77, 0.099, 0.75);
+      cyl(patina, x, 1.56, z, 0.22, 0.18);
+      put(geom.torus, bronze, [x, 1.83, z], [0.238, 0.238, 0.33], [0, a * 0.65, 0]);
+      cyl(sealLight, x, 1.59, z, 0.226, 0.056);
+      for (let j = 0; j < 3; j++) box(bronze, x, 0.47 + j * 0.15, z + 0.325, 0.07, 0.044, 0.024);
       const tailX = cx + Math.sin(a) * 4.44,
         tailZ = cz + Math.cos(a) * 4.44;
       cyl(bronze, tailX, -0.28, tailZ, 0.14, 0.09);
@@ -549,7 +708,7 @@ export function buildFortressStonework(room: FortressRoom) {
     for (const x of [6.19, 10.81]) {
       cyl(wet, x, 0.3, 15.29, 0.39, 0.61);
       cyl(bronze, x, 0.66, 15.29, 0.34, 0.12);
-      lamp(x, 15.29, 1.02);
+      capitalLamp(x, 15.29, 0.89, 0.79);
     }
     for (const [x, z, w, d, a] of [
       [5.8, 16.5, 0.98, 0.48, 0.41],
@@ -558,51 +717,9 @@ export function buildFortressStonework(room: FortressRoom) {
       [8.98, 12.4, 0.43, 0.65, -0.24],
     ])
       puddles.push({ x, z, w, d, angle: a });
-    // The sealed flood door at the back reads across the chamber.
-    cyl(iron, 8.5, 3.05, -0.47, 2.75, 0.23, [Math.PI / 2, 0, 0]);
-    for (const [radius, m] of [
-      [2.57, bronze],
-      [2.26, patina],
-      [1.42, iron],
-    ] as const) {
-      put(geom.torus, m, [8.5, 3.05, -0.28], [radius, radius, 0.74]);
-    }
-    cyl(patina, 8.5, 3.05, -0.21, 1.12, 0.16, [Math.PI / 2, 0, 0]);
-    put(geom.torus, bronze, [8.5, 3.05, -0.08], [0.89, 0.89, 0.85]);
-    cyl(wet, 8.5, 3.05, -0.092, 0.68, 0.15, [Math.PI / 2, 0, 0]);
-    cyl(patina, 8.5, 3.05, 0.055, 0.37, 0.15, [Math.PI / 2, 0, 0]);
-    cyl(bronze, 8.5, 3.05, 0.146, 0.149, 0.1, [Math.PI / 2, 0, 0]);
-    for (let i = 0; i < 6; i++) {
-      const a = (i * tau) / 6;
-      const dx = Math.sin(a),
-        dy = Math.cos(a);
-      beam(
-        bronze,
-        [8.5 + dx * 0.46, 3.05 + dy * 0.46, -0.009],
-        [8.5 + dx * 0.79, 3.05 + dy * 0.79, -0.009],
-        0.097,
-        0.15,
-      );
-      put(geom.cube, pale, [8.5 + dx * 1.34, 3.05 + dy * 1.34, -0.054], [0.14, 0.25, 0.1], [0, 0, -a], 0.78);
-    }
-    for (let i = 0; i < 12; i++) {
-      const a = (i * tau) / 12;
-      put(
-        geom.nut,
-        bronze,
-        [8.5 + Math.sin(a) * 2.4, 3.05 + Math.cos(a) * 2.4, -0.24],
-        [0.075, 0.069, 0.075],
-        [Math.PI / 2, 0, 0],
-      );
-      put(
-        geom.cube,
-        patina,
-        [8.5 + Math.sin(a) * 1.87, 3.05 + Math.cos(a) * 1.87, -0.25],
-        [0.095, 0.65, 0.1],
-        [0, 0, -a],
-      );
-    }
   }
+  const dial = createTideDial(room);
+  group.add(dial.group);
   // Pale light transmitted through the water outside the grates catches suspended mist.
   const shafts: number[] = [],
     coordinates: number[] = [];
@@ -647,17 +764,77 @@ export function buildFortressStonework(room: FortressRoom) {
       mesh.castShadow = mat !== glass && mat !== sealLight;
       group.add(mesh);
     }
+  // Fade only near-camera masonry that would screen the traveler on the narrow galleries.
+  // The same architecture remains solid in the distance and keeps casting its normal shadows.
+  const walker = { value: new Vector3() };
+  for (const finish of [stone, pale, wet, weathered, serpentine, bronze, patina]) {
+    finish.onBeforeCompile = shader => {
+      shader.uniforms.palaceWalker = walker;
+      shader.vertexShader =
+        'varying vec3 palaceWorld;\n' +
+        shader.vertexShader.replace(
+          '#include <project_vertex>',
+          `
+        #include <project_vertex>
+        #ifdef USE_INSTANCING
+          palaceWorld=(modelMatrix*instanceMatrix*vec4(transformed,1.)).xyz;
+        #else
+          palaceWorld=(modelMatrix*vec4(transformed,1.)).xyz;
+        #endif
+      `,
+        );
+      shader.fragmentShader =
+        'uniform vec3 palaceWalker;varying vec3 palaceWorld;\n' +
+        shader.fragmentShader.replace(
+          '#include <clipping_planes_fragment>',
+          `
+        #include <clipping_planes_fragment>
+        vec3 eye=cameraPosition-palaceWalker;
+        float depth=dot(palaceWorld-palaceWalker,eye)/max(.01,dot(eye,eye));
+        float width=mix(.81,2.15,clamp(depth,0.,1.));
+        vec3 nearRay=palaceWalker+eye*clamp(depth,0.,1.);
+        float radial=length((palaceWorld-nearRay)*vec3(1.,.59,.70));
+        float cut=(1.-smoothstep(width,width+.42,radial))*smoothstep(.022,.109,depth);
+        cut=max(cut,1.-smoothstep(1.35,2.58,distance(palaceWorld,cameraPosition)));
+        cut*=smoothstep(.09,.55,palaceWorld.y)*step(0.,cameraPosition.y);
+        if(cut>fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715)))))discard;
+      `,
+        );
+    };
+  }
   return {
     group,
     lamps,
     puddles,
+    update(resonance: number, time: number, x: number, z: number) {
+      walker.value.set(x, 0.91, z);
+      dial.update(resonance, time);
+      sealLight.color.setRGB(0.11 + 0.18 * resonance, 0.22 + 0.26 * resonance, 0.18 + 0.22 * resonance);
+    },
     dispose() {
       for (const shape of Object.values(geom)) shape.dispose();
-      for (const m of [stone, wet, pale, floor, iron, bronze, patina, dark, glass, sealLight, seaGlass, shaftMaterial])
+      for (const m of [
+        stone,
+        wet,
+        pale,
+        floor,
+        iron,
+        bronze,
+        patina,
+        dark,
+        glass,
+        sealLight,
+        seaGlass,
+        shaftMaterial,
+        serpentine,
+        weathered,
+      ])
         m.dispose();
       group.traverse(o => {
         if (o instanceof InstancedMesh) o.dispose();
       });
+      relief.dispose();
+      dial.dispose();
       grainMap.dispose();
       shaftGeometry.dispose();
       for (const g of customGeometry) g.dispose();

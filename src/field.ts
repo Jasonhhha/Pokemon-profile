@@ -5,7 +5,7 @@ import type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
 import { rooms } from './field-rooms';
 import { cityObstacles } from './field-city-layout';
 import { cityStops, surveyAt, surveyStops, type CityStop, type SurveyId } from './field-city-walks';
-import { fortressMaps, fortressPier, fortressSequence, openFortress, sleepingFortress, type FortressView } from './field-fortress-state';
+import { fortressDial, fortressMaps, fortressPier, fortressSequence, openFortress, sleepingFortress, type FortressView } from './field-fortress-state';
 import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
 import type { Footing } from './sound';
@@ -27,6 +27,8 @@ interface FieldOptions {
   initial?: FieldLocation;
   guideMet?: boolean;
   fortressOpened: boolean;
+  tideDialAwake: boolean;
+  onDialAwake: () => void;
   fortressStartedAt?: number;
   onFortressSave: (started: number | null) => void;
   onFortressView: (view: FortressView, inspecting: boolean) => void;
@@ -37,7 +39,7 @@ interface FieldOptions {
   onSurvey: (id: SurveyId) => void;
   onReady?: () => void;
   onOverview?: (active: boolean) => void;
-  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal', surface?: Footing) => void;
+  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal' | 'tideDial', surface?: Footing) => void;
 }
 
 export interface FieldControls {
@@ -54,6 +56,7 @@ export interface FieldControls {
   travel: (area: FieldArea) => void;
   walkToStop: (stop: CityStop) => boolean;
   approachFortress: () => void;
+  approachTideDial: () => void;
   replayFortress: () => void;
   leaveRoom: () => void;
   getLocation: () => FieldLocation;
@@ -174,6 +177,8 @@ export function createField(options: FieldOptions): FieldControls {
   let started = options.fortressOpened ? undefined : options.fortressStartedAt;
   let fortress: FortressView = options.fortressOpened ? openFortress : sleepingFortress;
   let inspectingSeal = false;
+  let dialAwake = options.tideDialAwake;
+  let dialStarted = -Infinity;
   let lastProgress = -1;
   let facing: Direction = 'down';
   let held: Direction | null = null;
@@ -277,13 +282,14 @@ export function createField(options: FieldOptions): FieldControls {
     if (fortress.cinematic) return hint(fortress.phase === 'rising' ? '升降机启动 · 堡体上浮' : fortress.phase === 'draining' ? '八向泄水 · 等待闸门开启' : '水位已降 · 闸门开启');
     if (inspectingSeal) return hint('封印观测中 · 再次互动返回栈桥');
     if (location.fortressRoom === 'sluice') {
+      if (distance(location, fortressDial) <= 1) return hint(dialAwake ? '青铜潮盘已对齐 · 水流沿着石槽汇入下层' : '互动 · 转动嵌在石道里的青铜潮盘');
       if (distance(location, { x: 8, y: 3 }) <= 1) return hint('互动 · 沿阶梯下至封印池');
-      if (distance(location, { x: 8, y: 17 }) <= 1) return hint('向北穿过闸廊 · 在此互动可返回西栈桥');
+      if (distance(location, { x: 8, y: 17 }) <= 1) return hint('向北穿过柱廊 · 在此互动可返回西栈桥');
       return hint('沿湿石通道向北，尽头的阶梯通往封印池');
     }
     if (location.fortressRoom === 'seal') {
       if (distance(location, { x: 8, y: 11 }) <= 1) return hint('互动 · 观察封印中的盖欧卡');
-      if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回闸廊');
+      if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回水殿');
       return hint('沿中央桥靠近封印 · 漩流外侧可通行');
     }
     if (overview) return hint('拖动环视 · 点击街道进入');
@@ -461,10 +467,31 @@ export function createField(options: FieldOptions): FieldControls {
     if (!interactNearby()) refreshHint();
   }
 
+  function soundTideDial() {
+    if (paused || location.fortressRoom !== 'sluice' || distance(location, fortressDial) > 1) return;
+    stopRouting();
+    clearInput();
+    if (!dialAwake) {
+      dialAwake = true;
+      dialStarted = performance.now();
+      options.onDialAwake();
+    }
+    options.onSound?.('tideDial');
+    refreshHint();
+  }
+
+  function approachTideDial() {
+    if (paused || location.fortressRoom !== 'sluice') return;
+    if (!step && distance(location, fortressDial) <= 1) soundTideDial();
+    else route([fortressDial], soundTideDial);
+  }
+
   function interactNearby() {
     if (location.fortressRoom) {
       const gallery = location.fortressRoom === 'sluice';
-      if (gallery && distance(location, { x: 8, y: 3 }) <= 1) {
+      if (gallery && distance(location, fortressDial) <= 1) {
+        soundTideDial();
+      } else if (gallery && distance(location, { x: 8, y: 3 }) <= 1) {
         switchArea({ area: 'harbor', fortressRoom: 'seal', ...fortressMaps.seal.spawn }, performance.now());
       } else if (!gallery && (inspectingSeal || distance(location, { x: 8, y: 11 }) <= 1)) {
         inspectingSeal = !inspectingSeal;
@@ -581,6 +608,10 @@ export function createField(options: FieldOptions): FieldControls {
       }
     }
     const point = renderer.pointInWorld(screenX, screenY);
+    if (point && location.fortressRoom === 'sluice' && Math.floor(point.x / TILE) === fortressDial.x && Math.floor(point.y / TILE) === fortressDial.y) {
+      approachTideDial();
+      return;
+    }
     if (!point || !route([{ x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) }])) hint('这里无法通行，请沿路探索');
   }
 
@@ -665,6 +696,7 @@ export function createField(options: FieldOptions): FieldControls {
     const map = mapAt(location);
     renderer.draw(time, {
       location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc, surveyFocus, fortress, inspectingSeal,
+      resonance: dialAwake ? reducedMotion.matches ? 1 : Math.min(1, Math.max(0, (time - dialStarted) / 2700)) : 0,
       pumpElapsed: time - pumpStarted < 3600 ? (reducedMotion.matches ? 1 : Math.max(0, time - pumpStarted) / 1000) : undefined,
       activeNpcFacing: activeNpc && !sameTile(activeNpc, location) ? directionTo(activeNpc, location, map.wrapX) : undefined,
       companionImage: companion ? creatureArt.get(companion) : undefined, companionId: companion ?? undefined, sylveon, night, beaconLit, fadedAt,
@@ -753,6 +785,7 @@ export function createField(options: FieldOptions): FieldControls {
       covered = value;
     },
     walkToStop,
+    approachTideDial,
     approachFortress() {
       if (paused || fortress.cinematic || location.area !== 'harbor' || location.room) return;
       if (location.fortressRoom) {

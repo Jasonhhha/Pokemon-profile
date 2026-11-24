@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fortressTiming } from './field-fortress-state';
 
 export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'fortress' | 'wild' | 'trial';
 export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile' | 'wet';
-export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal';
+export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal' | 'tideDial';
 
 type Score = {
   bpm: number;
@@ -51,7 +52,7 @@ const scores: Record<SoundScene, Score> = {
 };
 
 const cues: Record<SoundCue, readonly number[]> = {
-  hoist: [26, 33], discharge: [], seal: [38, 45, 50],
+  hoist: [26, 33], discharge: [], seal: [38, 45, 50], tideDial: [50, 57, 62],
   step: [40], interact: [74, 81], area: [57, 62, 67], encounter: [76, 83, 72, 78], win: [62, 66, 69, 74],
   hit: [86, 52], heal: [69, 76, 81], capture: [72, 76, 79, 84], miss: [60, 56], faint: [67, 62, 54], switch: [65, 74], escape: [76, 69, 64],
 };
@@ -141,10 +142,61 @@ function harborAir(context: AudioContext, destination: AudioNode, buffer: AudioB
   };
 }
 
+function spillwaySound(context: AudioContext, output: AudioNode, noise: AudioBuffer, discharge: boolean, time: number) {
+  const short = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = short ? .48 : (discharge ? fortressTiming.empty : fortressTiming.rise) / 1000;
+  const bus = context.createGain();
+  bus.connect(output);
+  const sources: AudioBufferSourceNode[] = [];
+  // Air and spray reach each bank first. The lower band is the delayed impact at sea level.
+  const layers = discharge ? [
+    { band: 830, pan: -.66, delay: 0, peak: .17 },
+    { band: 1260, pan: .62, delay: .064, peak: .15 },
+    { band: 185, pan: .04, delay: .16, peak: .38 },
+  ] : [
+    { band: 112, pan: -.10, delay: 0, peak: .23 },
+    { band: 345, pan: .27, delay: .26, peak: .075 },
+  ];
+  for (const [index, layer] of layers.entries()) {
+    const source = context.createBufferSource();
+    source.buffer = noise;
+    source.loop = true;
+    source.playbackRate.value = .78 + index * .17;
+    const start = time + duration * layer.delay;
+    const end = time + duration;
+    const filter = context.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.Q.value = .69;
+    filter.frequency.setValueAtTime(layer.band * .64, start);
+    filter.frequency.exponentialRampToValueAtTime(layer.band * 1.22, start + (end - start) * .28);
+    filter.frequency.exponentialRampToValueAtTime(layer.band * .73, end);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(.0001, start);
+    gain.gain.exponentialRampToValueAtTime(layer.peak, start + (end - start) * .17);
+    gain.gain.exponentialRampToValueAtTime(layer.peak * .8, start + (end - start) * .61);
+    gain.gain.exponentialRampToValueAtTime(.0001, end);
+    const pan = context.createStereoPanner();
+    pan.pan.value = layer.pan;
+    source.connect(filter).connect(gain).connect(pan).connect(bus);
+    source.start(start, index * .63);
+    source.stop(end);
+    sources.push(source);
+    source.onended = () => {
+      source.disconnect(); filter.disconnect(); gain.disconnect(); pan.disconnect();
+      sources.splice(sources.indexOf(source), 1);
+      if (!sources.length) bus.disconnect();
+    };
+  }
+  return () => {
+    for (const source of sources) source.stop();
+  };
+}
+
 export function useSound(scene: SoundScene) {
   const [enabled, setEnabled] = useState(false);
   const audio = useRef<{ context: AudioContext; output: DynamicsCompressorNode; noise: AudioBuffer } | null>(null);
   const foot = useRef(0);
+  const stopFortressSound = useRef<(() => void) | undefined>(undefined);
   const muted = useRef(true);
 
   const toggle = useCallback(() => {
@@ -162,6 +214,7 @@ export function useSound(scene: SoundScene) {
       }
       void audio.current.context.resume().catch(() => {});
     } else {
+      stopFortressSound.current?.();
       void audio.current?.context.suspend().catch(() => {});
     }
   }, []);
@@ -212,6 +265,7 @@ export function useSound(scene: SoundScene) {
     function visibility() {
       if (muted.current || !audio.current) return;
       const { context } = audio.current;
+      if (document.hidden) stopFortressSound.current?.();
       void (document.hidden ? context.suspend() : context.resume()).catch(() => {});
     }
     document.addEventListener('visibilitychange', visibility);
@@ -232,26 +286,14 @@ export function useSound(scene: SoundScene) {
       return;
     }
     if (cue === 'hoist' || cue === 'discharge') {
-      const pour = context.createBufferSource();
-      const filter = context.createBiquadFilter();
-      const swell = context.createGain();
-      const draining = cue === 'discharge';
-      const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? .45 : draining ? 4.7 : 3.9;
-      pour.buffer = noise;
-      pour.loop = true;
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(draining ? 390 : 90, time);
-      filter.frequency.exponentialRampToValueAtTime(draining ? 1350 : 185, time + duration * .4);
-      swell.gain.setValueAtTime(.001, time);
-      swell.gain.exponentialRampToValueAtTime(draining ? .22 : .12, time + duration * .27);
-      swell.gain.exponentialRampToValueAtTime(.001, time + duration);
-      pour.connect(filter).connect(swell).connect(output);
-      pour.start(time);
-      pour.stop(time + duration);
-      pour.onended = () => { pour.disconnect(); filter.disconnect(); swell.disconnect(); };
+      stopFortressSound.current?.();
+      stopFortressSound.current = spillwaySound(context, output, noise, cue === 'discharge', time);
     }
-    if (cue === 'seal') {
-      cues.seal.forEach((note, i) => voice(context, output, note, time + .22 * i, 1.3, .068, 'sine'));
+    if (cue === 'seal' || cue === 'tideDial') {
+      cues[cue].forEach((note, i) => {
+        voice(context, output, note, time + .22 * i, 1.6, .063, 'sine');
+        if (cue === 'tideDial') voice(context, output, note + 12, time + .38 + i * .22, 1.05, .019, 'triangle');
+      });
       return;
     }
     cues[cue].forEach((note, i) => voice(context, output, note, time + i * .08, .18, .057, cue === 'hit' ? 'square' : 'triangle'));

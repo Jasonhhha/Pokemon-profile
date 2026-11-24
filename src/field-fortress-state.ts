@@ -15,6 +15,7 @@ export type FortressInteriorFrame = {
   now: number;
   reduced: boolean;
   inspecting: boolean;
+  resonance: number;
   companionId?: CreatureId;
   companionImage?: HTMLCanvasElement;
   companionX?: number;
@@ -22,8 +23,12 @@ export type FortressInteriorFrame = {
 };
 
 export const fortressPier = { x: 3, y: 12 };
+export const fortressDial = { x: 8, y: 8 };
+export const fortressLiftDepth = 21.6;
+export const fortressTiming = { rise: 8500, empty: 9500, open: 2000 };
+const reducedTiming = { rise: 450, empty: 640, open: 200 };
 export const fortressRooms = {
-  sluice: { name: '排水闸廊', english: 'SLUICE GALLERY', floor: '地下一层' },
+  sluice: { name: '潮枢水殿', english: 'HALL OF TIDES', floor: '地下一层' },
   seal: { name: '深潮封印池', english: 'PELAGIC VAULT', floor: '地下二层' },
 };
 export const sleepingFortress: FortressView = { phase: 'submerged', lift: 0, drain: 0, cinematic: false };
@@ -31,11 +36,10 @@ export const openFortress: FortressView = { phase: 'open', lift: 1, drain: 1, ci
 export const isFortressRoom = (value: unknown): value is FortressRoom => value === 'sluice' || value === 'seal';
 
 export function fortressSequence(elapsed: number, reduced: boolean): FortressView {
-  const rise = reduced ? 450 : 4700;
-  const empty = reduced ? 640 : 5100;
+  const { rise, empty, open } = reduced ? reducedTiming : fortressTiming;
   if (elapsed < rise) return { phase: 'rising', lift: reduced ? .52 : elapsed / rise, drain: 0, cinematic: true };
   if (elapsed < rise + empty) return { phase: 'draining', lift: 1, drain: reduced ? .55 : (elapsed - rise) / empty, cinematic: true };
-  return elapsed < rise + empty + (reduced ? 200 : 1250) ? { ...openFortress, cinematic: true } : openFortress;
+  return elapsed < rise + empty + open ? { ...openFortress, cinematic: true } : openFortress;
 }
 
 function interiorMap(room: FortressRoom): FieldMap {

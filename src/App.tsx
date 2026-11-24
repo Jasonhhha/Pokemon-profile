@@ -77,6 +77,7 @@ export default function App() {
   const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor ? 'fortress' : room ? 'interior' : area);
   const scene = floor ? fortressRooms[floor] : room ?? fieldAreas[area];
   const AreaIcon = floor ? Castle : room ? House : areaIcons[area];
+  const overviewLabel = overview ? '返回街道' : fortress.phase === 'open' ? '环看海宫' : '俯瞰环城';
   const areaNumber = String(areas.indexOf(area) + 1).padStart(2, '0');
   const progress = save.battle;
   const lead = progress.team.find(member => member.id === progress.lead) ?? progress.team[0];
@@ -180,6 +181,8 @@ export default function App() {
       parent: canvas.current, initial: current.current.location, guideMet: current.current.greeted,
       fortressOpened: current.current.fortressOpened,
       fortressStartedAt: current.current.fortressStartedAt,
+      tideDialAwake: current.current.tideDialAwake,
+      onDialAwake: () => setSave(previous => ({ ...previous, tideDialAwake: true })),
       onFortressSave: started => setSave(previous => {
         if (started === null) return { ...previous, fortressOpened: true, fortressStartedAt: undefined };
         return previous.fortressOpened ? previous : { ...previous, fortressStartedAt: started };
@@ -448,14 +451,14 @@ export default function App() {
           <header className="game-bar">
             <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
             <div className="game-tools">
-              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />{floor === 'seal' ? '返回闸廊' : floor ? '返回栈桥' : '离开室内'}</button> :
+              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />{floor === 'seal' ? '返回水殿' : floor ? '返回栈桥' : '离开室内'}</button> :
               <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
                 {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
               </button>}
-              {area === 'harbor' && !interior && <button type="button" className="icon-button overview-button" aria-label={overview ? '返回街道' : '俯瞰环城'}
-                aria-pressed={overview} title={overview ? '返回街道' : '俯瞰环城'} disabled={!ready || paused || fortress.cinematic}
+              {area === 'harbor' && !interior && <button type="button" className="icon-button overview-button" aria-label={overviewLabel}
+                aria-pressed={overview} title={overviewLabel} disabled={!ready || paused || fortress.cinematic}
                 onClick={() => { controller.current?.setOverview(!overview); focusField(); }}>
-                <Orbit size={17} /><span>{overview ? '返回街道' : '俯瞰环城'}</span>
+                <Orbit size={17} /><span>{overviewLabel}</span>
               </button>}
               <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}><Map size={17} /></button>
               <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
@@ -463,7 +466,7 @@ export default function App() {
           </header>
 
           <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
-            data-room={floor ?? save.location.room} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
+            data-room={floor ?? save.location.room} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
             <div className="game-canvas" ref={canvas} role="application" data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
               aria-label="游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开航线，Q 打开队伍，J 打开图鉴。" />
             {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
@@ -482,6 +485,7 @@ export default function App() {
                   {inspectingSeal ? '返回观测桥' : floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '进入堡垒' : '升起堡垒') : '前往西栈桥'}
                 </button>
                 {atPier && fortress.phase === 'open' && <button type="button" className="fortress-replay" onClick={() => { controller.current?.replayFortress(); focusField(); }}>重看浮升</button>}
+                {floor === 'sluice' && !save.tideDialAwake && <button type="button" className="fortress-replay" onClick={() => { controller.current?.approachTideDial(); focusField(); }}>唤醒潮盘</button>}
               </>}
             </div>}
             {arrival && !encounter && !dialogue && <div className="area-arrival" key={arrival.key} role="status"><span className="pixel">{arrival.english}</span><strong>{arrival.name}</strong></div>}

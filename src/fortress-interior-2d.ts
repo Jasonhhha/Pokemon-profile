@@ -1,4 +1,5 @@
 import { drawFieldActor } from './field-actors';
+import { creatureGaits } from './field-creature-motion';
 import { fortressMaps, type FortressInteriorFrame } from './field-fortress-state';
 
 type Screen = { x: number; y: number };
@@ -15,14 +16,15 @@ function projection(ctx: Context, frame: FortressInteriorFrame) {
   const { width, height } = ctx.canvas;
   const seal = frame.room === 'seal';
   const close = seal && frame.inspecting;
-  const pitch = close ? .58 : seal ? .80 : .91;
-  const yaw = close ? -.14 : .075;
+  const pitch = close ? .58 : seal ? .80 : .64;
+  const yaw = close ? -.14 : seal ? .075 : .10;
   const sin = Math.sin(yaw), cos = Math.cos(yaw), flat = Math.sin(pitch), up = Math.cos(pitch);
   const anchorX = close ? poolX : 8.5 + (frame.x - 8.5) * (seal ? .18 : .6);
-  const anchorZ = close ? poolZ + .45 : seal ? 10.55 + (frame.y - 13.5) * .25 : frame.y - 2.55;
+  const anchorZ = close ? poolZ + .45 : seal ? 10.55 + (frame.y - 13.5) * .25 : frame.y - 2.95;
   const scale = Math.min(height / (close ? 6.8 : seal ? 12.4 : 10.75), width / (close ? 10.1 : seal ? 13.5 : 11.8));
-  const distance = close ? 25 : 31;
-  const baseY = height * (close ? width / height < 1.5 ? .455 : .54 : .52);
+  const distance = close ? 25 : seal ? 31 : 20.6;
+  const inspectionY = width / height < 1.5 ? .37 : .54;
+  const baseY = height * (close ? inspectionY : .52);
   const point = (x: number, z: number, elevation = 0): Screen => {
     const across = (x - anchorX) * cos - (z - anchorZ) * sin;
     const forward = (x - anchorX) * sin + (z - anchorZ) * cos;
@@ -55,6 +57,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
   const {point, scale} = projection(ctx, frame);
   const seal = frame.room === 'seal';
   const time = frame.reduced ? 0 : frame.now / 1000;
+  const resonance = Math.min(1,Math.max(0,frame.resonance ?? 0));
   const map = fortressMaps[frame.room].walkable;
   if (!kyogre && seal) {
     kyogre = new Image();
@@ -68,7 +71,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       ink.drawImage(kyogre, 0, 0);
       ink.globalCompositeOperation = 'source-atop';
       const cast = ink.createLinearGradient(0, texture.height*.24, texture.width*.42, texture.height*.73);
-      cast.addColorStop(0,'#86c7be18');cast.addColorStop(.48,'#1c69774c');cast.addColorStop(1,'#1549558c');
+      cast.addColorStop(0,'#e2f4f00c');cast.addColorStop(.48,'#387d8c2c');cast.addColorStop(1,'#215a6763');
       ink.fillStyle = cast;
       ink.fillRect(0,0,texture.width,texture.height);
       submergedKyogre=texture;
@@ -192,10 +195,31 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       groundGlow(x,z,2.1,2.4,'#8db4a346');
       groundGlow(x,z,.46,1.55,'#d9b17a40');
     }
+    ctx.save();
+    path([[.7,1,-.58],[16.3,1,-.58],[16.3,19.3,-.58],[.7,19.3,-.58]]);ctx.closePath();ctx.clip();
+    for(const z of [3.82,7.55,10.96,14.85,18.20])for(const x of [2.3,5.72,11.28,14.7]){
+      for(let band=0;band<13;band++){
+        const h=-.62-band*.26, dx=Math.sin(time*1.9+z+band*1.6)*(.025+.014*band);
+        const width=.27+(band===11?.19:0);
+        face([[x-width+dx,z,h],[x+width+dx,z,h],[x+width+dx,z,h-.19],[x-width+dx,z,h-.19]],
+          band%3?'#8fa39a32':'#9fa58e44');
+        if(band>=6&&band<=9)stroke([[x-.10+dx,z,h],[x+.12+dx,z,h]],'#cfa0645c',.075);
+      }
+    }
+    ctx.restore();
     for(let i=0;i<215;i++){
       const x=2+12.5*noise(i),z=2.9+15.3*noise(i+691);
       const wind=Math.sin(time*.95+z*1.9+i*2.16)*.058;
       stroke([[x+wind,z,-.6],[x+.15+noise(i+37)*.42+wind,z+.02,-.6]],i%4?'#84b2ac46':'#a7c3b587',.014);
+    }
+    // Seven stone courses descend from each side gallery into the collecting channels.
+    for(const [z,length] of [[4.20,1.70],[7.03,4.82],[13.06,2.91]]){
+      for(const side of [-1,1])for(let k=0;k<7;k++){
+        const x=side<0?3.98+k*.185:12.83-k*.185, h=.14-k*.105;
+        plate(x,z,.19,length,-.68,h,'#828e85','#405861','#526c6c');
+        stroke([[x+(side<0?.16:.025),z,h+.013],[x+(side<0?.16:.025),z+length,h+.013]],'#b1b09a',.028);
+        for(let seam=.66;seam<length;seam+=.92)stroke([[x,z+seam,h+.017],[x+.18,z+seam,h+.017]],'#526366',.025);
+      }
     }
     for(const x of [5.25,11.75]){
       for(let z=4;z<16;z+=3.05){
@@ -272,12 +296,41 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
   }
   const layers:{z:number; draw:()=>void}[]=[];
   if(!seal){
-    for(const x of [2.62,14.38])for(const z of [4.25,8.95,14.56])layers.push({z,draw(){
-      plate(x-.43,z-.39,.86,.78,-.52,.30,'#84918a','#4e6769','#374e54');
-      plate(x-.29,z-.24,.58,.48,.29,2.27,'#657c79','#495d62','#334952');
-      for(const h of [.45,1.89,2.16])plate(x-.33,z-.28,.66,.56,h,h+.105,'#81918a','#617270','#3b5155');
-      lamp(x,z+.31,1.61);
-    }});
+    const ax=8.5, az=8.5;
+    for(const sign of [-1,1]){
+      const channel:Vertex[]=[[ax+sign*.66,az,.066],[ax+sign*1.24,az-.55,.066],[ax+sign*1.24,3.57,.066]];
+      stroke(channel,'#7d684c',.13);stroke(channel,resonance>.15?'#93e6ca':'#578c83',.052);
+      if(resonance>0)for(let j=0;j<5;j++){
+        const z=3.68+(j+.20+time*.48)%5*.82;
+        stroke([[ax+sign*1.24,z,.07],[ax+sign*1.24,z+.21,.07]],'rgba(210,250,222,'+resonance+')',.068);
+      }
+    }
+    const dialPoint=(a:number,r:number,h:number):Vertex=>[ax+Math.cos(a)*r,az+Math.sin(a)*r,h];
+    face(loop(ax,az,1.12,1.12,.045,40),'#324d52');
+    for(const [r,w,c] of [[1.06,.11,'#cba56a'],[.88,.038,'#ddc793'],[.70,.076,'#6faaa1'],[.38,.06,'#c9a878']] as const){
+      for(let i=0;i<40;i++){
+        const a=i*tau/40,b=(i+1)*tau/40;
+        face([dialPoint(a,r,.055),dialPoint(b,r,.055),dialPoint(b,r-w,.055),dialPoint(a,r-w,.055)],c);
+      }
+    }
+    for(let i=0;i<8;i++){
+      const a=i*tau/8+resonance*.31;
+      face([dialPoint(a,.24,.072),dialPoint(a+.15,.35,.072),dialPoint(a+.47,.77,.072),dialPoint(a+.35,.67,.072)],i%2?'#c19a65':'#83aea1');
+      stroke([dialPoint(a,.93,.074),dialPoint(a,1.14,.074)],'#d6c09b',.065);
+    }
+    face(loop(ax,az,.23,.23,.090,16),resonance>.1?'#b7f8d6':'#79b5a8');
+    if(resonance>.02){
+      const tint='rgba(187,250,216,'+resonance*.78+')';
+      const glow=loop(ax,az,.67,.67,.084,38);
+      stroke([...glow,glow[0]],tint,.060);
+      stroke([[7.46,3.22,.46],[7.46,2.14,.48],[7.46,2.14,1.62]],tint,.065);
+      stroke([[9.54,3.22,.46],[9.54,2.14,.48],[9.54,2.14,1.62]],tint,.065);
+    }
+    for(const z of [3.82,7.55,10.96,14.85,18.20]){
+      for(const x of [2.3,5.72,11.28,14.7])layers.push({z,draw(){ column(x,z); }});
+      for(const [left,right] of [[2.3,5.72],[11.28,14.7]])layers.push({z:z+.04,draw(){ arcade(left,right,z); }});
+      if(z<8)layers.push({z:z+.05,draw(){arcade(5.72,11.28,z);}});
+    }
   }
   const rails = seal ? [[7.02,11,15],[9.98,11,15]] : [[7.04,7,12],[9.96,7,12],[7.04,13,15.8],[9.96,13,15.8]];
   for(const [x,za,zb] of rails){
@@ -309,7 +362,12 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
     const img=frame.companionImage, cx=frame.companionX??frame.x-.40,cz=frame.companionY??frame.y+.55;
     layers.push({z:cz, draw(){
       const p=point(cx,cz),sz=Math.hypot(point(cx,cz,1).y-p.y,point(cx+1,cz).x-p.x)*.63;
-      ctx.imageSmoothingEnabled=false;ctx.drawImage(img,p.x-sz*.50,p.y-sz*img.height/img.width,sz,sz*img.height/img.width);
+      const gait=creatureGaits[frame.companionId??'piplup'], stride=frame.reduced?0:frame.stride;
+      const face=frame.facing==='left'?-1:frame.facing==='right'?1:gait.sourceFacing;
+      const bob=sz*(Math.abs(stride)*gait.bounce + gait.airborne*(1+.11*Math.sin(time*gait.pace)));
+      ctx.save();ctx.translate(p.x,p.y-bob);ctx.rotate(stride*gait.sway*.72);ctx.scale(face*gait.sourceFacing,1);
+      ctx.imageSmoothingEnabled=false;ctx.drawImage(img,-sz*.50,-sz*img.height/img.width,sz,sz*img.height/img.width);
+      ctx.restore();
     }});
   }
   layers.push({z:frame.y,draw(){
@@ -325,6 +383,40 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
   ctx.fillStyle=vignette;ctx.fillRect(0,0,width,height);
   ctx.restore();
 
+  function column(x:number,z:number){
+    const h=3.23;
+    plate(x-.39,z-.38,.78,.76,-.65,.10,'#929387','#546567','#405658');
+    plate(x-.34,z-.33,.68,.66,.10,.23,'#a8a391','#6c7971','#516466');
+    const shades=['#596d6b','#84928a','#acaa94','#9a9b8a','#748782','#586e72'];
+    for(let i=0;i<6;i++){
+      const a=i*Math.PI/6,b=(i+1)*Math.PI/6;
+      const v=(theta:number,r:number,y:number):Vertex=>[x+Math.cos(theta)*r,z+Math.sin(theta)*r,y];
+      face([v(a,.27,.22),v(b,.27,.22),v(b,.218,h-.42),v(a,.218,h-.42)],shades[i]);
+      const m=(a+b)/2;
+      stroke([v(m,.269,.25),v(m,.216,h-.45)],'#4d62634f',.029);
+    }
+    for(const [y,r,t] of [[.24,.31,.09],[.39,.285,.075],[h-.44,.26,.085],[h-.31,.31,.105]]){
+      face(loop(x,z,r,r,y+t,12),'#b0ab95');
+      stroke(loop(x,z,r,r,y,12).slice(0,7),'#657874',.09);
+    }
+    plate(x-.35,z-.30,.70,.60,h-.20,h+.02,'#c0b89c','#889085','#617673');
+    for(const s of [-1,1])face(loop(x+s*.24,z+.27,.105,.055,h-.11,12),'#716d59');
+    if(x===5.72||x===11.28)lamp(x,z+.275,1.43);
+  }
+
+  function arcade(x0:number,x1:number,z:number){
+    const radius=(x1-x0)/2, mid=(x0+x1)/2, base=3.22;
+    const v=(i:number,thick:number,dz:number):Vertex=>{
+      const a=i*Math.PI/14;
+      return [mid+Math.cos(a)*(radius+thick),z+dz,base+Math.sin(a)*(Math.min(2.02,radius*.9)+thick)];
+    };
+    for(let i=0;i<14;i++){
+      face([v(i,0,-.15),v(i+1,0,-.15),v(i+1,0,.16),v(i,0,.16)],'#3b5058');
+      face([v(i,0,.16),v(i+1,0,.16),v(i+1,.20,.16),v(i,.20,.16)],i%4===0?'#a9aa94':i%3===0?'#87928a':'#798982');
+      if(i%2===0)stroke([v(i,.18,.165),v(i,0,.165)],'#4a615f',.024);
+    }
+  }
+
   function drawPool(){
     const rx=6.26,rz=4.94;
     face(loop(poolX,poolZ,rx+.34,rz+.37,-.19,64),'#374f57');
@@ -335,6 +427,15 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
     light.addColorStop(0,'#0e2338');light.addColorStop(.46,'#0b3e52');light.addColorStop(.76,'#127082');light.addColorStop(.91,'#245d68');light.addColorStop(1,'#173c4c');
     const waterFace=loop(poolX,poolZ,rx-.11,rz-.10,-.51,72);face(waterFace,light);
     ctx.save();path(waterFace);ctx.closePath();ctx.clip();
+    groundGlow(poolX-.60,poolZ,4.28,3.15,'rgba(180,228,218,'+(.15+.32*resonance)+')');
+    for(const sign of [-1,1]){
+      const x=poolX+sign*3.65;
+      const topLight=point(x,poolZ-1.95,3.3),bottomLight=point(x-sign*1.14,poolZ-.10,-.50);
+      const shaft=ctx.createLinearGradient(topLight.x,topLight.y,bottomLight.x,bottomLight.y);
+      shaft.addColorStop(0,'rgba(221,239,229,'+(.09+resonance*.14)+')');shaft.addColorStop(1,'#d9ece000');
+      face([[x-.20,poolZ-1.95,3.3],[x+.21,poolZ-1.95,3.3],[x-sign*1.14+.82,poolZ-.10,-.50],
+        [x-sign*1.14-.79,poolZ-.10,-.50]],shaft);
+    }
     for(let i=0;i<10;i++){
       const a=i*tau/10+.23, x=poolX+Math.cos(a)*rx*.85,z=poolZ+Math.sin(a)*rz*.85;
       groundGlow(x,z,1.18,.77,'#81cec65b');
@@ -400,6 +501,8 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
         finPose.phase=phase;
       }
       ctx.drawImage(finPose?.canvas??art,-width/2,-imageH/2,width,imageH);
+      ctx.globalCompositeOperation='screen';ctx.globalAlpha=.10+.20*resonance;
+      ctx.drawImage(finPose?.canvas??art,-width/2,-imageH/2,width,imageH);
       ctx.restore();
     }
     for(let i=0;i<7;i++)spiral(i,.56,true);
@@ -420,6 +523,11 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       plate(x-.24,z-.22,.48,.44,-.48,.22,'#8e9c92','#54696b','#384e55');
       plate(x-.13,z-.12,.26,.24,.18,.65,'#859e9b','#3e6570','#33535e');
       lamp(x,z,.70,true);
+      if(resonance>.02){
+        groundGlow(x,z,1.55,1.1,'rgba(113,247,221,'+resonance*.49+')');
+        const gateLight=loop(x,z,.34,.34,.27,16);
+        stroke([...gateLight,gateLight[0]],'rgba(179,255,227,'+resonance+')',.065);
+      }
       const chain:Vertex[]=[];
       for(let link=0;link<=12;link++){
         const f=link/12,r=1-.35*f;

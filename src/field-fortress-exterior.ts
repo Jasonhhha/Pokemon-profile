@@ -1,23 +1,22 @@
 import {
-  BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, DoubleSide, ExtrudeGeometry, Float32BufferAttribute,
-  Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, PlaneGeometry, RepeatWrapping, RingGeometry,
-  ShaderMaterial, Shape, SphereGeometry, SRGBColorSpace, TorusGeometry, Vector3, type Material,
+  BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, ExtrudeGeometry,
+  Group, Mesh, MeshStandardMaterial, PlaneGeometry, RepeatWrapping, RingGeometry,
+  ShaderMaterial, Shape, SRGBColorSpace, TorusGeometry, Vector3, type Material,
 } from 'three';
 import { batchStaticMeshes } from './field-mesh-batch';
 import { harborHeight } from './field-city-layout';
 import { ringAngle, ringRadius } from './field-ring-coordinates';
-import type { FortressView } from './field-fortress-state';
+import { fortressLiftDepth, type FortressView } from './field-fortress-state';
+import { buildSeaPalace } from './field-sea-palace';
+import { buildSpillways, maritimeSky } from './field-fortress-spillways';
 
-export const fortressLift = 4.8;
 export const fortressRadius = ringRadius(harborHeight + 1);
-const waterline = -.58;
 const top = -.43;
 const gateAngle = ringAngle(3.5);
 const tau = Math.PI * 2;
 const unit = new BoxGeometry(1, 1, 1);
 const round = new CylinderGeometry(1, 1, 1, 24);
 const rim = new TorusGeometry(1, .10, 7, 32);
-const sphere = new SphereGeometry(1, 10, 7);
 const sheet = new PlaneGeometry(1, 1);
 type Triple = [number, number, number];
 
@@ -150,123 +149,6 @@ function saltMasonry() {
   return new MeshStandardMaterial({ map, roughness: .61, metalness: .08 });
 }
 
-function pressureWater() {
-  const group = new Group();
-  const streams = new Group(), spray = new Group();
-  group.add(streams, spray);
-  const jetShape = new BufferGeometry();
-  const positions: number[] = [], indices: number[] = [];
-  const slices = 24, ribs = 16;
-  for (let s = 0; s <= slices; s++) for (let j = 0; j <= ribs; j++) {
-    const a = tau * j / ribs; positions.push(Math.cos(a), Math.sin(a), s / slices);
-    const p = s * (ribs + 1) + j;
-    if (s < slices && j < ribs) indices.push(p, p + 1, p + ribs + 1, p + 1, p + ribs + 2, p + ribs + 1);
-  }
-  jetShape.setAttribute('position', new Float32BufferAttribute(positions, 3)); jetShape.setIndex(indices);
-  const jet = new ShaderMaterial({
-    transparent: true, depthWrite: false, side: DoubleSide,
-    uniforms: { clock: { value: 0 }, pressure: { value: 0 }, fall: { value: 1 }, night: { value: 0 } },
-    vertexShader: `
-      uniform float clock, pressure, fall;
-      varying vec3 skin;
-      varying float offset;
-      void main() {
-        float t=position.z;
-        float phase=modelMatrix[3].x*.73 + modelMatrix[3].z*.29;
-        offset=phase;
-        float w=(.15+.44*pressure)*(1.-.22*t+.38*t*t);
-        float surge=sin(phase+t*20.-clock*8.)*.045 + sin(t*35.-clock*12.+position.x*6.)*.027;
-        w*=1.+surge*(.28+t);
-        float reach=(.53+1.69*pressure)*sqrt(fall);
-        vec3 p=vec3(position.x*w, -fall*t*t+position.y*w*(.91-.36*t), t*reach);
-        p.x+=.032*t*sin(phase+t*20.-clock*8.);
-        skin=vec3(position.x,position.y,t);
-        gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
-      }`,
-    fragmentShader: `
-      uniform float clock, pressure, night;
-      varying vec3 skin;
-      varying float offset;
-      float hash(vec2 p) { return fract(sin(dot(p,vec2(37.1,91.7)))*43758.55); }
-      float noise(vec2 p) {
-        vec2 cell=floor(p), f=fract(p);
-        f=f*f*(3.-2.*f);
-        return mix(mix(hash(cell),hash(cell+vec2(1.,0.)),f.x),mix(hash(cell+vec2(0.,1.)),hash(cell+1.),f.x),f.y);
-      }
-      void main(){
-        float winding=atan(skin.x,skin.y);
-        vec2 p=vec2(winding*5.4+offset,skin.z*9.-clock*6.5);
-        float eddies=noise(p*.58)*.54+noise(p*1.5+noise(p*.35))* .30+noise(p*3.8)*.16;
-        float flow=.22+.30*max(0.,skin.y)+.18*max(0.,skin.x)+.30*skin.z;
-        float froth=smoothstep(.55-.09*skin.z,.79,eddies)*(.52+.48*skin.z);
-        vec3 base=mix(vec3(.036,.19,.22),vec3(.013,.075,.12),night);
-        vec3 water=mix(vec3(.26,.52,.54),vec3(.075,.24,.31),night);
-        vec3 glint=mix(vec3(.82,.91,.87),vec3(.32,.59,.64),night);
-        gl_FragColor=vec4(mix(mix(base,water,flow),glint,froth),.69+.19*pressure);
-        #include <colorspace_fragment>
-      }`,
-  });
-  const foamGeometry = new PlaneGeometry(1, 1);
-  const white = new ShaderMaterial({
-    transparent: true, depthWrite: false, side: DoubleSide,
-    uniforms: { clock: { value: 0 }, pressure: jet.uniforms.pressure, night: jet.uniforms.night },
-    vertexShader: `varying vec2 q; void main(){q=uv*2.-1.; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader: `
-      varying vec2 q; uniform float clock,pressure,night;
-      void main(){
-        float a=atan(q.y,q.x), r=length(q);
-        float wav=r+.045*sin(a*7.-clock*1.8)+.024*sin(a*13.+clock*2.7);
-        float rings=pow(.5+.5*cos(wav*30.-clock*5.4),5.);
-        float tear=.5+.5*sin(a*8.+wav*17.+clock*.9)*cos(a*4.-clock*.5);
-        float foam=.78*(1.-smoothstep(.16,.61,r))*(.64+.36*tear)
-          + .32*rings*smoothstep(.37,.68,tear)*(1.-smoothstep(.53,.99,r));
-        gl_FragColor=vec4(mix(vec3(.65,.87,.82),vec3(.18,.48,.57),night),foam*pressure);
-        #include <colorspace_fragment>
-      }`,
-  });
-  const splashes: Mesh[] = [];
-  const centers = Array.from({ length: 8 }, (_, i) => gateAngle + Math.PI / 8 + i * Math.PI / 4);
-  for (const angle of centers) {
-    const mount = section(streams, angle, fortressRadius + .67);
-    const water = new Mesh(jetShape, jet);
-    water.position.y = -1.76; water.renderOrder = 3; water.frustumCulled = false; mount.add(water);
-    const foam = new Mesh(foamGeometry, white); foam.rotation.set(-Math.PI / 2, 0, -angle); foam.renderOrder = 2;
-    spray.add(foam); splashes.push(foam);
-  }
-  const beads = paint(0xbcdcd6, .16, .31);
-  const droplets = new InstancedMesh(sphere, beads, 8 * 16), transform = new Matrix4();
-  droplets.frustumCulled = false; spray.add(droplets);
-  return {
-    group,
-    update(time: number, lift: number, drain: number, night: number, cinematic: boolean) {
-      const fall = fortressLift * lift - 1.18;
-      const force = ease(lift, .22, .72) * (1 - ease(drain, .60, .970));
-      group.visible = cinematic && force > .018 && fall > 0;
-      if (!group.visible) return;
-      jet.uniforms.clock.value = white.uniforms.clock.value = time; jet.uniforms.night.value = night;
-      jet.uniforms.pressure.value = force; jet.uniforms.fall.value = fall;
-      const reach = (.53 + 1.69 * force) * Math.sqrt(fall);
-      const radius = fortressRadius + .67 + reach;
-      const y = waterline - fortressLift * lift;
-      centers.forEach((a, i) => {
-        const s = Math.sin(a), c = Math.cos(a);
-        splashes[i].position.set(radius * s, y + .035, radius * c);
-        splashes[i].scale.set(2.8 + 2.5 * force, 2.8 + 2.8 * force, 1);
-        for (let j = 0; j < 16; j++) {
-          const life = (time * (.82 + j % 3 * .13) + j * .618 + i * .17) % 1, dir = j * 2.4 + i * .54;
-          const d = (.12 + life * (.5 + j % 4 * .26)) * force;
-          const size = (.037 + (j % 4) * .015) * force * (1 - life * .7);
-          transform.makeScale(size, size * 1.55, size);
-          transform.setPosition(radius * s + Math.cos(dir) * d, y + .04 + force * life * (1 - life) * (1.85 + j % 3 * .8), radius * c + Math.sin(dir) * d);
-          droplets.setMatrixAt(i * 16 + j, transform);
-        }
-      });
-      droplets.instanceMatrix.needsUpdate = true;
-    },
-    dispose() { jetShape.dispose(); jet.dispose(); foamGeometry.dispose(); white.dispose(); beads.dispose(); droplets.dispose(); },
-  };
-}
-
 function wetLanding() {
   const material = new ShaderMaterial({
     transparent: true, depthWrite: false,
@@ -312,6 +194,8 @@ export function buildFortressExterior() {
   const bronze = paint(0x977451, .44, .5), copper = paint(0x618480, .36, .50), brick = paint(0x82705f, .08, .71);
   const lamp = paint(0xffc18a, .12, .34); lamp.emissive.setHex(0xff9b40); lamp.emissiveIntensity = .65;
   const cast = paint(0x49666a, .48, .39), voidMat = paint(0x172833, .10, .9);
+  const receiver = paint(0x486f67,.31,.28);
+  receiver.emissive.setHex(0x52d9bd);
   const deck = new Group();
   const ang = ringAngle(3.96);
   const winch = section(deck, ang, ringRadius(11.6));
@@ -319,6 +203,7 @@ export function buildFortressExterior() {
   piece(winch, unit, iron, [0, .37, 0], [.21, .54, .18]);
   piece(winch, unit, bronze, [0, .57, .013], [.39, .15, .22]);
   piece(winch, rim, copper, [0, .67, .149], [.22, .22, .16]);
+  piece(winch, rim, receiver, [0, .67, .178], [.196, .196, .115]);
   for (let k = 0; k < 3; k++) piece(winch, unit, bronze, [0, .67, .143], [.40, .025, .028], 0, k * Math.PI / 3);
   piece(winch, round, bronze, [0, .67, .172], [.042, .075, .042], Math.PI / 2);
   piece(winch, round, lamp, [.165, .71, 0], [.048, .082, .048]);
@@ -331,6 +216,8 @@ export function buildFortressExterior() {
   const film = wetLanding();
   landing.add(film);
   film.visible = false;
+  const sky = maritimeSky();
+  group.add(sky);
 
   let shell: ReturnType<typeof buildShell> | undefined;
   let opening = -1;
@@ -363,23 +250,6 @@ export function buildFortressExterior() {
         piece(t, unit, dark, [0, -2.15, .06], [.32, 1.23, .16]);
         piece(t, unit, bronze, [0, -1.50, .11], [.47, .10, .23]);
         piece(t, unit, iron, [0, -2.77, .13], [.43, .11, .20]);
-      }
-    }
-    for (let i = 0; i < 8; i++) {
-      const a = gateAngle + Math.PI / 8 + i * tau / 8;
-      const s = section(details, a, fortressRadius);
-      piece(s, unit, granite, [0, -2.34, .25], [2.40, 3.25, .74]);
-      piece(s, unit, pale, [0, -.86, .25], [2.67, .29, .97]);
-      piece(s, round, iron, [0, -1.76, .52], [.80, .36, .80], Math.PI / 2);
-      piece(s, round, dark, [0, -1.76, .718], [.657, .045, .657], Math.PI / 2);
-      piece(s, rim, copper, [0, -1.76, .75], [.692, .692, .49]);
-      for (let h = 0; h < 10; h++) {
-        const an = h * tau / 10;
-        piece(s, round, bronze, [Math.cos(an) * .739, -1.76 + Math.sin(an) * .739, .713], [.049, .085, .049], Math.PI / 2);
-      }
-      for (const side of [-1, 1]) {
-        piece(s, round, cast, [side * .92, -2.70, .62], [.097, 2.16, .097]);
-        piece(s, round, bronze, [side * .92, -3.45, .62], [.129, .14, .129]);
       }
     }
     const frame = section(details, gateAngle, fortressRadius);
@@ -458,14 +328,19 @@ export function buildFortressExterior() {
     });
     const castings = batchStaticMeshes(details, true); outer.add(castings);
     masonryTemplates.forEach(geometry => geometry.dispose());
-    const water = pressureWater(); outer.add(water.group);
+    const palace = buildSeaPalace(fortressRadius, gateAngle, stoneTexture, metalTexture);
+    const water = buildSpillways(fortressRadius, gateAngle);
+    outer.add(palace.group, water.group);
     group.add(outer);
-    return { outer, water, leaves, bodyGeo, ringSkirt, masonry, castings, stoneTexture, metalTexture, plate };
+    return { outer, palace, water, leaves, bodyGeo, ringSkirt, masonry, castings, stoneTexture, metalTexture, plate };
   }
   return {
     group,
-    update(state: FortressView | undefined, time: number, night: number) {
+    update(state: FortressView | undefined, time: number, night: number, panorama = false, resonance = 0) {
       const lift = state?.lift ?? 0;
+      receiver.emissiveIntensity = .015 + 1.5 * resonance;
+      sky.visible = Boolean(state?.cinematic || panorama && state?.phase === 'open');
+      sky.material.uniforms.night.value = night;
       film.visible = lift > .22;
       film.material.uniforms.wetness.value = ease(lift, .22, .80) * (1 - .25 * (state?.drain ?? 0));
       film.material.uniforms.clock.value = time / 1000;
@@ -480,29 +355,50 @@ export function buildFortressExterior() {
         shell.leaves.forEach((leaf, i) => { leaf.position.x = (i ? 1 : -1) * (.91 + gate * 1.80); });
         opening = gate;
       }
-      shell.water.update(time / 1000, lift, state.drain, night, state.cinematic);
+      shell.palace.update(night, lift, resonance, state.drain);
+      shell.water.update(time / 1000, state, night);
     },
     dispose() {
       film.material.dispose();
+      sky.material.dispose(); sky.geometry.dispose();
       controls.traverse(m => { if (m instanceof Mesh) m.geometry.dispose(); });
       if (shell) {
-        shell.water.dispose(); shell.bodyGeo.dispose(); shell.ringSkirt.dispose(); shell.masonry.map?.dispose(); shell.masonry.dispose();
+        shell.water.dispose(); shell.palace.dispose(); shell.bodyGeo.dispose(); shell.ringSkirt.dispose(); shell.masonry.map?.dispose(); shell.masonry.dispose();
         shell.stoneTexture.dispose(); shell.metalTexture.dispose(); shell.plate.map?.dispose(); shell.plate.dispose();
         for (const g of [...shell.leaves, shell.castings]) g.traverse(m => { if (m instanceof Mesh) m.geometry.dispose(); });
       }
-      for (const m of [granite, pale, iron, dark, bronze, copper, brick, lamp, cast, voidMat]) m.dispose();
+      for (const m of [granite, pale, iron, dark, bronze, copper, brick, lamp, cast, voidMat, receiver]) m.dispose();
     }
   };
 }
 
-export function fortressShot(state: FortressView, aspect: number) {
-  const reveal = ease(state.drain, .31, .94);
-  const yaw = gateAngle - .30 + .28 * ease(state.lift, 0, .95) + .16 * reveal;
-  const targetRadius = 2.6 + (fortressRadius - 2.2) * reveal;
-  const panorama = Math.max(33.4, (fortressRadius + 3) * 2.42 / aspect);
+export function fortressPanorama(aspect: number, tilt = 0) {
+  const lookDown = ease(tilt, 0, .32);
   return {
-    yaw, pitch: .39 + .018 * state.lift - .19 * reveal,
-    center: new Vector3(Math.sin(gateAngle) * targetRadius, 1.35 - state.lift * 3.82 - reveal * .03, Math.cos(gateAngle) * targetRadius),
-    span: panorama + (7.3 - panorama) * reveal, distance: 89 + (15 - 89) * reveal,
+    distance: 113, span: Math.max(53.6 + lookDown*5.4, 87 / aspect), advance: 4.7,
+    elevation: -fortressLiftDepth * .545 + 9.7*lookDown, pitch: .173 + .71*lookDown + Math.min(0,Math.max(-.105, tilt)),
+  };
+}
+
+export function fortressShot(state: FortressView, aspect: number, calm = false) {
+  const full = fortressPanorama(aspect);
+  if (calm) {
+    return { yaw: gateAngle, pitch: full.pitch, distance: full.distance, span: full.span,
+      center: new Vector3(Math.sin(gateAngle)*full.advance, full.elevation, Math.cos(gateAngle)*full.advance) };
+  }
+  const rise = ease(state.lift, 0, 1);
+  const inspect = ease(state.drain, .22, .54);
+  const entrance = ease(state.drain, .62, .994);
+  const wide = Math.max(32.5, 66 / aspect);
+  const midSpan = Math.max(24.5, 36 / aspect);
+  const span = wide + (full.span - wide) * rise;
+  const r = 2.0 + 2.7 * rise + 16.1 * inspect + 5.55 * entrance;
+  const angle = gateAngle - .26 + .15 * rise - .28 * inspect + .39 * entrance;
+  const elevation = 1.28 + (full.elevation - 1.28) * rise + .15 * inspect + 9.15 * entrance;
+  return {
+    yaw: angle + .16 * entrance, pitch: .385 + (full.pitch-.385)*rise - .05*inspect + .069*entrance,
+    center: new Vector3(Math.sin(angle)*r, elevation, Math.cos(angle)*r),
+    span: span + (midSpan-span)*inspect + (8.25-midSpan)*entrance,
+    distance: 94 + 19*rise - 61*inspect - 35*entrance,
   };
 }

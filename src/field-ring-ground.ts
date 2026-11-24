@@ -1090,6 +1090,7 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
       basinRim: { value: ringRadius(innerEdge) },
       basinReach: { value: ringRadius(9.25) },
       fortressRadius: { value: ringRadius(harborHeight + 1) },
+      displacement: { value: 0 },
       deep: { value: new Color('#2b5363') }, lagoon: { value: new Color('#437570') }, shallows: { value: new Color('#577f7d') },
       openSea: { value: new Color('#3e7791') },
     },
@@ -1110,6 +1111,7 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
       uniform float basinRim;
       uniform float basinReach;
       uniform float fortressRadius;
+      uniform float displacement;
       uniform vec3 deep;
       uniform vec3 openSea;
       uniform vec3 lagoon;
@@ -1153,19 +1155,27 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
         float lighter = glint * .064 + fresnel * .116 + foam * .085 + cap * .023 * distanceQuiet * distanceQuiet;
         float lift = max(0.0, -.58 - waterPoint.y);
         float exposed = smoothstep(.16, 1.24, lift);
-        float hullDistance = radius - fortressRadius - .06 - .052 * lift;
+        float shelf = .20 + 1.20 * smoothstep(4.8, 5.9, lift) + 1.38 * smoothstep(10.1, 12.3, lift)
+          + 4.06 * smoothstep(16.8, 20.5, lift);
+        float hullDistance = radius - fortressRadius - shelf;
         float surge = .07 * sin(p.x * .81 - clock * 1.43) + .057 * cos(p.y * 1.14 + clock * .88);
         float contact = 1.0 - smoothstep(.035, .21, abs(hullDistance - .11 - surge));
         float wash = exp(-max(0.0, hullDistance) * 1.9) * (.5 + .5 * cos((hullDistance - surge) * 14.0 - clock * 1.76));
         color *= 1.0 - exposed * exp(-max(0.0, hullDistance) * .96) * .24;
         lighter += exposed * (contact * (.19 + .25 * fringe) + wash * .058);
+        float rippleFront = hullDistance * .63 - clock * 1.50 + .17 * swash;
+        float propagating = pow(.5+.5*cos(rippleFront),10.) * exp(-max(0.,hullDistance)*.067);
+        lighter += displacement * propagating * (.15 + .20*fringe) * smoothstep(.13,2.3,hullDistance);
         vec3 dusk = color * vec3(.27,.45,.60) + vec3(.013,.023,.037);
         color = mix(color, dusk, night);
         color = mix(color, mix(vec3(.45,.68,.65), vec3(.14,.29,.38), night), lighter);
+        float haze = exposed * (1.0 - smoothstep(.029,.145,viewer.y));
         gl_FragColor = vec4(color, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
         #include <fog_fragment>
+        vec3 horizon = mix(vec3(.358,.491,.566),vec3(.071,.11,.15),night);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb,sRGBTransferOETF(vec4(horizon,1.)).rgb,haze*.98);
       }`,
   });
   const mesh = new Mesh(new PlaneGeometry(1200, 1200), material);
@@ -1213,8 +1223,9 @@ export function buildRingGround() {
     boards.mesh(timberFinish(), 'Curved timber landing', true), leaves.mesh(wind(clock), 'Wind in the annular parks'), sea, basin);
   return {
     group,
-    update(time: number, darkness: number, aerial = 0, seaDrop = 0) {
+    update(time: number, darkness: number, aerial = 0, seaDrop = 0, displacement = 0) {
       sea.position.y = seaLevel - seaDrop;
+      sea.material.uniforms.displacement.value = displacement;
       basin.visible = seaDrop > .0001;
       clock.value = time / 1000;
       night.value = darkness;

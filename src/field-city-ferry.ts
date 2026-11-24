@@ -71,10 +71,10 @@ function plate() {
   return new MeshBasicMaterial({ map, toneMapped: false });
 }
 
-function harborCourse(seconds: number) {
+function harborCourse(seconds: number, clearance: number) {
   const phase = seconds / 18.7 - .75;
   const angle = phase + Math.sin(phase * 2 + .6) * .089 + Math.sin(phase * 3 - .37) * .032;
-  const radius = ringRadius(harborHeight + 3) + .45 + Math.sin(angle * 2 - .8) * .27 + Math.sin(angle * 5) * .074;
+  const radius = ringRadius(harborHeight + 3) + clearance + .45 + Math.sin(angle * 2 - .8) * .27 + Math.sin(angle * 5) * .074;
   const rate = .54 * Math.cos(angle * 2 - .8) + .37 * Math.cos(angle * 5);
   const sine = Math.sin(angle), cosine = Math.cos(angle);
   const dx = radius * cosine + rate * sine, dz = -radius * sine + rate * cosine;
@@ -168,9 +168,9 @@ export function buildCityFerry() {
   group.add(wake);
   return {
     group,
-    update(time: number, night: number) {
+    update(time: number, night: number, clearance = 0) {
       const seconds = time / 1000;
-      const { x, z, heading, speed } = harborCourse(seconds);
+      const { x, z, heading, speed } = harborCourse(seconds, clearance);
       const pitch = time ? Math.sin(seconds * 1.7 + .6) : 0;
       const roll = time ? Math.sin(seconds * 1.19 + .18) : 0;
       model.position.set(x, seaLevel + pitch * .018, z);
@@ -180,7 +180,7 @@ export function buildCityFerry() {
         const sternDelay = 1.68 / Math.max(.80, speed);
         for (let i = 0; i <= strips; i++) {
           const trail = i / strips;
-          const earlier = harborCourse(seconds - sternDelay - trail * 3.70);
+          const earlier = harborCourse(seconds - sternDelay - trail * 3.70, clearance);
           const width = Math.min(.96 + .60 * trail, Math.hypot(earlier.x, earlier.z) - outerWaterline);
           const dx = Math.cos(earlier.heading) * width, dz = -Math.sin(earlier.heading) * width;
           waterline.setXYZ(i * 2, earlier.x + dx, seaLevel + .009, earlier.z + dz);

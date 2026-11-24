@@ -15,6 +15,7 @@ export type AdventureSave = {
   sparWon: boolean;
   courtVisits: SurveyId[];
   fortressOpened: boolean;
+  tideDialAwake: boolean;
   fortressStartedAt?: number;
   seen: CreatureId[];
   battle: BattleProgress;
@@ -76,7 +77,7 @@ export function recordCourt(save: AdventureSave, court: SurveyId): AdventureSave
 
 export function loadAdventure(): AdventureSave {
   const battle = initialBattleProgress();
-  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, seen: battle.team.map(member => member.id), battle };
+  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, tideDialAwake: false, seen: battle.team.map(member => member.id), battle };
   try {
     const stored = localStorage.getItem(saveKey);
     if (stored === null) {
@@ -101,7 +102,7 @@ export function loadAdventure(): AdventureSave {
       restored = { area: 'harbor', ...fortressPier };
     }
     return {
-      location: restored, fortressOpened, fortressStartedAt,
+      location: restored, fortressOpened, fortressStartedAt, tideDialAwake: fortressOpened && saved?.tideDialAwake === true,
       visited: [...new Set<FieldArea>(['harbor', ...visited, validLocation ? location.area : 'harbor'])],
       greeted: saved?.greeted === true,
       sparWon: saved?.sparWon === true,

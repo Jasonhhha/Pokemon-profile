@@ -12,7 +12,8 @@ import type { SurveyId } from './field-city-walks';
 import { buildRingArchitecture } from './field-ring-architecture';
 import { buildRingGates } from './field-ring-gates';
 import { buildRingGround } from './field-ring-ground';
-import { buildFortressExterior, fortressLift, fortressRadius, fortressShot } from './field-fortress-exterior';
+import { fortressLiftDepth } from './field-fortress-state';
+import { buildFortressExterior, fortressPanorama, fortressRadius, fortressShot } from './field-fortress-exterior';
 import { frameStreetSubject, harborAerialCamera, harborOverviewYaw, ringStreetLooksOutward, ringStreetRow } from './field-ring-coordinates';
 import { buildRingTerraces } from './field-ring-terraces';
 import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringRadius, ringXDelta } from './field-ring-space';
@@ -75,7 +76,7 @@ const atmospheres = {
 
 type SceneKey = keyof typeof atmospheres;
 type SceneModel = Omit<ReturnType<typeof buildFieldTerrain>, 'update'> & {
-  update: (time: number, night: number, pumpElapsed?: number, fortress?: FieldView['fortress']) => void;
+  update: (time: number, night: number, pumpElapsed?: number, fortress?: FieldView['fortress'], resonance?: number) => void;
   lamps?: CityLamp[];
   optics?: ReturnType<typeof buildCityLight>;
   crowd?: ReturnType<typeof buildCityCrowd>;
@@ -497,16 +498,17 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
           lamps: street.lamps,
           optics, crowd, occluders, reflections,
           dispose() { ferry.dispose(); gateways.dispose(); transit.dispose(); fortressExterior.dispose(); },
-          update(time, night, pumpElapsed, fortress) {
-            const seaDrop = (fortress?.lift ?? 0) * fortressLift;
-            ground.update(time, night, aerialAmount, seaDrop);
-            fortressExterior.update(fortress, time, night);
+          update(time, night, pumpElapsed, fortress, resonance) {
+            const seaDrop = (fortress?.lift ?? 0) * fortressLiftDepth;
+            const displacement = fortress?.cinematic ? Math.min(1,seaDrop*.17) * (1 - fortress.drain) : 0;
+            ground.update(time, night, aerialAmount, seaDrop, displacement);
+            fortressExterior.update(fortress, time, night, aerialAmount > .40, resonance);
             const shadowStep = seaDrop ? 1 + Math.round(Math.max(0, (fortress?.drain ?? 0) - .80) * 20) : 0;
             if (shadowStep !== fortressShadowStep) renderer.shadowMap.needsUpdate = true;
             fortressShadowStep = shadowStep;
             street.update(time, night, pumpElapsed);
             transit.update(time, night);
-            ferry.update(time, night);
+            ferry.update(time, night, Math.min(1, seaDrop / (fortressLiftDepth * .84)) * 14.2);
             ferry.group.position.y = -seaDrop;
             optics.update(night, time);
             updateCityArchitecture(night);
@@ -623,7 +625,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const { room, area } = view.location;
     const polar = area === 'harbor' && !room;
     const panorama = polar && view.overview;
-    const fortress = polar && view.fortress?.cinematic ? fortressShot(view.fortress, width / height) : undefined;
+    const fortress = polar && view.fortress?.cinematic ? fortressShot(view.fortress, width / height, reducedMotion.matches) : undefined;
     if (Boolean(fortress) !== previousFortressShot) previousTime = 0;
     previousFortressShot = Boolean(fortress);
     const lookout = room ? 0 : outlooks[area].reduce((strength, [pointX, pointY, radius]) => {
@@ -639,7 +641,8 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     depth += ((calm ? 0 : lookout) - depth) * lens;
     const mobile = cssWidth < 545;
     const aspect = width / height;
-    const tour = harborAerialCamera(aspect, mobile, view.orbitTilt);
+    const tour = polar && view.fortress?.phase === 'open'
+      ? fortressPanorama(aspect, view.orbitTilt) : harborAerialCamera(aspect, mobile, view.orbitTilt);
     const outward = polar && ringStreetLooksOutward(view.location.x, view.location.y);
     const focus = polar && !panorama && !fortress ? view.surveyFocus : undefined;
     const rustle = polar && !panorama && !focus && !fortress ? view.rustle : undefined;
@@ -722,7 +725,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const grid = polar ? 6 : 5;
     const viewportX = entireCity ? 0 : Math.round(aimX / grid) * grid;
     const viewportZ = entireCity ? 0 : Math.round(aimZ / grid) * grid;
-    const extent = entireCity ? ringRadius(harborHeight + 2) * 1.21 : polar ? (mobile ? 12.4 : 14.8) : 21;
+    const extent = entireCity ? ringRadius(harborHeight + 2) * (view.fortress?.lift ? 1.58 : 1.21) : polar ? (mobile ? 12.4 : 14.8) : 21;
     if (viewportX !== shadowX || viewportZ !== shadowZ || extent !== shadowExtent) {
       shadowX = viewportX;
       shadowZ = viewportZ;
@@ -833,7 +836,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         if (city) light.position.y -= .34;
       }
     });
-    model.update(reduced ? 0 : time, darkness, view.pumpElapsed, view.fortress);
+    model.update(reduced ? 0 : time, darkness, view.pumpElapsed, view.fortress, view.resonance);
     const cityWideShot = view.overview || previousFortressShot;
     model.crowd?.update(time, x, z, reduced, cssWidth < 545, cityWideShot);
     effects.update(time, view, heroPosition.x, heroPosition.z, progress, darkness, width / cssWidth, reduced);
