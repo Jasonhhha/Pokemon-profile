@@ -4,6 +4,7 @@ import { rooms } from './field-rooms';
 import { fortressMapAt, fortressPier, isFortressRoom } from './field-fortress-state';
 import { isMazeRoom, type MazeRoom } from './fortress-maze';
 import { newMazeTrail, recordMazeStep, restoreMazeTrail, type MazeTrail } from './fortress-survey';
+import { idleWard, restoreWard, type WardSurvey } from './fortress-ward-service';
 import { courtNotes, surveyStops, type SurveyId } from './field-city-walks';
 
 export const areas = ['harbor', 'grove', 'summit'] as const;
@@ -19,6 +20,7 @@ export type AdventureSave = {
   fortressOpened: boolean;
   tideDialAwake: boolean;
   kyuremObserved: boolean;
+  ward: WardSurvey;
   shortcuts: MazeRoom[];
   mazeTrail: MazeTrail;
   fortressStartedAt?: number;
@@ -82,7 +84,7 @@ export function recordCourt(save: AdventureSave, court: SurveyId): AdventureSave
 
 export function loadAdventure(): AdventureSave {
   const battle = initialBattleProgress();
-  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, tideDialAwake: false, kyuremObserved: false, shortcuts: [], mazeTrail: newMazeTrail(), seen: battle.team.map(member => member.id), battle };
+  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, tideDialAwake: false, kyuremObserved: false, ward: idleWard, shortcuts: [], mazeTrail: newMazeTrail(), seen: battle.team.map(member => member.id), battle };
   try {
     const stored = localStorage.getItem(saveKey);
     if (stored === null) {
@@ -109,6 +111,7 @@ export function loadAdventure(): AdventureSave {
     }
     return {
       kyuremObserved: fortressOpened && saved?.kyuremObserved === true,
+      ward: fortressOpened ? restoreWard(saved?.ward) : idleWard,
       shortcuts, mazeTrail: recordMazeStep(restoreMazeTrail(saved?.mazeTrail, shortcuts), restored),
       location: restored, fortressOpened, fortressStartedAt, tideDialAwake: fortressOpened && saved?.tideDialAwake === true,
       visited: [...new Set<FieldArea>(['harbor', ...visited, validLocation ? location.area : 'harbor'])],

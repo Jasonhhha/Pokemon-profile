@@ -3,6 +3,7 @@ import { isMazeRoom, mazeFloors } from './fortress-maze';
 import { drawFortressMaze2D, pickFortressMaze2D } from './fortress-maze-2d';
 import { drawFrozenMasonry, drawIceBed2D, drawIceSeal2D, warmIceSeal2D } from './fortress-ice-seal-2d';
 import { drawFortressLift2D, tileSkin } from './fortress-raster-materials';
+import { addWardPosts, drawWardDeck, drawWardSideArcades, pickWardPost, wardGrip } from './fortress-ward-gallery-2d';
 import { addRasterActors, loop, makeRasterPaint, noise, projection, tau, type Vertex } from './fortress-raster-space';
 
 type Context = CanvasRenderingContext2D;
@@ -11,7 +12,10 @@ const sealBackdrops=new WeakMap<Context,SealBackdrop>();
 
 export function fortressInteriorPoint2D(ctx: Context, frame: FortressInteriorFrame, px: number, py: number) {
   if (isMazeRoom(frame.room)) return pickFortressMaze2D(ctx,frame,px,py);
-  return projection(ctx, frame).ground(px, py);
+  const camera = projection(ctx, frame);
+  const floor = camera.ground(px, py);
+  if (frame.room === 'seal' && !frame.inspecting) return pickWardPost(camera,px,py,floor) ?? floor;
+  return floor;
 }
 
 export function fortressInteriorProject2D(ctx: Context, frame: FortressInteriorFrame, x: number, y: number) {
@@ -79,6 +83,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
     const shade=ctx.createLinearGradient(0,0,0,height);
     shade.addColorStop(0,'#0b1b27');shade.addColorStop(.65,seal?'#154454':'#23434b');shade.addColorStop(1,'#0c2734');
     ctx.fillStyle=shade;ctx.fillRect(0,0,width,height);
+    if(seal)drawWardSideArcades(paint);
     const waterTone=ctx.createLinearGradient(0,height*.13,0,height);
     waterTone.addColorStop(0,seal?'#536c81':'#133746');waterTone.addColorStop(.5,seal?'#526f82':'#28555b');waterTone.addColorStop(1,seal?'#233f52':'#102e3d');
     face([[.7,1,-.8],[16.3,1,-.8],[16.3,19.3,-.8],[.7,19.3,-.8]],waterTone);
@@ -179,7 +184,6 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       }
     }
   }
-  if(seal)drawIceSeal2D(frame,paint);
   const stones=seal?['#7b8d99','#899aa3','#8295a2','#91a2aa','#8396a3']:['#728582','#829087','#6b8083','#7b8d89','#8a948b'];
   for(let z=0;z<map.length;z++)for(let x=0;x<map[z].length;x++){
     if(!map[z][x])continue;
@@ -208,6 +212,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       }
     }
   }
+  if(seal)drawWardDeck(paint);
   // Residual pools span slab joints and mirror the lamps along the flooded walkway.
   const pools=seal ? [[8.3,12.15,.58,1.0],[8.76,14.64,.94,.41],[5.64,16.1,1.15,.56],[10.1,16.44,1.65,.72],[7.7,17.4,.58,.27]]
     : [[8.03,4.72,.68,.56],[9.05,7.64,.72,1.14],[7.71,10.05,.64,.46],[8.49,12.50,1.12,.55],[8.30,15.64,1.1,.80],
@@ -289,7 +294,7 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
       if(z<8)layers.push({z:z+.05,draw(){arcade(5.72,11.28,z);}});
     }
   }
-  const rails = seal ? [[7.02,11,15],[9.98,11,15]] : [[7.04,7,12],[9.96,7,12],[7.04,13,15.8],[9.96,13,15.8]];
+  const rails = seal ? [[7.02,11,11.94],[9.98,11,11.94],[7.02,13.05,15],[9.98,13.05,15]] : [[7.04,7,12],[9.96,7,12],[7.04,13,15.8],[9.96,13,15.8]];
   for(const [x,za,zb] of rails){
     layers.push({z:(za+zb)/2,draw(){
       for(let z=za;z<=zb;z+=1.0){
@@ -309,13 +314,15 @@ export function drawFortressInterior2D(ctx: Context, frame: FortressInteriorFram
     }});
   }
   if(seal){
+    layers.push({z:6.5,draw(){drawIceSeal2D(frame,paint);}});
+    addWardPosts(layers,frame,paint);
     for(const x of [6.56,10.44])layers.push({z:11.1,draw(){
       plate(x-.20,10.94,.40,.40,-.46,.38,'#b1a990','#617a78','#465e66');
       plate(x-.13,11.00,.26,.27,.37,1.09,'#718a89','#425f69','#314c57');
       lamp(x,11.11,1.17,true);
     }});
   }
-  addRasterActors(layers,frame,camera,ctx);
+  addRasterActors(layers,frame,camera,ctx,false,undefined,seal?wardGrip(frame,paint):undefined);
   layers.sort((a,b)=>a.z-b.z).forEach(l=>l.draw());
   const vignette=ctx.createRadialGradient(width*.49,height*.47,height*.26,width*.50,height*.50,Math.max(width*.62,height*.76));
   vignette.addColorStop(0,'#04131e00');vignette.addColorStop(1,'#03101bd6');

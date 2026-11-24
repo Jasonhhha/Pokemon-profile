@@ -16,13 +16,15 @@ export function projection(ctx: CanvasRenderingContext2D, frame: FortressInterio
   const { width, height } = ctx.canvas;
   const maze=isMazeRoom(frame.room) ? mazeFloors[frame.room] : undefined;
   const seal=frame.room==='seal', close=seal && frame.inspecting;
-  const pitch=maze ? .95 : close ? .52 : seal ? .74 : .64;
-  const yaw=maze ? (frame.room==='aqueduct' ? .24 : -.17) : close ? -.13 : seal ? .075 : .10;
+  // Move towards a side aisle before its terminal leaves the frame; the bridge keeps the frontal composition.
+  const gallery = seal && !close ? clamp((Math.abs(frame.x-8.5)-1.4)/4.0) : 0;
+  const pitch=maze ? .95 : close ? .52 : seal ? .74+gallery*.22 : .64;
+  const yaw=maze ? (frame.room==='aqueduct' ? .24 : -.17) : close ? -.13 : seal ? .075-gallery*.13*Math.sign(frame.x-8.5) : .10;
   const sin=Math.sin(yaw), cos=Math.cos(yaw), flat=Math.sin(pitch), up=Math.cos(pitch);
-  const anchorX=maze ? clamp(frame.x,3.7,maze.width-3.7) : close ? 8.5 : 8.5+(frame.x-8.5)*(seal ? .18 : .60);
+  const anchorX=maze ? clamp(frame.x,3.7,maze.width-3.7) : close ? 8.5 : 8.5+(frame.x-8.5)*(seal ? .18+gallery*.61 : .60);
   const anchorZ=maze ? clamp(frame.y-1.28,3.6,maze.height-3.6)
-    : close ? 6.91 : seal ? 10.55+(frame.y-13.5)*.22 : frame.y-2.95;
-  const scale=Math.min(height/(maze?9.8:close?8.15:seal?13.4 : 10.75),width/(maze?11.15:close?11.85:seal?14.1 : 11.8));
+    : close ? 6.91 : seal ? 10.55+(frame.y-13.5)*(.22+gallery*.49)+gallery*.92 : frame.y-2.95;
+  const scale=Math.min(height/(maze?9.8:close?8.15:seal?13.4-gallery*3.0 : 10.75),width/(maze?11.15:close?11.85:seal?14.1-gallery*2.25 : 11.8));
   const distance=maze?28:close?25:seal?31 : 20.6;
   const small=width/height<1.50;
   const age=frame.roarAge;
@@ -81,7 +83,7 @@ export function makeRasterPaint(ctx:CanvasRenderingContext2D, frame:FortressInte
 }
 export type RasterPaint=ReturnType<typeof makeRasterPaint>;
 
-export function addRasterActors(layers:Layer[],frame:FortressInteriorFrame,camera:Projection,ctx:CanvasRenderingContext2D,sortDepth=false,surfaceAt?:(x:number,z:number)=>number){
+export function addRasterActors(layers:Layer[],frame:FortressInteriorFrame,camera:Projection,ctx:CanvasRenderingContext2D,sortDepth=false,surfaceAt?:(x:number,z:number)=>number,grip?:{point:Screen;weight:number}){
   const {point}=camera;
   const order=sortDepth?camera.depth:(_x:number,z:number)=>z;
   const time=frame.reduced?0:frame.now/1000;
@@ -121,13 +123,32 @@ export function addRasterActors(layers:Layer[],frame:FortressInteriorFrame,camer
     const floor=surfaceAt?.(frame.x,frame.y)??0;
     const p=point(frame.x,frame.y,floor),sz=Math.abs(point(frame.x+.7,frame.y,floor).x-p.x)/.7;
     const step=frame.reduced||Math.abs(frame.stride)<.08?0:frame.stride>0?1 : 2;
+    function traveler(){
+      if(!grip){drawFieldActor(ctx,'player',frame.facing,step,0,0);return;}
+      const k=grip.weight, side=grip.point.x<p.x?-1:1, pixel=sz/16;
+      ctx.save();
+      // The weight stays over the boots while the shoulders follow the handwheel.
+      ctx.transform(1,0,-side*k*.13,1-.065*k,0,0);
+      drawFieldActor(ctx,'player',side<0?'left':'right',0,0,0);ctx.restore();
+      const shoulder={x:side*(3.7+k),y:-11+k*.7};
+      const wrist={x:side*6*(1-k)+(grip.point.x-p.x)/pixel*k,y:-7*(1-k)+(grip.point.y-p.y)/pixel*k};
+      const elbow={x:shoulder.x+(wrist.x-shoulder.x)*.41,y:Math.max(-7.8,(wrist.y+shoulder.y)*.5+2.9)};
+      const segment=(a:Screen,b:Screen,color:string,width:number)=>{
+        ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();
+        ctx.moveTo(Math.round(a.x),Math.round(a.y));ctx.lineTo(Math.round(b.x),Math.round(b.y));ctx.stroke();
+      };
+      ctx.lineCap='square';
+      segment(shoulder,elbow,'#38394a',3.1);segment(elbow,wrist,'#38394a',2.7);
+      segment(shoulder,elbow,'#556c71',1.6);segment(elbow,wrist,'#9b7863',1.3);
+      ctx.fillStyle='#e0b58a';ctx.fillRect(Math.round(wrist.x)-1,Math.round(wrist.y)-1,2,2);
+    }
     const alpha=reflection(frame.x,frame.y);
     if(alpha){
       ctx.save();ctx.globalAlpha=alpha;ctx.translate(p.x,p.y);ctx.scale(sz/16,-sz/16*.31);
-      drawFieldActor(ctx,'player',frame.facing,step,0,0);ctx.restore();
+      traveler();ctx.restore();
     }
     shadow(p,sz,.70);
     ctx.save();ctx.translate(p.x,p.y);ctx.scale(sz/16,sz/16);ctx.imageSmoothingEnabled=false;
-    drawFieldActor(ctx,'player',frame.facing,step,0,0);ctx.restore();
+    traveler();ctx.restore();
   }});
 }

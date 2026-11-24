@@ -25,6 +25,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { createWaterRelief } from './fortress-relief';
 import { carvedDrum, createTideDial } from './fortress-tide-dial';
 import type { FortressRoom } from './field-fortress-state';
+import { wardPosts, wardWalkway } from './fortress-ward-service';
 
 const tau = Math.PI * 2;
 function grain(n: number) {
@@ -186,12 +187,6 @@ export function buildFortressStonework(room: FortressRoom) {
   }
   function cyl(m: Material, x: number, y: number, z: number, r: number, h: number, rot: Point = [0, 0, 0]) {
     put(geom.column, m, [x, y, z], [r, h, r], rot);
-  }
-  function beam(m: Material, a: Point, b: Point, w: number, d: number) {
-    const v = new Vector3(...b).sub(new Vector3(...a));
-    placer.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), v.clone().normalize());
-    const rot: Point = [placer.rotation.x, placer.rotation.y, placer.rotation.z];
-    put(geom.cube, m, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], [w, v.length(), d], rot);
   }
   function wall(x: number, z: number, length: number, height: number, side = false) {
     const course = 0.48,
@@ -480,6 +475,67 @@ export function buildFortressStonework(room: FortressRoom) {
     for (let offset = -w / 2 + 0.13; offset < w / 2; offset += 0.3)
       put(geom.nut, iron, [x + offset, 0.036, z], [0.023, 0.014, 0.023]);
   }
+  function serviceGalleries() {
+    for (let z = 3; z <= 12; z++)
+      for (let x = 2; x <= 14; x++) {
+        if (!wardWalkway(x, z) || (z === 12 && x >= 7 && x <= 9)) continue;
+        const cx = x + 0.5,
+          cz = z + 0.5;
+        const station = wardPosts.find((post) => post.tile.x === x && post.tile.y === z);
+        const horizontal = z === 12 && x !== 2 && x !== 14;
+        // Stone borders carry an inlaid run of bronze conduits; open floor drains reveal the cold basin below.
+        box(wet, cx, -0.225, cz, 0.99, 0.43, 0.99);
+        if (station || (x + z) % 3 !== 0) {
+          box(floor, cx, -0.026, cz, 0.982, 0.07, 0.971, 0.81 + 0.15 * grain(x * 5 + z));
+          const dx = horizontal ? 0 : x < 8 ? -0.34 : 0.34,
+            dz = horizontal ? 0.34 : 0;
+          box(patina, cx + dx, 0.016, cz + dz, horizontal ? 0.982 : 0.058, 0.018, horizontal ? 0.058 : 0.971);
+        } else {
+          box(dark, cx, -0.121, cz, 0.94, 0.18, 0.94);
+          for (let i = -3; i <= 3; i++)
+            box(
+              iron,
+              horizontal ? cx + i * 0.126 : cx,
+              0.001,
+              horizontal ? cz : cz + i * 0.126,
+              horizontal ? 0.064 : 0.94,
+              0.039,
+              horizontal ? 0.94 : 0.064,
+            );
+          for (const side of [-1, 1])
+            box(
+              bronze,
+              horizontal ? cx : cx + side * 0.451,
+              0.016,
+              horizontal ? cz + side * 0.451 : cz,
+              horizontal ? 0.98 : 0.065,
+              0.046,
+              horizontal ? 0.065 : 0.98,
+            );
+        }
+        if ((z === 12 && (x === 4 || x === 12)) || ((x === 2 || x === 14) && z % 3 === 0)) {
+          cyl(wet, cx, -0.66, cz, 0.245, 0.61);
+          cyl(bronze, cx, -0.43, cz, 0.285, 0.085);
+        }
+      }
+    for (const x of [2.04, 14.96]) {
+      rail(x, 3.15, 11.85);
+      const inner = x < 8 ? 2.95 : 14.05;
+      rail(inner, 4.28, 8.48);
+      rail(inner, 10.37, 11.02);
+    }
+    for (const post of wardPosts) {
+      const { x, y } = post.tile,
+        px = x + 0.5,
+        pz = y + 0.5;
+      // A brass quadrant and two shoe plates show where to stand at the head of each drive.
+      for (const toe of [-0.18, 0.18]) {
+        box(weathered, px + toe, 0.022, pz + 0.15, 0.16, 0.032, 0.28, 0.82);
+        for (let i = -1; i <= 1; i++) box(iron, px + toe, 0.041, pz + 0.15 + i * 0.075, 0.14, 0.012, 0.021);
+      }
+      put(geom.torus, bronze, [px, 0.024, pz], [0.365, 0.365, 0.12], [-Math.PI / 2, 0, 0]);
+    }
+  }
   const customGeometry: BufferGeometry[] = [];
   function basinSurround() {
     const points: number[] = [],
@@ -728,7 +784,7 @@ export function buildFortressStonework(room: FortressRoom) {
         [0, a, 0],
       );
     }
-    for (const a of [-2.32, 2.32, -1.04, 1.04]) {
+    for (const { bearing: a } of wardPosts) {
       const x = cx + Math.sin(a) * 5.85,
         z = cz + Math.cos(a) * 5.85;
       cyl(wet, x, -0.74, z, 0.62, 1.6);
@@ -743,11 +799,14 @@ export function buildFortressStonework(room: FortressRoom) {
         tailZ = cz + Math.cos(a) * 4.55;
       cyl(bronze, tailX, -0.48, tailZ, 0.14, 0.09);
       cyl(iron, tailX, -0.423, tailZ, 0.062, 0.028);
-      beam(bronze, [x, 0.97, z], [tailX, -0.48, tailZ], 0.046, 0.046);
     }
     flagstones(8.5, 17, 9, 4);
     flagstones(8.5, 13, 3, 4);
-    for (const x of [7.04, 9.96]) rail(x, 11.06, 14.94);
+    serviceGalleries();
+    for (const x of [7.04, 9.96]) {
+      rail(x, 11.04, 11.89);
+      rail(x, 13.08, 14.94);
+    }
     for (const z of [11.21, 14.8, 17.72]) brassBand(8.5, z, 2.85);
     for (const x of [6.19, 10.81]) {
       cyl(wet, x, 0.3, 15.29, 0.39, 0.61);
@@ -759,6 +818,10 @@ export function buildFortressStonework(room: FortressRoom) {
       [11.0, 17.6, 1.04, 0.36, -0.37],
       [8.25, 13.91, 0.86, 0.31, 0.21],
       [8.98, 12.4, 0.43, 0.65, -0.24],
+      [2.54, 5.34, .22, .46, -.12],
+      [2.39, 10.63, .18, .39, .21],
+      [14.43, 8.56, .24, .38, -.26],
+      [12.43, 12.49, .37, .19, .18],
     ])
       puddles.push({ x, z, w, d, angle: a });
   }
@@ -811,24 +874,28 @@ export function buildFortressStonework(room: FortressRoom) {
   // Fade only near-camera masonry that would screen the traveler on the narrow galleries.
   // The same architecture remains solid in the distance and keeps casting its normal shadows.
   const walker = { value: new Vector3() };
+  const service = { value: Number(room === 'seal') };
   for (const finish of [stone, pale, wet, weathered, serpentine, bronze, patina]) {
     finish.onBeforeCompile = shader => {
       shader.uniforms.palaceWalker = walker;
+      shader.uniforms.palaceService = service;
       shader.vertexShader =
-        'varying vec3 palaceWorld;\n' +
+        'varying vec3 palaceWorld;varying vec3 palaceOrigin;\n' +
         shader.vertexShader.replace(
           '#include <project_vertex>',
           `
         #include <project_vertex>
         #ifdef USE_INSTANCING
           palaceWorld=(modelMatrix*instanceMatrix*vec4(transformed,1.)).xyz;
+          palaceOrigin=(modelMatrix*instanceMatrix[3]).xyz;
         #else
           palaceWorld=(modelMatrix*vec4(transformed,1.)).xyz;
+          palaceOrigin=modelMatrix[3].xyz;
         #endif
       `,
         );
       shader.fragmentShader =
-        'uniform vec3 palaceWalker;varying vec3 palaceWorld;\n' +
+        'uniform vec3 palaceWalker;uniform float palaceService;varying vec3 palaceWorld;varying vec3 palaceOrigin;\n' +
         shader.fragmentShader.replace(
           '#include <clipping_planes_fragment>',
           `
@@ -841,6 +908,13 @@ export function buildFortressStonework(room: FortressRoom) {
         float cut=(1.-smoothstep(width,width+.42,radial))*smoothstep(.022,.109,depth);
         cut=max(cut,1.-smoothstep(1.35,2.58,distance(palaceWorld,cameraPosition)));
         cut*=smoothstep(.09,.55,palaceWorld.y)*step(0.,cameraPosition.y);
+        // At the service rails, section the foreground arcade one masonry piece at a time.
+        // Its silhouette remains solid instead of leaving a stipple across the side of the screen.
+        float side=sign(palaceWalker.x-8.5);
+        if(palaceService>.5 && cameraPosition.y>0. && abs(palaceWalker.x-8.5)>3.2 && side*(palaceOrigin.x-8.5)>6.7){
+          if(palaceOrigin.z>palaceWalker.z+3.4 && palaceOrigin.y>.4)discard;
+          cut=0.;
+        }
         if(cut>fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715)))))discard;
       `,
         );

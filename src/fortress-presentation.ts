@@ -67,6 +67,7 @@ export function createFortressPresentation(canvas: HTMLCanvasElement) {
     frame = {
       room, now, reduced, facing: view.facing, inspecting: view.inspectingSeal, resonance: view.resonance,
       liftUnlocked: view.liftUnlocked, liftPassage: view.liftPassage, shortcutOpen: view.shortcutOpen, gateAge: view.gateAge, roarAge: view.roarAge,
+      ward: view.ward, wardAdjustmentAge: view.wardAdjustmentAge, wardSettledAge: view.wardSettledAge,
       x: .5 + (step ? step.from.x + (step.to.x - step.from.x) * fraction : view.location.x),
       y: .5 + (step ? step.from.y + (step.to.y - step.from.y) * fraction : view.location.y),
       stride: step ? Math.sin(Math.PI * fraction) * (alternatingFoot ? -1 : 1) : 0,

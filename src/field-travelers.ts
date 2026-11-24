@@ -182,7 +182,10 @@ function positionLeg(leg: ReturnType<typeof makeLeg>, phase: number, energy: num
   leg.ankle.rotation.x = -(leg.hip.rotation.x + leg.knee.rotation.x) + Math.sin(Math.PI * lift) * energy * .20;
 }
 
-type TravelerPose = { facing: Direction; time: number; phase?: number; running?: boolean; reduced?: boolean; focus?: boolean };
+type TravelerPose = {
+  facing: Direction; time: number; phase?: number; running?: boolean; reduced?: boolean; focus?: boolean;
+  handwheel?: {progress:number; heading:number};
+};
 
 export function createTraveler(role: Role) {
   const c = outfits[role];
@@ -257,10 +260,10 @@ export function createTraveler(role: Role) {
   let gait = 0;
   let strength = 0;
 
-  function pose({ facing, time, phase, reduced = false, running = false, focus = false }: TravelerPose) {
+  function pose({ facing, time, phase, reduced = false, running = false, focus = false, handwheel }: TravelerPose) {
     const duration = Math.min(65, Math.max(0, time - lastTime));
     const instant = reduced || !lastTime || time - lastTime > 220;
-    const angle = facingAngle[facing];
+    const angle = handwheel?.heading ?? facingAngle[facing];
     const difference = Math.atan2(Math.sin(angle - heading), Math.cos(angle - heading));
     heading = instant ? angle : heading + difference * (1 - Math.exp(-duration / 41));
     lastTime = time;
@@ -285,6 +288,23 @@ export function createTraveler(role: Role) {
     torso.rotation.set(lean, .066 * step, -.055 * step);
     head.rotation.x = -lean * .75 + (focus ? .029 : 0);
     head.rotation.z = .034 * step + (focus ? .035 : 0);
+    if (handwheel) {
+      const p = handwheel.progress;
+      const grip = Math.min(1, p/.16, (1-p)/.19);
+      const wind = 2.7 * Math.PI * p*p*(3-2*p), pull = Math.sin(wind);
+      // The feet remain planted while the shoulders alternate between pushing
+      // and pulling the rim; both hands release before returning to rest.
+      for (let i=0;i<arms.length;i++) {
+        const side=i===0 ? -1 : 1;
+        arms[i].rotation.x -= (1.23 + side*.52*pull)*grip;
+        arms[i].rotation.z -= side*(.33+.16*Math.cos(wind))*grip;
+      }
+      torso.position.z += .095*grip;
+      torso.position.y -= .045*grip;
+      torso.rotation.x += .19*grip;
+      torso.rotation.y += .095*pull*grip;
+      head.rotation.x += .07*grip;
+    }
     const blink = (seconds + idleOffset) % 4.7;
     eyes.scale.y = reduced || blink > .16 ? 1 : .14 + .86 * Math.abs(blink / .08 - 1);
   }

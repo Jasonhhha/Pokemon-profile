@@ -285,12 +285,14 @@ export function createIcePrison() {
   });
   const responseSkin = buildWardResponse(centre, barrierScale, contact, eyeLine);
   root.add(responseSkin.root);
-  const anchors = createWardAnchors(centre, barrierScale, contact);
+  const anchors = createWardAnchors(centre, barrierScale);
   root.add(anchors.root);
   const from = new Vector3(),
     delta = new Vector3();
   return {
     root,
+    landmarkAt: anchors.landmarkAt,
+    handwheel: anchors.handwheel,
     update(
       time: number,
       frame: FortressInteriorFrame,
@@ -312,7 +314,7 @@ export function createIcePrison() {
         shadow.position.set(foot.x, glacialHeightAt(foot.x, foot.z) + 0.013, foot.z);
       });
       responseSkin.update(a, frame.reduced, muzzle);
-      anchors.update(a, frame.reduced, height);
+      anchors.update(a, frame, height);
       from.copy(muzzle);
       delta.subVectors(impact, from);
       mist.material.uniforms.h.value = height;

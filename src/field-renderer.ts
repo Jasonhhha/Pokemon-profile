@@ -6,6 +6,7 @@ import type { Direction, WalkStep } from './field';
 import type { CreatureId } from './creatures';
 import type { CityStop } from './field-city-walks';
 import type { FortressView } from './field-fortress-state';
+import type { WardSurvey } from './fortress-ward-service';
 
 type Point = { x: number; y: number };
 type SceneArt = ReturnType<typeof makeMapArt> & { padding: number };
@@ -20,6 +21,9 @@ export type FieldView = {
   liftPassage?: { down: boolean; fraction: number };
   gateAge: number;
   roarAge: number;
+  ward?: WardSurvey;
+  wardAdjustmentAge?: number;
+  wardSettledAge?: number;
   overview: boolean;
   orbitOffset: number;
   orbitTilt: number;

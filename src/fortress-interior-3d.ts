@@ -115,6 +115,8 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   if (monster) scene.add(monster.root);
   return {
     scene,
+    landmarkAt(ray: Raycaster) { return prison?.landmarkAt(ray); },
+    handwheel(frame: FortressInteriorFrame) { return prison?.handwheel(frame); },
     surfaceAt(_x: number, _z: number) {
       return 0;
     },
@@ -220,12 +222,15 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         camera.position.set(focusX + 1.15 * fit, 0.2 + 7.85 * fit, focusZ + 8.5 * fit);
         camera.lookAt(focusX, 0.2, focusZ);
       } else {
-        const focusX = isSeal ? 8.5 + (frame.x - 8.5) * 0.32 * (1 - closeBlend) : frame.x;
-        const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * 0.6 : frame.y - 3.89;
+        const dx = frame.x - 8.5;
+        const sideWeight = isSeal ? Math.min(1, Math.max(0, (Math.abs(dx) - 1.05) / 3.6)) : 0;
+        const wing = sideWeight * sideWeight * (3 - 2 * sideWeight) * (1 - closeBlend);
+        const focusX = isSeal ? 8.5 + dx * (0.32 + 0.54 * wing) * (1 - closeBlend) : frame.x;
+        const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * (0.6 + 0.33 * wing) - 0.65 * wing : frame.y - 3.89;
         const focusZ = wideZ + (6.64 - wideZ) * closeBlend - entry * 0.58;
-        const fit = Math.max(1, (isSeal ? 1.49 : 1.2) / camera.aspect);
-        const eyeZ = isSeal ? 12.65 - 0.6 * closeBlend : 11.0;
-        const eyeY = isSeal ? 8.6 - 1.7 * closeBlend : 5.83;
+        const fit = Math.max(1, (isSeal ? 1.49 - 0.35 * wing : 1.2) / camera.aspect);
+        const eyeZ = isSeal ? 12.65 - 0.6 * closeBlend - 4.0 * wing : 11.0;
+        const eyeY = isSeal ? 8.6 - 1.7 * closeBlend + 0.87 * wing : 5.83;
         let shakeX = 0,
           shakeY = 0;
         const since = (frame.roarAge ?? Infinity) - 0.78;
@@ -235,7 +240,7 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
           shakeY = impulse * 0.56 * Math.sin(since * 51);
         }
         camera.position.set(
-          focusX + (isSeal ? 1.12 + 0.12 * closeBlend : 0.48) + shakeX,
+          focusX + (isSeal ? 1.12 + 0.12 * closeBlend + (Math.sign(dx)*.70-1.12)*wing : 0.48) + shakeX,
           (eyeY + entry * 0.77) * fit + shakeY,
           focusZ + (eyeZ + entry * 1.34) * fit,
         );
@@ -251,7 +256,13 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       const support = room.surfaceAt(frame.x, frame.y);
       traveler.model.position.set(frame.x, support, frame.y);
       actorShadow.position.set(frame.x, support + 0.02, frame.y);
-      traveler.pose({ time: frame.now, facing: frame.facing, phase: frame.gaitPhase, reduced: frame.reduced });
+      traveler.pose({
+        time: frame.now,
+        facing: frame.facing,
+        phase: frame.gaitPhase,
+        reduced: frame.reduced,
+        handwheel: 'handwheel' in room ? room.handwheel(frame) : undefined,
+      });
       companion.update(frame.companionImage, {
         x: frame.companionX ?? frame.x,
         z: frame.companionY ?? frame.y + 0.72,
@@ -281,9 +292,9 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         tileY = Math.floor(target.z);
       const walkable = map.walkable[tileY]?.[tileX];
       const room = rooms.get(active);
-      if (room && 'landmarkAt' in room) {
+      if (room) {
         const sign = room.landmarkAt(ray);
-        if (sign && (!walkable || Math.abs(Math.floor(sign.x) - tileX) + Math.abs(Math.floor(sign.y) - tileY) >= 2))
+        if (sign && (active === 'seal' || !walkable || Math.abs(Math.floor(sign.x) - tileX) + Math.abs(Math.floor(sign.y) - tileY) >= 2))
           return sign;
       }
       if (walkable) return { x: target.x, y: target.z };

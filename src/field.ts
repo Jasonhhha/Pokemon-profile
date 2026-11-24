@@ -8,9 +8,10 @@ import { cityStops, surveyAt, surveyStops, type CityStop, type SurveyId } from '
 import { fortressDial, fortressLiftStops, fortressMapAt, fortressMaps, fortressOrder, fortressPier, fortressRooms, fortressSequence, kyuremTiming, openFortress, sleepingFortress, type FortressView, type RoarPhase } from './field-fortress-state';
 import { isMazeRoom, mazeFloors, type MazePoint, type MazeRoom } from './fortress-maze';
 import { knownWalkway } from './fortress-survey';
+import { nearbyWardPost, quietReading, wardArrival, wardPosts, wardSide, wardTestDuration, type WardReading, type WardSurvey } from './fortress-ward-service';
 import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
-import type { Footing } from './sound';
+import type { Footing, SoundCue } from './sound';
 import { createFieldPresentation, streetAxisMinSpan } from './field-presentation';
 import { fieldFadeDuration } from './field-renderer';
 
@@ -35,6 +36,9 @@ interface FieldOptions {
   onShortcut: (room: MazeRoom) => void;
   onLiftTravel: (active: boolean) => void;
   onRoarPhase: (phase: RoarPhase) => void;
+  ward: WardSurvey;
+  onWardChanged: (survey: WardSurvey) => void;
+  onWardReading: (reading: WardReading) => void;
   onCryStop: () => void;
   fortressStartedAt?: number;
   onFortressSave: (started: number | null) => void;
@@ -46,7 +50,7 @@ interface FieldOptions {
   onSurvey: (id: SurveyId) => void;
   onReady?: () => void;
   onOverview?: (active: boolean) => void;
-  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal' | 'tideDial' | 'kyuremCry' | 'wardImpact' | 'bridge' | 'iceGate', surface?: Footing) => void;
+  onSound?: (sound: SoundCue, surface?: Footing) => void;
 }
 
 export interface FieldControls {
@@ -66,6 +70,8 @@ export interface FieldControls {
   approachTideDial: () => void;
   walkRecorded: (point: MazePoint, walked: readonly number[]) => boolean;
   callKyurem: () => boolean;
+  startWardSurvey: () => void;
+  pulseWard: () => boolean;
   rideFortressLift: () => void;
   replayFortress: () => void;
   leaveRoom: () => void;
@@ -189,6 +195,12 @@ export function createField(options: FieldOptions): FieldControls {
   let liftRide: { down: boolean; started: number; duration: number; changed: boolean } | undefined;
   let gateStarted = -Infinity;
   let roarStarted = -Infinity;
+  let ward = options.ward;
+  let reading = quietReading;
+  let adjustedAt = -Infinity;
+  let settledAt = -Infinity;
+  let echoPlayed = false;
+  let sampleComplete = false;
   let nextRoar = performance.now() + 3800;
   let roarPhase: RoarPhase = 'quiet';
   let lastCall = -Infinity;
@@ -343,6 +355,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function quietSeal(time: number) {
+    if (reading.testing || reading.sampling) reportWard({ ...reading, testing: false, sampling: false });
     if (roarPhase !== 'quiet') options.onRoarPhase('quiet');
     if (location.fortressRoom === 'seal' || Number.isFinite(roarStarted)) options.onCryStop();
     roarPhase = 'quiet';
@@ -352,10 +365,87 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function startRoar(time: number) {
+    echoPlayed = false;
+    sampleComplete = false;
     roarPhase = 'breath';
     roarStarted = time;
     nextRoar = time + (inspectingSeal ? 14800 : 17400);
     options.onRoarPhase('breath');
+  }
+
+  function reportWard(next: WardReading) {
+    reading = next;
+    options.onWardReading(next);
+    refreshHint();
+  }
+
+  function saveWard(next: WardSurvey) {
+    ward = next;
+    options.onWardChanged(next);
+  }
+
+  function startWardSurvey() {
+    if (paused || location.fortressRoom !== 'seal' || !inspectingSeal || ward.phase !== 'idle') return;
+    const time = performance.now();
+    quietSeal(time);
+    const fault = wardPosts[Math.floor(Math.random() * wardPosts.length)].id;
+    saveWard({ phase: 'seeking', fault });
+    inspectingSeal = false;
+    options.onFortressView(fortress, false);
+    reportWard({ ...quietReading, sampling: true });
+    startRoar(time);
+  }
+
+  function pulseWard() {
+    if (paused || covered || document.hidden || location.fortressRoom !== 'seal' || reading.testing || reading.sampling) return false;
+    const testing = inspectingSeal && (ward.phase === 'braced' || ward.phase === 'stable');
+    if (!testing && (inspectingSeal || ward.phase !== 'seeking')) return false;
+    const time = performance.now();
+    options.onCryStop();
+    reportWard({ ...reading, heard: false, testing, sampling: !testing });
+    startRoar(time);
+    return true;
+  }
+
+  function sampleWard(age: number) {
+    if (ward.phase !== 'seeking' && !reading.testing || sampleComplete) return;
+    const post = wardPosts.find(post => post.id === ward.fault)!;
+    const arrival = wardArrival(post.bearing);
+    if (age < arrival) return;
+    if (!echoPlayed) {
+      echoPlayed = true;
+      if (age < arrival + .4) options.onSound?.(ward.phase === 'seeking' ?
+        (post.bearing < 0 ? 'slackWest' : 'slackEast') : 'wardTension');
+    }
+    if (age < (reading.testing ? wardTestDuration : arrival + .46)) return;
+    sampleComplete = true;
+    if (reading.testing) {
+      settledAt = roarStarted + age * 1000;
+      if (ward.phase === 'braced') saveWard({ ...ward, phase: 'stable' });
+    }
+    reportWard({ ...reading, heard: true, testing: false, sampling: false });
+  }
+
+  function inspectWard() {
+    const post = nearbyWardPost(location);
+    if (!post || ward.phase !== 'seeking' || inspectingSeal) return false;
+    if (post.id === ward.fault && reading.inspected === post.id) {
+      if (!sameTile(location, post.tile)) return route([post.tile], inspectWard);
+      stopRouting();
+      clearInput();
+      facing = post.id === 'nw' || post.id === 'ne' ? 'up' : post.id === 'sw' ? 'right' : 'left';
+      saveWard({ ...ward, phase: 'braced' });
+      adjustedAt = performance.now();
+      options.onSound?.('ratchet');
+    } else {
+      options.onSound?.('wardTension');
+    }
+    reportWard({ ...reading, inspected: post.id, sampling: ward.phase === 'seeking' && reading.sampling });
+    return true;
+  }
+
+  function turningWinch(time: number) {
+    return location.fortressRoom === 'seal' && time - adjustedAt < (reducedMotion.matches ? 180 : 800);
   }
 
   function updateRoar(time: number) {
@@ -363,6 +453,7 @@ export function createField(options: FieldOptions): FieldControls {
     if (time >= nextRoar) startRoar(time);
     if (!Number.isFinite(roarStarted)) return;
     const age = (time - roarStarted) / 1000;
+    sampleWard(age);
     const phase = age < kyuremTiming.voice ? 'breath' : age < kyuremTiming.impact ? 'roar' : age < kyuremTiming.decay ? 'impact' : 'quiet';
     if (phase === roarPhase) return;
     // A slow frame can span the onset and the impact together.
@@ -395,6 +486,13 @@ export function createField(options: FieldOptions): FieldControls {
       return hint('沿湿石通道向北，尽头的阶梯通往回流水渠');
     }
     if (location.fortressRoom === 'seal') {
+      if (ward.phase === 'seeking') {
+        const post = nearbyWardPost(location);
+        if (post && reading.inspected === post.id) return hint(post.id === ward.fault ? '止退爪错了一齿，可以收紧锁链' : '指针只回摆一次，锁链正常');
+        if (post) return hint('操作绞盘，检查指针的回摆');
+        return hint(reading.heard ? wardSide(ward.fault) + '传来两声回震，沿侧廊检查绞盘' : '留意回震 · 两声金属碰撞来自松链的一侧');
+      }
+      if (ward.phase === 'braced') return hint('锁链已收紧 · 回到桥头复测封印');
       if (distance(location, { x: 8, y: 11 }) <= 1) return hint('互动 · 观察能量罩中的酋雷姆');
       if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回陵廊');
       return hint('向北沿观测桥靠近封印 · 留意能量罩上的波纹');
@@ -459,6 +557,8 @@ export function createField(options: FieldOptions): FieldControls {
     step = undefined;
     trail = undefined;
     quietSeal(time);
+    if (location.fortressRoom === 'seal' && reading !== quietReading) reportWard(quietReading);
+    adjustedAt = -Infinity;
     gateStarted = -Infinity;
     location = { ...to };
     renderer.resetCamera();
@@ -518,6 +618,7 @@ export function createField(options: FieldOptions): FieldControls {
     if (!step) return;
     trail = step.from;
     location = { ...location, ...step.to };
+    if (reading.inspected && nearbyWardPost(location)?.id !== reading.inspected) reportWard({ ...reading, inspected: undefined });
     step = undefined;
     const map = mapAt(location);
     const exit = map.exits.find(gate => sameTile(gate, location));
@@ -600,6 +701,7 @@ export function createField(options: FieldOptions): FieldControls {
     if (floor) {
       const stairs = fortressRooms[floor];
       if (atLift() && shortcuts.includes('catacomb')) { startLift(); return true; }
+      if (floor === 'seal' && inspectWard()) return true;
       if (isMazeRoom(floor) && distance(location, mazeFloors[floor].switch) <= 1) {
         if (!shortcuts.includes(floor)) {
           shortcuts.push(floor);
@@ -660,8 +762,9 @@ export function createField(options: FieldOptions): FieldControls {
     if (paused || liftRide || fortress.cinematic || inspectingSeal) return;
     setOverview(false);
     stopRouting();
-    if (step || performance.now() - fadedAt < (reducedMotion.matches ? 0 : fieldFadeDuration)) queued = direction;
-    else beginStep(direction, performance.now());
+    const time = performance.now();
+    if (step || turningWinch(time) || time - fadedAt < (reducedMotion.matches ? 0 : fieldFadeDuration)) queued = direction;
+    else beginStep(direction, time);
   }
 
   function streetDirection(direction: Direction): Direction {
@@ -732,6 +835,11 @@ export function createField(options: FieldOptions): FieldControls {
       }
     }
     const point = renderer.pointInWorld(screenX, screenY);
+    if (point && location.fortressRoom === 'seal' && ward.phase === 'seeking') {
+      const tile = { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) };
+      const post = wardPosts.find(post => sameTile(tile, post.tile));
+      if (post) { route([post.tile], inspectWard); return; }
+    }
     if (point && (location.fortressRoom === 'sluice' || location.fortressRoom === 'catacomb')) {
       const stop = fortressLiftStops[location.fortressRoom];
       if (Math.floor(point.x / TILE) === stop.x && Math.floor(point.y / TILE) === stop.y && shortcuts.includes('catacomb')) {
@@ -841,6 +949,7 @@ export function createField(options: FieldOptions): FieldControls {
       liftPassage: liftRide ? { down: liftRide.down, fraction: Math.min(1, Math.max(0, (time - liftRide.started) / liftRide.duration)) } : undefined,
       shortcutOpen: isMazeRoom(location.fortressRoom) && shortcuts.includes(location.fortressRoom),
       gateAge: (time - gateStarted) / 1000, roarAge: (time - roarStarted) / 1000,
+      ward, wardAdjustmentAge: (time - adjustedAt) / 1000, wardSettledAge: (time - settledAt) / 1000,
       resonance: dialAwake ? reducedMotion.matches ? 1 : Math.min(1, Math.max(0, (time - dialStarted) / 2700)) : 0,
       pumpElapsed: time - pumpStarted < 3600 ? (reducedMotion.matches ? 1 : Math.max(0, time - pumpStarted) / 1000) : undefined,
       activeNpcFacing: activeNpc && !sameTile(activeNpc, location) ? directionTo(activeNpc, location, map.wrapX) : undefined,
@@ -877,7 +986,7 @@ export function createField(options: FieldOptions): FieldControls {
       rustle = undefined;
       refreshHint();
     }
-    if (!paused && !liftRide && !fortress.cinematic && !inspectingSeal) {
+    if (!paused && !liftRide && !fortress.cinematic && !inspectingSeal && !turningWinch(time)) {
       landStep(time);
       if (step && time - step.startedAt >= step.duration) finishStep(time);
       if (!step && time - fadedAt >= (reducedMotion.matches ? 0 : fieldFadeDuration)) {
@@ -939,7 +1048,7 @@ export function createField(options: FieldOptions): FieldControls {
       if (covered && !value) renderer.resetCamera();
       covered = value;
     },
-    walkToStop,
+    walkToStop, startWardSurvey, pulseWard,
     rideFortressLift: startLift,
     approachTideDial,
     walkRecorded(point, walked) {
@@ -952,7 +1061,7 @@ export function createField(options: FieldOptions): FieldControls {
       return path !== undefined && startRoute(path);
     },
     callKyurem() {
-      if (paused || covered || document.hidden || location.fortressRoom !== 'seal' || !inspectingSeal) return false;
+      if (paused || covered || document.hidden || reading.testing || location.fortressRoom !== 'seal' || !inspectingSeal) return false;
       const time = performance.now();
       if (time - lastCall < kyuremTiming.decay * 1000) return false;
       lastCall = time;

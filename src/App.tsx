@@ -10,6 +10,8 @@ import { fortressLiftStops, fortressPier, fortressRooms, openFortress, sleepingF
 import { rooms } from './field-rooms';
 import { isMazeRoom, mazeFloors, type MazePoint } from './fortress-maze';
 import { MazeAtlas, MazeMinimap } from './maze-atlas';
+import { quietReading, type WardReading } from './fortress-ward-service';
+import { WardMonitor } from './ward-monitor';
 import { recordMazeStep } from './fortress-survey';
 import { cityDistrict } from './field-city-layout';
 import { courtNotes, surveyStops, type CityStop, type CityStopId, type SurveyId } from './field-city-walks';
@@ -48,6 +50,7 @@ export default function App() {
   const [cryPlayback, setCryPlayback] = useState<'idle' | 'loading' | 'playing' | 'unavailable'>('idle');
   const cryAttempt = useRef(0);
   const [inspectingSeal, setInspectingSeal] = useState(false);
+  const [wardReading, setWardReading] = useState<WardReading>(quietReading);
   const [canSave, setCanSave] = useState(true);
   const [profile, setProfile] = useState(loadProfile);
   const [panel, setPanel] = useState<PanelId | null>(null);
@@ -197,6 +200,8 @@ export default function App() {
       fortressStartedAt: current.current.fortressStartedAt,
       tideDialAwake: current.current.tideDialAwake,
       shortcuts: current.current.shortcuts, onLiftTravel: setLiftMoving,
+      ward: current.current.ward, onWardReading: setWardReading,
+      onWardChanged: ward => setSave(previous => ({ ...previous, ward })),
       onCryStop: () => { ++cryAttempt.current; sound.stopCry(); setCryPlayback('idle'); },
       onRoarPhase: phase => {
         setRoarPhase(phase);
@@ -324,6 +329,11 @@ export default function App() {
     if (!controller.current?.callKyurem()) { setCryPlayback('idle'); return; }
     sound.audition();
     setCryPlayback('playing');
+  }
+
+  function hearChains() {
+    if (controller.current?.pulseWard()) sound.audition('chains');
+    focusField();
   }
 
   function openDex(id?: CreatureId) {
@@ -468,6 +478,8 @@ export default function App() {
     dex: { title: '群岛图鉴', label: 'FIELD POKÉDEX' },
   };
 
+  const audioToggle = <button type="button" className="icon-button" aria-label={sound.enabled ? '关闭声音' : '开启声音'} title={sound.enabled ? '关闭声音' : '开启声音'} aria-pressed={sound.enabled} onClick={sound.toggle}>{sound.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}</button>;
+
   return <div className="app">
     <header className="topbar" inert={expanded}>
       <div className="wrap topbar-inner">
@@ -478,7 +490,7 @@ export default function App() {
           <button className="nav-link" type="button" onClick={() => openPanel('about')}><House size={16} />关于我</button>
         </nav>
         <div className="top-actions">
-          <button type="button" className="icon-button" aria-label={sound.enabled ? '关闭声音' : '开启声音'} title={sound.enabled ? '关闭声音' : '开启声音'} aria-pressed={sound.enabled} onClick={sound.toggle}>{sound.enabled ? <Volume2 size={18} /> : <VolumeX size={18} />}</button>
+          {!expanded && audioToggle}
           <a className="icon-button github-nav" aria-label="在 GitHub 查看仓库" title="GitHub 仓库" href="https://github.com/Jasonhhha/Pokemon-profile" target="_blank" rel="noreferrer"><Github size={18} /></a>
         </div>
       </div>
@@ -499,6 +511,7 @@ export default function App() {
           <header className="game-bar">
             <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
             <div className="game-tools">
+              {expanded && audioToggle}
               {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused || liftMoving}><DoorOpen size={16} />{floor ? returnLabel : '离开室内'}</button> :
               <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
                 {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
@@ -514,7 +527,7 @@ export default function App() {
           </header>
 
           <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
-            data-room={floor ?? save.location.room} data-lift-moving={liftMoving || undefined} data-shortcut={maze ? shortcutOpen ? 'open' : 'closed' : undefined} data-roar-phase={floor === 'seal' ? roarPhase : undefined} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
+            data-room={floor ?? save.location.room} data-ward-phase={floor === 'seal' ? save.ward.phase : undefined} data-ward-testing={floor === 'seal' && wardReading.testing || undefined} data-lift-moving={liftMoving || undefined} data-shortcut={maze ? shortcutOpen ? 'open' : 'closed' : undefined} data-roar-phase={floor === 'seal' ? roarPhase : undefined} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
             <div className="game-canvas" ref={canvas} role="application" data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
               aria-label={`游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开${maze ? '本层行迹图' : '航线'}，Q 打开队伍，J 打开图鉴。`} />
             {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
@@ -550,10 +563,13 @@ export default function App() {
 
           {inspectingSeal ? <div className="game-controls seal-console">
             <div className="seal-specimen"><small>#0646 · 龙 / 冰</small><strong>酋雷姆</strong></div>
-            <span className="seal-caption" role="status">{cryPlayback === 'loading' ? '正在载入叫声……' : cryPlayback === 'unavailable' ? '叫声未载入，可再试一次' : roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : '能量罩稳定'}</span>
-            <button type="button" className="fortress-action" disabled={paused || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
+            <span className="seal-caption" role="status">{wardReading.testing ? '复测中，等待锚柱回震……' : cryPlayback === 'loading' ? '正在载入叫声……' : cryPlayback === 'unavailable' ? '叫声未载入，可再试一次' : roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : save.ward.phase === 'stable' ? '四根锁链受力均匀，封印稳定' : save.ward.phase === 'braced' ? '绞盘已锁定，等待复测' : '能量罩稳定'}</span>
+            <button type="button" className="fortress-action" disabled={paused || wardReading.testing || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
+            {save.ward.phase === 'idle' && <button type="button" className="fortress-replay" disabled={paused} onClick={() => { controller.current?.startWardSurvey(); focusField(); }}>巡查锁链</button>}
+            {(save.ward.phase === 'braced' || save.ward.phase === 'stable') && <button type="button" className="fortress-replay" disabled={paused || wardReading.testing || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearChains}>复测封印</button>}
             <button type="button" className="fortress-replay" disabled={paused} onClick={playField}>返回观测桥</button>
-          </div> : <div className="game-controls">
+          </div> : floor === 'seal' && save.ward.phase !== 'idle' ? <WardMonitor survey={save.ward} reading={wardReading}
+            location={save.location} hint={hint} disabled={paused || !ready} pulse={hearChains} interact={playField} /> : <div className="game-controls">
             <div className="control-keys" role="group" aria-label="键盘操作">
               <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><small>移动</small></span>
               <span><kbd>E</kbd><small>互动</small></span>

@@ -4,7 +4,7 @@ import { fortressTiming, type FortressRoom } from './field-fortress-state';
 
 export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'fortress' | 'sanctum' | 'wild' | 'trial';
 export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile' | 'wet' | 'ice' | 'iron';
-export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal' | 'tideDial' | 'kyuremCry' | 'wardImpact' | 'bridge' | 'iceGate';
+export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal' | 'tideDial' | 'kyuremCry' | 'wardImpact' | 'bridge' | 'iceGate' | 'slackWest' | 'slackEast' | 'wardTension' | 'ratchet';
 
 type Score = {
   bpm: number;
@@ -57,6 +57,7 @@ const scores: Record<SoundScene, Score> = {
 };
 
 const cues: Record<SoundCue, readonly number[]> = {
+  slackWest: [], slackEast: [], wardTension: [], ratchet: [],
   hoist: [26, 33], discharge: [], kyuremCry: [], wardImpact: [31, 50, 62], bridge: [34, 29], iceGate: [57, 45], seal: [38, 45, 50], tideDial: [50, 57, 62],
   step: [40], interact: [74, 81], area: [57, 62, 67], encounter: [76, 83, 72, 78], win: [62, 66, 69, 74],
   hit: [86, 52], heal: [69, 76, 81], capture: [72, 76, 79, 84], miss: [60, 56], faint: [67, 62, 54], switch: [65, 74], escape: [76, 69, 64],
@@ -224,6 +225,7 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
   const muted = useRef(true);
 
   const previewTimer = useRef<number | undefined>(undefined);
+  const previewKind = useRef<'cry' | 'chains'>('cry');
   const previewRequest = useRef(0);
   const chamber = useRef<ReturnType<typeof chamberAcoustics> | undefined>(undefined);
 
@@ -262,11 +264,12 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
     return request === previewRequest.current ? 'ready' : 'cancelled';
   }, [getAudio, stopCry]);
 
-  const audition = useCallback(() => {
+  const audition = useCallback((kind: 'cry' | 'chains' = 'cry') => {
     const engine = getAudio();
     if (!engine) return;
     void engine.context.resume().catch(() => {});
     if (!muted.current) return;
+    previewKind.current = kind;
     window.clearTimeout(previewTimer.current);
     previewTimer.current = window.setTimeout(stopCry, 3100);
   }, [getAudio, stopCry]);
@@ -355,7 +358,8 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
   }, []);
 
   const play = useCallback((cue: SoundCue, surface: Footing = 'stone') => {
-    const preview = previewTimer.current !== undefined && (cue === 'kyuremCry' || cue === 'wardImpact');
+    const preview = previewTimer.current !== undefined && (cue === 'wardImpact' ||
+      (previewKind.current === 'cry' ? cue === 'kyuremCry' : cue === 'slackEast' || cue === 'slackWest' || cue === 'wardTension'));
     if ((muted.current && !preview) || !audio.current || document.hidden) return;
     const { context, output, noise } = audio.current;
     if (context.state !== 'running') return;
@@ -365,6 +369,23 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
       return;
     }
     const roomOutput = chamber.current?.input ?? output;
+    if (cue === 'slackWest' || cue === 'slackEast') {
+      const pan = context.createStereoPanner();
+      pan.pan.value = cue === 'slackWest' ? -.76 : .76;
+      pan.connect(roomOutput);
+      voice(context, pan, 78, time, .14, .072, 'triangle');
+      voice(context, pan, 59, time + .23, .29, .10, 'triangle');
+      voice(context, pan, 86, time + .23, .34, .027, 'sine');
+      window.setTimeout(() => pan.disconnect(), 900);
+      return;
+    }
+    if (cue === 'wardTension' || cue === 'ratchet') {
+      if (cue === 'ratchet') {
+        for (const delay of [0, .11, .21, .29]) footfall(context, roomOutput, noise, 'iron', time + delay, 1);
+      }
+      voice(context, roomOutput, cue === 'ratchet' ? 48 : 75, time + (cue === 'ratchet' ? .37 : 0), .24, .066, 'triangle');
+      return;
+    }
     if (cue === 'wardImpact') {
       voice(context, roomOutput, 32, time, .50, .12, 'sine');
       voice(context, output, 67, time + .045, .41, .038, 'triangle');

@@ -1,3 +1,4 @@
+import { wardPosts } from './fortress-ward-service';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Anchor, BookOpen, Building2, Castle, Check, Clock3, Compass, Cross, Footprints, Landmark, Leaf, LocateFixed, Mountain, Sailboat, Sprout } from 'lucide-react';
 import { areas, speciesIn, type AdventureSave } from './adventure';
@@ -191,6 +192,8 @@ export function Pokedex({ save, entry }: { save: AdventureSave; entry?: Creature
           <div className="dex-species"><h3>酋雷姆</h3><span className="pixel">KYUREM</span></div>
           <p>龙 / 冰 · 身高 3.0 米 · 体重 325.0 千克</p>
           <p>冰核封印殿的观测桥上，可以看见它低下头，再张颌咆哮。冲击传到罩壁，锚柱上的积霜随之落下。</p>
+          {save.ward.phase === 'stable' && <p className="ward-field-note"><strong>封印殿巡检手记</strong>
+            {wardPosts.find(post => post.id === save.ward.fault)?.name}的止退爪已经归位。复测时，指针只回摆了一次。</p>}
           <a className="dex-reference" href="https://zukan.pokemon.co.jp/detail/0646" target="_blank" rel="noreferrer">查看官方图鉴</a>
         </> : <div className="dex-unseen"><h3>未发现</h3><p>深入海宫，在观测桥上记录这只宝可梦。</p></div>}
       </article> : <article className="dex-detail" aria-live="polite">

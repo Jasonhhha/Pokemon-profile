@@ -1,6 +1,7 @@
 import type { CreatureId } from './creatures';
 import type { Direction } from './field';
 import type { FieldMap } from './field-layout';
+import { wardWalkway, type WardSurvey } from './fortress-ward-service';
 import { catacombLift, isMazeRoom, mazeFieldMap, mazeFloors, type MazeRoom } from './fortress-maze';
 
 export type FortressRoom = 'sluice' | MazeRoom | 'seal';
@@ -24,6 +25,9 @@ export type FortressInteriorFrame = {
   liftPassage?: { down: boolean; fraction: number };
   gateAge: number;
   roarAge: number;
+  ward?: WardSurvey;
+  wardAdjustmentAge?: number;
+  wardSettledAge?: number;
   companionId?: CreatureId;
   companionImage?: HTMLCanvasElement;
   companionX?: number;
@@ -57,7 +61,8 @@ export function fortressSequence(elapsed: number, reduced: boolean): FortressVie
 function interiorMap(room: FortressRoom): FieldMap {
   const width = 17, height = 20;
   const walkable = Array.from({ length: height }, (_, y) => Array.from({ length: width }, (_, x) => {
-    if (room === 'seal') return y >= 11 && y <= 18 && (x >= 7 && x <= 9 || y >= 15 && x >= 4 && x <= 12);
+    if (room === 'seal') return wardWalkway(x, y) ||
+      y >= 11 && y <= 18 && (x >= 7 && x <= 9 || y >= 15 && x >= 4 && x <= 12);
     if (y < 3 || y > 17 || x < 3 || x > 13) return false;
     if (y <= 4 || y >= 16) return x >= 7 && x <= 9;
     return x >= 7 && x <= 9 || y === 6 || y === 12 || x === 3 || x === 13;

@@ -79,7 +79,6 @@ function convexHull(points:Screen[]):Screen[]{
 }
 const silhouettePoints:Vertex[]=[];
 for(let y=0;y<=10;y++)for(let a=0;a<32;a++)silhouettePoints.push(shell(a*tau/32,y*Math.PI/20));
-const anchors=Array.from({length:4},(_,i)=>Math.PI*(.25+i*.5));
 
 export function drawFrozenMasonry(p:RasterPaint) {
   const {face,stroke,groundGlow}=p, back=1.84;
@@ -168,7 +167,7 @@ export function drawIceBed2D(resonance:number,p:RasterPaint){
 }
 
 export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
-  const {ctx,point,face,stroke,groundGlow,scale}=p;
+  const {ctx,point,face,stroke,scale}=p;
   const age=frame.roarAge, gentle=frame.reduced, t=gentle?0:frame.now/1000;
   const charged=clamp(frame.resonance||0);
   const interacting=age>=0&&age<kyuremTiming.decay;
@@ -179,7 +178,6 @@ export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
     hull.forEach((s,i)=>i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y));ctx.closePath();
   };
 
-  for(const a of anchors.filter(a=>Math.sin(a)<0))drawPylon(a);
   for(let i=0;i<16;i++){
     const a=i*tau/16+.12;
     if(Math.sin(a)<.05)drawShard(cx+Math.cos(a)*5.41,cz+Math.sin(a)*4.27,.25+noise(i)*.18,.60+noise(i+19)*.84,a);
@@ -220,7 +218,6 @@ export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
   const footRing=loop(cx,cz,radius,radius,iceLevel+.042,76);
   stroke([...footRing.slice(0,39)],'#bcf1e4c6',.06);
   if(interacting)drawRoar();
-  for(const a of anchors.filter(a=>Math.sin(a)>=0))drawPylon(a);
   for(let i=0;i<12;i++){
     const a=i*tau/12+.16;
     if(Math.sin(a)>.03&&Math.abs(Math.cos(a))>.27)drawShard(cx+Math.cos(a)*5.57,cz+Math.sin(a)*4.38,.20+noise(17+i)*.14,.40+noise(i+53)*.49,a);
@@ -232,40 +229,6 @@ export function drawIceSeal2D(frame:FortressInteriorFrame,p:RasterPaint){
     const palette=['#a0c4d1','#c9e5e5','#acd3da','#779ba9','#799faf','#8fbcc8'];
     for(let i=0;i<6;i++)face([bed[i],bed[(i+1)%6],top],palette[i]);
     stroke([bed[1],top],'#deeff0b5',.020);
-  }
-  function drawPylon(a:number){
-    const x=cx+Math.cos(a)*4.83,z=cz+Math.sin(a)*4.54;
-    const {plate}=p;
-    const arrival=kyuremTiming.impact+Math.acos(clamp(Math.cos(2.46-a)*Math.cos(.73),-1,1))/3.7;
-    const after=age-arrival;
-    const tension=gentle ? (impact ? .21 : 0)
-      : after>=0&&after<1.12 ? Math.exp(-after*3.1)*Math.sin(Math.min(1,after/.078)*Math.PI/2) : 0;
-    groundGlow(x,z,.92,.76,'rgba(109,222,219,'+(.17+charged*.17+tension*.40)+')',iceLevel+.04);
-    plate(x-.42,z-.36,.84,.72,-.40,.03,'#839299','#526876','#3b5564');
-    plate(x-.30,z-.25,.60,.50,.02,.83,'#8e9c9b','#677d84','#425e6c');
-    plate(x-.34,z-.28,.68,.56,.75,.90,'#c3b6a2','#8f8d83','#697d80');
-    const ring=loop(x,z,.25,.20,.96,18);
-    stroke([...ring,ring[0]],'#accac9',.076);
-    drawShard(x,z,.19,.68,Math.PI,.90);
-    const hinge:Vertex=[x,z,1.50],socket=shell(a,.31,1.005);
-    const middle:Vertex=[(x+socket[0])*.5,(z+socket[1])*.5,(hinge[2]+socket[2])*.5-.115*(1-tension)];
-    const beam:Vertex[]=[hinge,middle,socket];
-    stroke(beam,'#536f778c',.107);
-    stroke(beam,'rgba(150,229,229,'+(.18+.30*charged+.19*impact)+')',.10);
-    stroke(beam,'rgba(203,248,242,'+(.55+.19*charged)+')',.024);
-    const peak=point(x-.09,z,1.49);
-    const g=ctx.createRadialGradient(peak.x,peak.y,0,peak.x,peak.y,Math.max(1,scale*.37));
-    g.addColorStop(0,'rgba(173,255,241,'+(.50+impact*.27)+')');g.addColorStop(1,'transparent');
-    ctx.fillStyle=g;ctx.fillRect(peak.x-scale*.37,peak.y-scale*.37,scale*.74,scale*.74);
-    if(!gentle&&after>.08&&after<1.07){
-      for(let i=0;i<8;i++){
-        const delay=.08+.20*noise(i+17),f=after-delay;if(f<0)continue;
-        const h=1.47+f*(.12+noise(i+20)*.50)-f*f*2.82;
-        if(h<iceLevel+.10)continue;
-        const xx=x+Math.cos(i*2.4)*f*(.22+noise(i+63)*.46),zz=z+Math.sin(i*2.4)*f*.54;
-        stroke([[xx,zz,h],[xx+.022,zz-.012,h+.055]],'#d9efedbb',.031);
-      }
-    }
   }
   function drawLattice(front:boolean){
     const opacity=front ? .13+impact*.055 : .25+charged*.06;
