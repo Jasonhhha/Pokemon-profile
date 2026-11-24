@@ -31,3 +31,9 @@ npm run dev
 - [宝可梦《黑／白》官方场景资料](https://www.pokemon.co.jp/series/bw/story/story01.html)
 - [任天堂《黑／白》游戏画面与说明](https://www.nintendo.co.jp/ds/irbj/about/index.html)
 - [PokéAPI 招式资料](https://pokeapi.co/docs/v2#moves)
+
+### 潜航堡垒
+
+在潮汐环城点击「前往西栈桥」，抵达后转动升降轮。整座环城浮出海面，外墙的八个泄水口排空后，西闸才会开启。进入地下一层，可沿中央湿石通道向北走，或从两侧绕行，再从尽头的阶梯下到深潮封印池。走到观测桥前端按 E 或触屏互动，可近看旋涡中的盖欧卡。离开后仍可从西栈桥再次进入，或重看浮升。
+
+盖欧卡采用 nguyenlouis32 制作的通常形态骨骼模型，场景为它添加了游动动作。二维模式使用 Pokémon HOME 形象。[素材来源与署名](public/assets/kyogre-credits.txt)

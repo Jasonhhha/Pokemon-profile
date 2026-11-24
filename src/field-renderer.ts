@@ -5,12 +5,15 @@ import { RING_PERIOD, ringRadius, ringStreetRow, ringXDelta, wrapRingX } from '.
 import type { Direction, WalkStep } from './field';
 import type { CreatureId } from './creatures';
 import type { CityStop } from './field-city-walks';
+import type { FortressView } from './field-fortress-state';
 
 type Point = { x: number; y: number };
 type SceneArt = ReturnType<typeof makeMapArt> & { padding: number };
 
 export type FieldView = {
   location: FieldLocation;
+  fortress: FortressView;
+  inspectingSeal: boolean;
   overview: boolean;
   orbitOffset: number;
   orbitTilt: number;

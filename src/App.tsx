@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, BookMarked, BookOpen, Check, Compass, Crosshair, DoorOpen, Flag, Github, Heart, House, Mail, Map, MapPin, Maximize, Minimize, Moon, Orbit, Plus, Radio, Sun, Volume2, VolumeX, Zap } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Backpack, BookMarked, BookOpen, Castle, Check, Compass, Crosshair, DoorOpen, Flag, Github, Heart, House, Mail, Map, MapPin, Maximize, Minimize, Moon, Orbit, Plus, Radio, Sun, Volume2, VolumeX, Waves, Zap } from 'lucide-react';
 import { createField, fieldAreas, type Direction, type EncounterKind, type FieldArea, type FieldEvent } from './field';
 import { BattleOverlay, type BattleEncounter, type BattleResult } from './battle';
 import { CreatureSprite } from './creature-art';
 import { creatures, givePotion, healTeam, maxHp, potionHp, type CreatureId } from './creatures';
 import { addSeen, areas, chooseEncounter, entrance, loadAdventure, recordCourt, saveKey } from './adventure';
 import { areaIcons, HpBar, Pokedex, RouteAtlas, TeamPanel } from './adventure-menu';
+import { fortressPier, fortressRooms, openFortress, sleepingFortress } from './field-fortress-state';
 import { rooms } from './field-rooms';
 import { cityDistrict } from './field-city-layout';
 import { courtNotes, surveyStops, type CityStop, type CityStopId, type SurveyId } from './field-city-walks';
@@ -38,6 +39,8 @@ function loadNight() {
 
 export default function App() {
   const [save, setSave] = useState(loadAdventure);
+  const [fortress, setFortress] = useState(save.fortressOpened ? openFortress : sleepingFortress);
+  const [inspectingSeal, setInspectingSeal] = useState(false);
   const [canSave, setCanSave] = useState(true);
   const [profile, setProfile] = useState(loadProfile);
   const [panel, setPanel] = useState<PanelId | null>(null);
@@ -62,15 +65,18 @@ export default function App() {
   current.current = save;
   const activeEncounter = useRef(encounter);
   activeEncounter.current = encounter;
-  const visitedScene = useRef(save.location.room ?? save.location.area);
+  const visitedScene = useRef(save.location.fortressRoom ?? save.location.room ?? save.location.area);
   const nightNow = useRef(night);
   nightNow.current = night;
   const locked = useRef(false);
   const area = encounter?.area ?? save.location.area;
   const room = !encounter && save.location.room ? rooms[save.location.room] : undefined;
-  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : room ? 'interior' : area);
-  const scene = room ?? fieldAreas[area];
-  const AreaIcon = room ? House : areaIcons[area];
+  const floor = !encounter ? save.location.fortressRoom : undefined;
+  const interior = Boolean(floor || room);
+  const atPier = !interior && area === 'harbor' && Math.abs(save.location.x - fortressPier.x) + Math.abs(save.location.y - fortressPier.y) <= 1;
+  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor ? 'fortress' : room ? 'interior' : area);
+  const scene = floor ? fortressRooms[floor] : room ?? fieldAreas[area];
+  const AreaIcon = floor ? Castle : room ? House : areaIcons[area];
   const areaNumber = String(areas.indexOf(area) + 1).padStart(2, '0');
   const progress = save.battle;
   const lead = progress.team.find(member => member.id === progress.lead) ?? progress.team[0];
@@ -172,13 +178,20 @@ export default function App() {
     if (!canvas.current) return;
     const field = createField({
       parent: canvas.current, initial: current.current.location, guideMet: current.current.greeted,
+      fortressOpened: current.current.fortressOpened,
+      fortressStartedAt: current.current.fortressStartedAt,
+      onFortressSave: started => setSave(previous => {
+        if (started === null) return { ...previous, fortressOpened: true, fortressStartedAt: undefined };
+        return previous.fortressOpened ? previous : { ...previous, fortressStartedAt: started };
+      }),
+      onFortressView: (view, inspecting) => { setFortress(view); setInspectingSeal(inspecting); },
       onReady: () => setReady(true),
       onOverview: setOverview,
       onLocation: location => {
-        const key = location.room ?? location.area;
+        const key = location.fortressRoom ?? location.room ?? location.area;
         if (visitedScene.current !== key) {
           visitedScene.current = key;
-          const destination = location.room ? rooms[location.room] : fieldAreas[location.area];
+          const destination = location.fortressRoom ? fortressRooms[location.fortressRoom] : location.room ? rooms[location.room] : fieldAreas[location.area];
           setArrival({ key, name: destination.name, english: destination.english });
         }
         setSave(previous => ({
@@ -257,6 +270,7 @@ export default function App() {
   }, [expanded, focusField]);
 
   function openPanel(next: PanelId) {
+    if (fortress.cinematic) return;
     locked.current = true;
     controller.current?.setPaused(true);
     setPanel(next);
@@ -429,33 +443,46 @@ export default function App() {
       </section>
 
       <div id="expedition" className="expedition">
-        <section ref={frame} className={`game-frame${expanded ? ' game-expanded' : ''}`} data-island={area} data-city={area === 'harbor' && !room || undefined} aria-label="潮汐群岛游戏"
+        <section ref={frame} className={`game-frame${expanded ? ' game-expanded' : ''}`} data-island={area} data-city={area === 'harbor' && !interior || undefined} aria-label="潮汐群岛游戏"
           role={expanded ? 'dialog' : undefined} aria-modal={expanded || undefined}>
           <header className="game-bar">
             <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
             <div className="game-tools">
-              {room ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />离开室内</button> :
+              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />{floor === 'seal' ? '返回闸廊' : floor ? '返回栈桥' : '离开室内'}</button> :
               <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
                 {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
               </button>}
-              {area === 'harbor' && !room && <button type="button" className="icon-button overview-button" aria-label={overview ? '返回街道' : '俯瞰环城'}
-                aria-pressed={overview} title={overview ? '返回街道' : '俯瞰环城'} disabled={!ready || paused}
+              {area === 'harbor' && !interior && <button type="button" className="icon-button overview-button" aria-label={overview ? '返回街道' : '俯瞰环城'}
+                aria-pressed={overview} title={overview ? '返回街道' : '俯瞰环城'} disabled={!ready || paused || fortress.cinematic}
                 onClick={() => { controller.current?.setOverview(!overview); focusField(); }}>
                 <Orbit size={17} /><span>{overview ? '返回街道' : '俯瞰环城'}</span>
               </button>}
-              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}><Map size={17} /></button>
+              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}><Map size={17} /></button>
               <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
             </div>
           </header>
 
           <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
-            data-room={save.location.room} data-overview={overview || undefined}>
-            <div className="game-canvas" ref={canvas} role="application" data-night={night && !room} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
+            data-room={floor ?? save.location.room} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
+            <div className="game-canvas" ref={canvas} role="application" data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
               aria-label="游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开航线，Q 打开队伍，J 打开图鉴。" />
             {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
             {ready && !encounter && !dialogue && <div className="map-coordinate" aria-hidden="true"><Crosshair size={14} />
-              {area === 'harbor' && !room && <span className="map-district">{cityDistrict(save.location.x, save.location.y)}</span>}
+              {area === 'harbor' && !interior && <span className="map-district">{cityDistrict(save.location.x, save.location.y)}</span>}
               <span className="pixel">{areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
+            </div>}
+            {ready && !paused && area === 'harbor' && !room && <div className="fortress-controls">
+              {fortress.cinematic ? <div className="fortress-meter">
+                <Waves size={17} /><span role="status">{fortress.phase === 'rising' ? '堡体上浮' : fortress.phase === 'draining' ? '八向排水' : '水闸开启'}</span>
+                <progress aria-label="堡垒升降进度" value={fortress.phase === 'rising' ? fortress.lift * .48 : .48 + fortress.drain * .52} max={1} />
+              </div> : <>
+                {inspectingSeal && <span className="seal-identification"><small>全国图鉴 #0382 · 水</small><strong>盖欧卡</strong></span>}
+                <button type="button" className="fortress-action" onClick={() => { controller.current?.approachFortress(); focusField(); }}>
+                  {floor === 'seal' ? <Waves size={16} /> : <Castle size={16} />}
+                  {inspectingSeal ? '返回观测桥' : floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '进入堡垒' : '升起堡垒') : '前往西栈桥'}
+                </button>
+                {atPier && fortress.phase === 'open' && <button type="button" className="fortress-replay" onClick={() => { controller.current?.replayFortress(); focusField(); }}>重看浮升</button>}
+              </>}
             </div>}
             {arrival && !encounter && !dialogue && <div className="area-arrival" key={arrival.key} role="status"><span className="pixel">{arrival.english}</span><strong>{arrival.name}</strong></div>}
             {dialogue && <FieldDialogue key={dialogue.index} speaker={dialogue.speaker} line={dialogue.lines[dialogue.index]}
@@ -473,14 +500,14 @@ export default function App() {
               <span><kbd>E</kbd><small>互动</small></span>
             </div>
             <div className="game-hint" aria-live="polite"><MapPin size={15} />{encounter ? '正在战斗' : hint || fieldAreas[area].description}</div>
-            <button className="interact-button" type="button" disabled={!ready || paused} onClick={playField}><span className="pixel">E</span>互动</button>
+            <button className="interact-button" type="button" disabled={!ready || paused || fortress.cinematic} onClick={playField}><span className="pixel">E</span>互动</button>
           </div>
 
           {!encounter && <div className="touch-controls" role="group" aria-label="触屏操作">
             <div className="dpad">
               {(Object.keys(directions) as Direction[]).map(direction => {
                 const { name, icon: Icon } = directions[direction];
-                return <button type="button" key={direction} className={`dpad-${direction}`} aria-label={name} disabled={!ready || paused}
+                return <button type="button" key={direction} className={`dpad-${direction}`} aria-label={name} disabled={!ready || paused || fortress.cinematic}
                   onPointerDown={event => {
                     if (event.button !== 0) return;
                     event.preventDefault();
@@ -498,15 +525,15 @@ export default function App() {
               <span className="dpad-core" />
             </div>
             <div className="touch-actions">
-              <button type="button" className="touch-run" aria-label="跑步" aria-pressed={running} disabled={!ready || paused} onClick={toggleRunning}><Zap size={21} /></button>
-              <button type="button" className="touch-action" aria-label="与附近目标互动" disabled={!ready || paused} onClick={playField}>A</button>
+              <button type="button" className="touch-run" aria-label="跑步" aria-pressed={running} disabled={!ready || paused || fortress.cinematic} onClick={toggleRunning}><Zap size={21} /></button>
+              <button type="button" className="touch-action" aria-label="与附近目标互动" disabled={!ready || paused || fortress.cinematic} onClick={playField}>A</button>
             </div>
           </div>}
           <div className="field-dock" role="group" aria-label="冒险菜单">
-            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}><Map size={16} /><span>航线</span><kbd aria-hidden="true">M</kbd></button>
-            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
-            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
-            <button type="button" className="field-dock-run" disabled={!ready || paused} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
+            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}><Map size={16} /><span>航线</span><kbd aria-hidden="true">M</kbd></button>
+            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
+            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
+            <button type="button" className="field-dock-run" disabled={!ready || paused || fortress.cinematic} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
           </div>
         </section>
 
@@ -519,14 +546,14 @@ export default function App() {
                 <div><strong>{task.label}</strong><small>{task.description}</small></div>
               </li>)}
             </ol>
-            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('map')}>
+            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}>
               <BookOpen size={14} /><span>街区手记</span><b>{save.courtVisits.length} / {surveyStops.length}</b><ArrowUpRight size={13} />
             </button>
           </section>
 
           <section className="side-card companion">
-            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
-            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue)} onClick={() => openDex(lead.id)}>
+            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
+            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openDex(lead.id)}>
               <span className="lead-element">{leadInfo.element}</span><CreatureSprite id={lead.id} /><span className="lead-code pixel">{leadInfo.english}</span>
             </button>
             <div className="lead-status"><strong>{leadInfo.name}</strong><span className="pixel">LV. {lead.level}</span></div>

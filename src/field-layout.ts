@@ -1,11 +1,12 @@
 import { cityAlleyAt, cityCourtyardAt, cityObstacles, harborHeight, reclaimedRingQuays } from './field-city-layout';
 import type { Point } from './field-pixels';
+import type { FortressRoom } from './field-fortress-state';
 
 export const TILE = 16;
 export type FieldArea = 'harbor' | 'grove' | 'summit';
 export type FieldEvent = 'guide' | 'about' | 'projects' | 'contact' | 'healer' | 'trial' | 'spar';
 export type RoomId = 'home' | 'lab' | 'tower';
-export type FieldLocation = { area: FieldArea; room?: RoomId; x: number; y: number };
+export type FieldLocation = { area: FieldArea; room?: RoomId; fortressRoom?: FortressRoom; x: number; y: number };
 
 type ActorStyle = 'guide' | 'researcher' | 'keeper' | 'healer' | 'trial' | 'spar';
 export type Tile = 'lawn' | 'path' | 'grass' | 'shore' | 'shelf' | 'water' | 'dock' | 'stone' | 'quay' | 'drop';

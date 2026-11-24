@@ -1,6 +1,7 @@
 import { drawFieldActor } from './field-actors';
 import { paintRingPlan, ringPlanExtent, ringSeaColor } from './field-city-chart';
 import type { SurveyId } from './field-city-walks';
+import { bastionRadius, drawBastionSea, drawRasterBastion } from './fortress-exterior-2d';
 import { creatureGaits, type FieldCreature } from './field-creature-motion';
 import {
   cityAlleyBarriers, cityCourtyards, cityForecourts, cityFountainSite, cityGateSites, cityLighthouseSite, cityParcels, cityStreet, cityTerraces,
@@ -1211,7 +1212,7 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     return ahead.y < origin.y ? 'up' : 'down';
   }
 
-  function ferry(time: number, calm: boolean): RasterLayer {
+  function ferry(time: number, calm: boolean, drop: number): RasterLayer {
     const column = calm ? 5.86 : (4.5 + time / 2925) % RING_PERIOD;
     const point = ringPosition(column, harborHeight + 4.02);
     const bearing = ringAngle(column);
@@ -1222,6 +1223,8 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
       z: point.z + along * tangent.z + across * outward.z,
     });
     return { point, radius: 2.42, top: 1.04, draw() {
+      target.save();
+      target.translate(0, drop * lift * canvas.height / span);
       for (const side of [-1, 1]) paint([
         [at(-3.45, side * .91), -.560], [at(-3.22, side * .86), -.560],
         [at(-1.74, side * .25), -.560], [at(-1.68, side * .28), -.560],
@@ -1245,13 +1248,14 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
       }
       const stack = [at(-.77,-.08), at(-.59,-.08), at(-.59,.082), at(-.77,.082)];
       extrude(stack, .675, 1.016, '#a87762', '#8d6759', '#ac9b80');
+      target.restore();
     } };
   }
 
-  function visibleInFrame(layer: RasterLayer, scale: number) {
+  function visibleInFrame(layer: RasterLayer, scale: number, lowerBy = 0) {
     if (!layer.radius || !layer.top) return true;
     const pad = layer.radius * scale;
-    const floor = project(layer.point), roof = project(layer.point, layer.top);
+    const floor = project(layer.point, -lowerBy), roof = project(layer.point, layer.top - lowerBy);
     return floor.x + pad > 0 && floor.x - pad < canvas.width && floor.y + pad > 0 && roof.y - pad < canvas.height;
   }
 
@@ -1264,12 +1268,20 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     const row = step ? step.from.y + (step.to.y - step.from.y) * progress : view.location.y;
     const pz = ringStreetRow(row);
     const now = ringPosition(px, pz);
-    const overview = view.overview;
+    const fortress = view.fortress;
+    const cinematic = fortress.cinematic;
+    const gateZoom = cinematic ? Math.min(1, Math.max(0, (fortress.drain - .48) / .43)) : 0;
+    const overview = view.overview || cinematic;
     street = !overview;
     const outward = ringStreetLooksOutward(view.location.x, view.location.y);
     const focus = overview ? undefined : view.surveyFocus;
     const camera = focus ? ringPosition(focus.position.x, focus.position.y) : overview ? { x: 0, z: 0 }
       : ringPosition(px + (outward ? -.25 : .37), pz + (outward ? 1.31 : -1.37));
+    if (cinematic) {
+      const west = ringPosition(3.5, harborHeight + .6);
+      camera.x = west.x * gateZoom;
+      camera.z = west.z * gateZoom;
+    }
     const aspect = canvas.width / canvas.height;
     const tour = overview ? ringOverviewCamera(aspect, canvas.clientWidth < 545, view.orbitTilt) : undefined;
     const rustle = street && !focus ? view.rustle : undefined;
@@ -1279,7 +1291,8 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
       camera.x += (reveal.x - camera.x) * .24;
       camera.z += (reveal.z - camera.z) * .24;
     }
-    const yaw = focus ? ringAngle(focus.position.x) + (focus.id === 'station' ? Math.PI - .28 : .29)
+    const yaw = cinematic ? ringAngle(3.5) - .38 * (1 - gateZoom)
+      : focus ? ringAngle(focus.position.x) + (focus.id === 'station' ? Math.PI - .28 : .29)
       : overview ? harborOverviewYaw + view.orbitOffset + (calm ? 0 : Math.sin(time / 8300) * .09)
         : ringAngle(px) + (outward ? Math.PI - .26 : .28);
     if (overview && (view.orbitOffset !== orbitOffset || view.orbitTilt !== orbitTilt)) orbitChangedAt = time;
@@ -1293,9 +1306,10 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     x += (camera.x - x) * delta;
     z += (camera.z - z) * delta;
     const closeHeight = focus?.id === 'station' || focus?.id === 'market' ? .50 : .18;
-    height += ((focus ? closeHeight : tour?.elevation ?? .67) - height) * delta;
-    pitch += ((focus ? (focus.id === 'garden' ? .82 : .60) : tour?.pitch ?? .805) - pitch) * delta;
-    span += ((focus ? (canvas.clientWidth < 545 ? 3.85 : 3.65) : tour?.span ?? 9.7) - span) * delta;
+    const fortressSpan = Math.max(30, 65 / aspect) * (1 - gateZoom) + 12.8 * gateZoom;
+    height += ((cinematic ? .4 - fortress.lift * 1.9 * (1 + gateZoom * .53) : focus ? closeHeight : tour?.elevation ?? .67) - height) * delta;
+    pitch += ((cinematic ? .44 - gateZoom * .20 : focus ? (focus.id === 'garden' ? .82 : .60) : tour?.pitch ?? .805) - pitch) * delta;
+    span += ((cinematic ? fortressSpan : focus ? (canvas.clientWidth < 545 ? 3.85 : 3.65) : tour?.span ?? 9.7) - span) * delta;
     if (reveal) {
       const markerSpan = frameStreetSubject(reveal.x - x, reveal.z - z, -height, angle, pitch, aspect);
       const playerSpan = frameStreetSubject(now.x - x, now.z - z, .70 - height, angle, pitch, aspect);
@@ -1311,10 +1325,26 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
     target.fillStyle = night ? '#1e3a54' : ringSeaColor;
     target.fillRect(0,0,canvas.width,canvas.height);
     const origin = project({x:0,z:0});
+    const screenX = Math.max(origin.x, canvas.width-origin.x) / (bastionRadius*size);
+    const screenY = Math.max(origin.y, canvas.height-origin.y) / (bastionRadius*size*flatten);
+    const exposedCoast = fortress.lift > .005 && screenX*screenX + screenY*screenY > 1;
+    const waterDrop = fortress.lift * 4.8;
+    const ship = ferry(time, calm, waterDrop);
+    const farFerry = fortress.lift > .005 && depthAt(ship.point) < 0;
+    if (exposedCoast) {
+      drawBastionSea(target, project, size, fortress.lift, calm ? 0 : time, night);
+      if (farFerry) ship.draw();
+      drawRasterBastion(target, project, angle, size, flatten, fortress, calm ? 0 : time, night);
+    }
     target.save();
     target.setTransform(cosine * size, sine * size * flatten, -sine * size,
       cosine * size * flatten, origin.x, origin.y);
     target.imageSmoothingEnabled = true;
+    if (fortress.lift > .005) {
+      target.beginPath();
+      target.arc(0, 0, bastionRadius, 0, Math.PI * 2);
+      target.clip();
+    }
     target.drawImage(terrain, -ringPlanExtent, -ringPlanExtent, ringPlanExtent * 2, ringPlanExtent * 2);
     target.restore();
     if (night) {
@@ -1344,8 +1374,28 @@ export function createRingRasterView(canvas: HTMLCanvasElement, reduced: MediaQu
 
     const visible = architecture.filter(layer => visibleInFrame(layer, size)
       && (!focus || depthAt(layer.point) - depthAt(camera) < 4.0));
-    const ship = ferry(time, calm);
-    if (visibleInFrame(ship, size)) visible.push(ship);
+    const control = ringPosition(3.96, 11.60);
+    visible.push({ point: control, radius: .55, top: 1, draw() {
+      const foot = project(control), hub = project(control, .70);
+      target.fillStyle = night ? '#354950' : '#61716b';
+      target.fillRect(foot.x-size*.24, foot.y-size*.08, size*.48, size*.105);
+      target.fillStyle = night ? '#40575b' : '#485f5e';
+      target.fillRect(foot.x-size*.10, hub.y, size*.20, Math.max(1,foot.y-hub.y));
+      target.beginPath();
+      target.ellipse(hub.x,hub.y,size*.22,size*.18,-.19,0,Math.PI*2);
+      target.lineWidth=Math.max(1,size*.052);
+      target.strokeStyle=fortress.phase==='open'?'#98c8ac':'#dfb477';
+      target.stroke();
+      for(let i=0;i<6;i++){
+        const a = i*Math.PI/3+.30+fortress.lift*1.8;
+        target.beginPath();
+        target.moveTo(hub.x,hub.y);
+        target.lineTo(hub.x+Math.cos(a)*size*.204,hub.y+Math.sin(a)*size*.164);
+        target.lineWidth=Math.max(.56,size*.027);
+        target.stroke();
+      }
+    }});
+    if (!farFerry && visibleInFrame(ship, size, waterDrop)) visible.push(ship);
     const trainX = calm ? 12.4 : (time / 850 + 11.7) % RING_PERIOD;
     for (const shift of [-.9, 1.0]) {
       const midpoint = trainX + shift;

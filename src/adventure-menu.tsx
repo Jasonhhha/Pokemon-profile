@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Anchor, BookOpen, Building2, Check, Clock3, Compass, Cross, Footprints, Landmark, Leaf, LocateFixed, Mountain, Sailboat, Sprout } from 'lucide-react';
+import { Anchor, BookOpen, Building2, Castle, Check, Clock3, Compass, Cross, Footprints, Landmark, Leaf, LocateFixed, Mountain, Sailboat, Sprout } from 'lucide-react';
 import { areas, speciesIn, type AdventureSave } from './adventure';
 import { CreatureSprite } from './creature-art';
 import { ailmentLabels, creatures, maxHp, maxLevel, moves, movePP, typeLabels, xpToNext, type BattleProgress, type CreatureId } from './creatures';
@@ -7,6 +7,7 @@ import { fieldAreas, planCityWalk, type FieldArea, type FieldLocation } from './
 import { maps } from './field-art';
 import { tileAt, type Tile } from './field-layout';
 import { rooms } from './field-rooms';
+import { fortressPier, fortressRooms } from './field-fortress-state';
 import { cityChartPoint, cityChartSize, drawCityChart } from './field-city-chart';
 import { cityStops, courtNotes, surveyStops, type CityStop, type CityStopId, type StreetPoint } from './field-city-walks';
 
@@ -65,7 +66,7 @@ function LocationPreview({ area, location, walk }: { area: FieldArea; location?:
 }
 
 const stopIcons = {
-  wharf: Anchor, garden: Sprout, market: Landmark, station: Clock3,
+  wharf: Anchor, garden: Sprout, market: Landmark, station: Clock3, fortress: Castle,
   archive: BookOpen, clinic: Cross, greenway: Leaf, ferry: Sailboat,
 };
 
@@ -75,9 +76,9 @@ function CityWalkMap({ save, walkTo, lastStop }: CityWalkProps) {
   const [id, select] = useState<CityStopId>(() => lastStop ?? surveyStops.find(stop => !save.courtVisits.includes(stop.survey))?.id ?? 'archive');
   const [routeFailed, setRouteFailed] = useState(false);
   const selected = cityStops.find(stop => stop.id === id)!;
-  const local = save.location.area === 'harbor' && !save.location.room;
+  const local = save.location.area === 'harbor' && !save.location.room && !save.location.fortressRoom;
   const room = save.location.room && rooms[save.location.room];
-  const pin = local ? save.location : room?.area === 'harbor'
+  const pin = save.location.fortressRoom ? { area: 'harbor' as const, ...fortressPier } : local ? save.location : room?.area === 'harbor'
     ? { area: room.area, x: room.exterior.x, y: room.exterior.y + 1 } : undefined;
   const route = useMemo(() => {
     const path = planCityWalk(save.location, selected);
@@ -132,6 +133,7 @@ export function RouteAtlas({ save, travel, walkTo, lastStop }: CityWalkProps & {
       const visited = save.visited.includes(id);
       const native = speciesIn(id).filter(species => save.seen.includes(species));
       const room = current && save.location.room ? rooms[save.location.room] : undefined;
+      const floor = current && save.location.fortressRoom ? fortressRooms[save.location.fortressRoom] : undefined;
       const position = room ? { area: id, x: room.exterior.x, y: room.exterior.y + 1 } : save.location;
       return <article className="route-card" key={id} data-current={current} data-city={id === 'harbor' || undefined}>
         <div className="route-overview">
@@ -139,7 +141,7 @@ export function RouteAtlas({ save, travel, walkTo, lastStop }: CityWalkProps & {
           <span className="pixel route-number">0{index + 1} / {fieldAreas[id].english}</span>
           <p>{fieldAreas[id].description}</p>
           {visited && native.length > 0 && <div className="route-native">{native.map(species => <span key={species}>{creatures[species].name}</span>)}</div>}
-          {current ? <span className="route-state"><LocateFixed size={13} />{room ? room.name : '当前位置'}</span> : visited ? <button type="button" className="subtle-button" onClick={() => travel(id)}>前往</button> : <span className="route-state">尚未抵达</span>}
+          {current ? <span className="route-state"><LocateFixed size={13} />{floor?.name ?? room?.name ?? '当前位置'}</span> : visited ? <button type="button" className="subtle-button" onClick={() => travel(id)}>前往</button> : <span className="route-state">尚未抵达</span>}
         </div>
         {id === 'harbor' ? <CityWalkMap save={save} walkTo={walkTo} lastStop={lastStop} /> : visited && <LocationPreview area={id} location={current ? position : undefined} />}
       </article>;

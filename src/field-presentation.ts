@@ -1,4 +1,5 @@
 import { createFieldRenderer, feetX, feetY, type FieldView } from './field-renderer';
+import { createFortressPresentation } from './fortress-presentation';
 import { TILE } from './field-layout';
 import type { createFieldView3d } from './field-view3d';
 import { createRingRasterView } from './field-ring-raster-view';
@@ -8,6 +9,7 @@ export const streetAxisMinSpan = .0072;
 
 export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion: MediaQueryList, onReady?: () => void) {
   const classic = createFieldRenderer(canvas, reducedMotion);
+  const fortress = createFortressPresentation(canvas);
   let ring: ReturnType<typeof createRingRasterView> | undefined;
   let raster: typeof classic | NonNullable<typeof ring> = classic;
   let world: ReturnType<typeof createFieldView3d>;
@@ -70,6 +72,16 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     draw(time: number, view: FieldView) {
       if (size.width <= 0 || size.height <= 0) return;
       const active = world ?? pendingWorld;
+      if (view.location.fortressRoom) {
+        fortress.draw(time, view, view.location.fortressRoom, reducedMotion.matches, size.width, size.height, Boolean(active));
+        markReady();
+        return;
+      }
+      if (fortress.active) {
+        fortress.leave();
+        canvas.dataset.renderer = active ? 'webgl' : 'canvas2d';
+        (active ?? raster).resetCamera();
+      }
       if (active) {
         try {
           if (pendingWorld) active.resize(size.width, size.height);
@@ -100,16 +112,19 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
       markReady();
     },
     resize(width: number, height: number) {
+      if (fortress.active) fortress.leave();
       size = { width, height };
       (world ?? raster).resize(width, height);
     },
-    projectPoint: (x: number, y: number) => (world ?? raster).projectPoint(x, y),
-    pointInWorld: (x: number, y: number) => (world ?? raster).pointInWorld(x, y),
+    projectPoint: (x: number, y: number) => (fortress.active ? fortress : world ?? raster).projectPoint(x, y),
+    pointInWorld: (x: number, y: number) => (fortress.active ? fortress : world ?? raster).pointInWorld(x, y),
     hitSurvey(x: number, y: number) {
+      if (fortress.active) return;
       if (world) return world.hitSurvey(x, y);
       if (ring && raster === ring) return ring.hitSurvey(x, y);
     },
     hitActor(x: number, y: number, candidates: FieldView['map']['npcs'], doorway: (actor: FieldView['map']['npcs'][number]) => boolean) {
+      if (fortress.active) return;
       if (world) return world.hitActor(x, y, candidates, doorway);
       if (ring && raster === ring) return ring.hitActor(x, y, candidates, doorway);
       return candidates.find(actor => {
@@ -120,11 +135,12 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
       });
     },
     resetCamera: () => (world ?? raster).resetCamera(),
-    getCamera: () => (world ?? raster).getCamera(),
+    getCamera: () => (fortress.active ? fortress : world ?? raster).getCamera(),
     streetAxisProjection,
     lastUsableAxis: (axis: 'x' | 'y') => usableAxes[axis],
     destroy() {
       destroyed = true;
+      fortress.dispose();
       const active = world ?? pendingWorld;
       active?.surface.removeEventListener('webglcontextlost', restoreClassic);
       active?.destroy();

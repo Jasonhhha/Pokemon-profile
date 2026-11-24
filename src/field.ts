@@ -4,7 +4,8 @@ import { maps, TILE, type FieldMap } from './field-art';
 import type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
 import { rooms } from './field-rooms';
 import { cityObstacles } from './field-city-layout';
-import { surveyAt, surveyStops, type CityStop, type SurveyId } from './field-city-walks';
+import { cityStops, surveyAt, surveyStops, type CityStop, type SurveyId } from './field-city-walks';
+import { fortressMaps, fortressPier, fortressSequence, openFortress, sleepingFortress, type FortressView } from './field-fortress-state';
 import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
 import type { Footing } from './sound';
@@ -25,6 +26,10 @@ interface FieldOptions {
   parent: HTMLElement;
   initial?: FieldLocation;
   guideMet?: boolean;
+  fortressOpened: boolean;
+  fortressStartedAt?: number;
+  onFortressSave: (started: number | null) => void;
+  onFortressView: (view: FortressView, inspecting: boolean) => void;
   onLocation: (location: FieldLocation) => void;
   onHint: (hint: string) => void;
   onEvent: (event: FieldEvent) => void;
@@ -32,7 +37,7 @@ interface FieldOptions {
   onSurvey: (id: SurveyId) => void;
   onReady?: () => void;
   onOverview?: (active: boolean) => void;
-  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter', surface?: Footing) => void;
+  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal', surface?: Footing) => void;
 }
 
 export interface FieldControls {
@@ -48,6 +53,8 @@ export interface FieldControls {
   setCovered: (covered: boolean) => void;
   travel: (area: FieldArea) => void;
   walkToStop: (stop: CityStop) => boolean;
+  approachFortress: () => void;
+  replayFortress: () => void;
   leaveRoom: () => void;
   getLocation: () => FieldLocation;
   destroy: () => void;
@@ -84,7 +91,7 @@ const directionTo = (from: TilePoint, to: TilePoint, wrap = false): Direction =>
 const intersect = (point: TilePoint, map: FieldMap) => Number.isInteger(point.x) && Number.isInteger(point.y)
   && map.walkable[point.y]?.[point.x] === true;
 const walkable = (point: TilePoint, map: FieldMap) => intersect(point, map) && !map.npcs.some(npc => npc.solid && sameTile(npc, point));
-const mapAt = (location: FieldLocation) => location.room ? rooms[location.room].map : maps[location.area];
+const mapAt = (location: FieldLocation) => location.fortressRoom ? fortressMaps[location.fortressRoom] : location.room ? rooms[location.room].map : maps[location.area];
 
 function findPath(start: TilePoint, targets: TilePoint[], map: FieldMap, preferPavement = false): TilePoint[] | undefined {
   if (!targets.length) return;
@@ -125,7 +132,7 @@ function findPath(start: TilePoint, targets: TilePoint[], map: FieldMap, preferP
 }
 
 export function planCityWalk(start: FieldLocation, stop: CityStop) {
-  if (start.area !== 'harbor' || start.room) return;
+  if (start.area !== 'harbor' || start.room || start.fortressRoom) return;
   const map = maps.harbor;
   return findPath(start, stop.approaches, map, true);
 }
@@ -164,6 +171,10 @@ export function createField(options: FieldOptions): FieldControls {
   const pendingArt = new Set<CreatureId>();
   const pressed = new Map<string, Direction>();
   let location = initialLocation(options.initial);
+  let started = options.fortressOpened ? undefined : options.fortressStartedAt;
+  let fortress: FortressView = options.fortressOpened ? openFortress : sleepingFortress;
+  let inspectingSeal = false;
+  let lastProgress = -1;
   let facing: Direction = 'down';
   let held: Direction | null = null;
   let queued: Direction | null = null;
@@ -195,7 +206,7 @@ export function createField(options: FieldOptions): FieldControls {
   let onScreen = true;
   let covered = false;
   let guideMet = options.guideMet ?? false;
-  let overview = location.area === 'harbor' && !location.room;
+  let overview = location.area === 'harbor' && !location.room && !location.fortressRoom && started === undefined;
   let orbitOffset = 0;
   let orbitTilt = 0;
   let orbitGesture: { id: number; startX: number; startY: number; offset: number; tilt: number; moved: boolean } | undefined;
@@ -218,9 +229,66 @@ export function createField(options: FieldOptions): FieldControls {
     }
   }
 
+  function atWinch() {
+    return location.area === 'harbor' && !location.room && !location.fortressRoom && distance(location, fortressPier, true) <= 1;
+  }
+
+  function updateFortress() {
+    if (started === undefined) return;
+    const next = fortressSequence(Math.max(0, Date.now() - started), reducedMotion.matches);
+    const stageChanged = fortress.phase !== next.phase || fortress.cinematic !== next.cinematic;
+    if (stageChanged && next.phase === 'draining') options.onSound?.('discharge');
+    if (stageChanged && next.phase === 'open') options.onSound?.('area');
+    fortress = next;
+    const progress = Math.round((next.phase === 'rising' ? next.lift : next.drain) * 25);
+    if (stageChanged || progress !== lastProgress) {
+      lastProgress = progress;
+      options.onFortressView(next, inspectingSeal);
+      refreshHint();
+    }
+    if (!next.cinematic) {
+      started = undefined;
+      options.onFortressSave(null);
+      renderer.resetCamera();
+    }
+  }
+
+  function launchFortress() {
+    setOverview(false);
+    stopRouting();
+    clearInput();
+    step = undefined;
+    started = Date.now();
+    options.onFortressSave(started);
+    updateFortress();
+    renderer.resetCamera();
+    options.onSound?.('hoist');
+  }
+
+  function ascend() {
+    facing = 'down';
+    const to: FieldLocation = location.fortressRoom === 'seal'
+      ? { area: 'harbor', fortressRoom: 'sluice', x: 8, y: 4 }
+      : { area: 'harbor', ...fortressPier };
+    switchArea(to, performance.now());
+  }
+
   function refreshHint() {
+    if (fortress.cinematic) return hint(fortress.phase === 'rising' ? '升降机启动 · 堡体上浮' : fortress.phase === 'draining' ? '八向泄水 · 等待闸门开启' : '水位已降 · 闸门开启');
+    if (inspectingSeal) return hint('封印观测中 · 再次互动返回栈桥');
+    if (location.fortressRoom === 'sluice') {
+      if (distance(location, { x: 8, y: 3 }) <= 1) return hint('互动 · 沿阶梯下至封印池');
+      if (distance(location, { x: 8, y: 17 }) <= 1) return hint('向北穿过闸廊 · 在此互动可返回西栈桥');
+      return hint('沿湿石通道向北，尽头的阶梯通往封印池');
+    }
+    if (location.fortressRoom === 'seal') {
+      if (distance(location, { x: 8, y: 11 }) <= 1) return hint('互动 · 观察封印中的盖欧卡');
+      if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回闸廊');
+      return hint('沿中央桥靠近封印 · 漩流外侧可通行');
+    }
     if (overview) return hint('拖动环视 · 点击街道进入');
     if (walkingTo) return hint(`步行前往${walkingTo.name} · 手动移动可中断`);
+    if (atWinch()) return hint(fortress.phase === 'open' ? '互动 · 进入潜航堡垒' : '互动 · 转动西栈桥升降轮');
     const actor = nearby();
     if (actor) {
       const room = entrance(actor.event);
@@ -269,6 +337,8 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function switchArea(to: FieldLocation, time: number) {
+    clearInput();
+    if (inspectingSeal) { inspectingSeal = false; options.onFortressView(fortress, false); }
     setOverview(false);
     stopRouting();
     queued = null;
@@ -303,7 +373,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function searchGrass(map: FieldMap, time: number) {
-    if (rustle || location.room || ++strides < 12) return;
+    if (rustle || location.room || location.fortressRoom || ++strides < 12) return;
     strides = 0;
     const candidates: TilePoint[] = [];
     for (let y = Math.max(0, location.y - 7); y <= Math.min(map.height - 1, location.y + 7); y++) {
@@ -383,7 +453,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function interact() {
-    if (paused) return;
+    if (paused || fortress.cinematic) return;
     if (step) {
       interactQueued = true;
       return;
@@ -392,6 +462,30 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function interactNearby() {
+    if (location.fortressRoom) {
+      const gallery = location.fortressRoom === 'sluice';
+      if (gallery && distance(location, { x: 8, y: 3 }) <= 1) {
+        switchArea({ area: 'harbor', fortressRoom: 'seal', ...fortressMaps.seal.spawn }, performance.now());
+      } else if (!gallery && (inspectingSeal || distance(location, { x: 8, y: 11 }) <= 1)) {
+        inspectingSeal = !inspectingSeal;
+        facing = 'up';
+        stopRouting();
+        clearInput();
+        options.onSound?.(inspectingSeal ? 'seal' : 'interact');
+        options.onFortressView(fortress, inspectingSeal);
+        refreshHint();
+      } else if (distance(location, { x: 8, y: gallery ? 17 : 18 }) <= 1) {
+        ascend();
+      } else return false;
+      return true;
+    }
+    if (atWinch()) {
+      if (fortress.phase === 'open') {
+        facing = 'up';
+        switchArea({ area: 'harbor', fortressRoom: 'sluice', ...fortressMaps.sluice.spawn }, performance.now());
+      } else launchFortress();
+      return true;
+    }
     const actor = nearby();
     if (actor) { talk(actor); return true; }
     const site = location.area === 'harbor' && !location.room && surveyAt(location);
@@ -412,7 +506,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function move(direction: Direction) {
-    if (paused) return;
+    if (paused || fortress.cinematic || inspectingSeal) return;
     setOverview(false);
     stopRouting();
     if (step || performance.now() - fadedAt < (reducedMotion.matches ? 0 : fieldFadeDuration)) queued = direction;
@@ -420,7 +514,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function streetDirection(direction: Direction): Direction {
-    if (overview || location.area !== 'harbor' || location.room) return direction;
+    if (overview || location.area !== 'harbor' || location.room || location.fortressRoom) return direction;
     const axis = direction === 'left' || direction === 'right' ? 'x' : 'y';
     const projection = renderer.streetAxisProjection(location.x, location.y, axis);
     const flipped = projection !== undefined && Math.abs(projection) > .0008
@@ -461,7 +555,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function walkToStop(stop: CityStop, inspect = false) {
-    if (paused) return false;
+    if (paused || fortress.cinematic) return false;
     const next = planCityWalk({ ...location, ...step?.to }, stop);
     return next !== undefined && startRoute(next, () => {
       walkingTo = undefined;
@@ -479,7 +573,7 @@ export function createField(options: FieldOptions): FieldControls {
       route(stepDirections.map(direction => neighbor(actor, direction, mapAt(location).wrapX)), () => talk(actor));
       return;
     }
-    if (location.area === 'harbor' && !location.room) {
+    if (location.area === 'harbor' && !location.room && !location.fortressRoom) {
       const survey = renderer.hitSurvey(screenX, screenY);
       if (survey) {
         const stop = surveyStops.find(candidate => candidate.survey === survey);
@@ -491,7 +585,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function pointerDown(event: PointerEvent) {
-    if (event.button !== 0 || !event.isPrimary || paused || !reducedMotion.matches && performance.now() - fadedAt < fieldFadeDuration) return;
+    if (event.button !== 0 || !event.isPrimary || paused || fortress.cinematic || inspectingSeal || !reducedMotion.matches && performance.now() - fadedAt < fieldFadeDuration) return;
     parent.focus({ preventScroll: true });
     if (!overview) return tapField(event);
     orbitGesture = { id: event.pointerId, startX: event.clientX, startY: event.clientY, offset: orbitOffset, tilt: orbitTilt, moved: false };
@@ -525,7 +619,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function keyDown(event: KeyboardEvent) {
-    if (paused || event.ctrlKey || event.metaKey || event.altKey || event.target !== parent) return;
+    if (paused || fortress.cinematic || event.ctrlKey || event.metaKey || event.altKey || event.target !== parent) return;
     shiftPressed = event.shiftKey;
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const direction = keys[key];
@@ -570,7 +664,7 @@ export function createField(options: FieldOptions): FieldControls {
     const activeNpc = nearby();
     const map = mapAt(location);
     renderer.draw(time, {
-      location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc, surveyFocus,
+      location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc, surveyFocus, fortress, inspectingSeal,
       pumpElapsed: time - pumpStarted < 3600 ? (reducedMotion.matches ? 1 : Math.max(0, time - pumpStarted) / 1000) : undefined,
       activeNpcFacing: activeNpc && !sameTile(activeNpc, location) ? directionTo(activeNpc, location, map.wrapX) : undefined,
       companionImage: companion ? creatureArt.get(companion) : undefined, companionId: companion ?? undefined, sylveon, night, beaconLit, fadedAt,
@@ -580,6 +674,7 @@ export function createField(options: FieldOptions): FieldControls {
   function landStep(time: number) {
     if (!step || time - step.startedAt < step.duration * .43 || lastFootfall === step.startedAt) return;
     lastFootfall = step.startedAt;
+    if (location.fortressRoom) { options.onSound?.('step', 'wet'); return; }
     if (location.room) {
       options.onSound?.('step', location.room === 'home' ? 'timber' : 'tile');
       return;
@@ -592,11 +687,12 @@ export function createField(options: FieldOptions): FieldControls {
 
   function tick(time: number) {
     if (wasDestroyed) return;
+    updateFortress();
     if (rustle && time >= rustle.expires) {
       rustle = undefined;
       refreshHint();
     }
-    if (!paused) {
+    if (!paused && !fortress.cinematic && !inspectingSeal) {
       landStep(time);
       if (step && time - step.startedAt >= step.duration) finishStep(time);
       if (!step && time - fadedAt >= (reducedMotion.matches ? 0 : fieldFadeDuration)) {
@@ -650,19 +746,32 @@ export function createField(options: FieldOptions): FieldControls {
     setCompanion,
     setRunning(value) { running = value; },
     setNight(value) { night = value; },
-    setOverview(value) { if (!paused && location.area === 'harbor' && !location.room) setOverview(value); },
+    setOverview(value) { if (!paused && !fortress.cinematic && location.area === 'harbor' && !location.room && !location.fortressRoom) setOverview(value); },
     setBeaconLit(value) { beaconLit = value; },
     setCovered(value) {
       if (covered && !value) renderer.resetCamera();
       covered = value;
     },
     walkToStop,
+    approachFortress() {
+      if (paused || fortress.cinematic || location.area !== 'harbor' || location.room) return;
+      if (location.fortressRoom) {
+        const point = { x: 8, y: location.fortressRoom === 'sluice' ? 3 : 11 };
+        if (inspectingSeal || distance(location, point) <= 1) interact();
+        else route([point], interact);
+      } else if (atWinch()) interact();
+      else walkToStop(cityStops.find(stop => stop.id === 'fortress')!);
+    },
+    replayFortress() {
+      if (atWinch() && !paused && !fortress.cinematic && fortress.phase === 'open') launchFortress();
+    },
     travel(area) {
-      if (paused || (!location.room && area === location.area && sameTile(location, maps[area].spawn))) return;
+      if (paused || fortress.cinematic || (!location.room && !location.fortressRoom && area === location.area && sameTile(location, maps[area].spawn))) return;
       clearInput();
       switchArea({ area, ...maps[area].spawn }, performance.now());
     },
     leaveRoom() {
+      if (!paused && location.fortressRoom) return ascend();
       if (paused || !location.room) return;
       const gate = rooms[location.room].map.exits[0];
       clearInput();
@@ -701,6 +810,8 @@ export function createField(options: FieldOptions): FieldControls {
   const debugWindow = window as Window & { __field?: typeof diagnostics };
   if (import.meta.env.DEV) debugWindow.__field = diagnostics;
   options.onOverview?.(overview);
+  updateFortress();
+  options.onFortressView(fortress, inspectingSeal);
   options.onLocation({ ...location });
   void loadSprite(`${import.meta.env.BASE_URL}assets/sylveon.png`).then(image => {
     if (!wasDestroyed) sylveon = image;

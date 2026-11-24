@@ -1,8 +1,9 @@
 import { cityCourtyards, type CityCourtyard } from './field-city-layout';
 import { maps } from './field-layout';
+import { fortressPier } from './field-fortress-state';
 
 export type SurveyId = CityCourtyard['kind'];
-export type CityStopId = SurveyId | 'archive' | 'clinic' | 'greenway' | 'ferry';
+export type CityStopId = SurveyId | 'archive' | 'clinic' | 'greenway' | 'ferry' | 'fortress';
 export type StreetPoint = { x: number; y: number };
 export type CityStop = {
   id: CityStopId;
@@ -45,6 +46,7 @@ function serviceStop(id: CityStopId, name: string, subject: string, point: Stree
 const ferry = maps.harbor.exits[0];
 export const cityStops: readonly CityStop[] = [
   ...surveyStops,
+  serviceStop('fortress', '西栈桥升降井', '操作铜轮，唤起环城下方的潜航堡垒。', fortressPier),
   serviceStop('archive', '潮汐档案屋', '在门口互动，进屋翻看档案。', { x: 10, y: 11 }),
   serviceStop('clinic', '环城补给站', '与医师交谈，恢复体力和招式次数。', { x: 18, y: 11 }),
   serviceStop('greenway', '外环绿廊', '从路边进入高草，寻找野生宝可梦。', { x: 29, y: 14 }),

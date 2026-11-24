@@ -7,7 +7,7 @@ import { harborHeight } from './field-city-layout';
 import { tileAt } from './field-layout';
 import { RING_PERIOD, ringPosition, ringRadius } from './field-ring-coordinates';
 
-type ReflectionOptions = { enabled?: boolean; reducedMotion?: boolean; mobile?: boolean };
+type ReflectionOptions = { enabled?: boolean; reducedMotion?: boolean; mobile?: boolean; basinRadius?: number };
 
 const waterLine = -.58;
 
@@ -77,11 +77,13 @@ const fragment = `
   uniform vec2 pixelSize;
   uniform float clock;
   uniform float darkness;
+  uniform float basinRadius;
   varying vec4 reflectedPoint;
   varying vec3 waterPoint;
   void main() {
     vec2 uv = reflectedPoint.xy / reflectedPoint.w * .5 + .5;
     vec2 p = waterPoint.xz;
+    if (length(p) > basinRadius) discard;
     float swell = dot(p, vec2(.79, -1.77)) - clock * 1.08 + sin(p.y * .46 + p.x * .61) * .71;
     float ripple = dot(p, vec2(.41, -5.86)) + clock * 1.91 + sin(p.x * 2.19 + p.y * .38) * .74;
     float chop = dot(p, vec2(-3.24, 9.36)) - clock * 2.67 + sin(p.x * 3.73 + p.y * .23) * .48;
@@ -151,6 +153,7 @@ export function buildCityReflections(staticBuildings: Group, harborBeacon?: Obje
     pixelSize: { value: new Vector2(1, 1) },
     clock: { value: 0 },
     darkness: { value: 0 },
+    basinRadius: { value: 10000 },
   };
   const ringWaterExtent = ringRadius(harborHeight + 5.5);
   const sheet = new Mesh(new PlaneGeometry(ringWaterExtent * 2, ringWaterExtent * 2), new ShaderMaterial({
@@ -208,6 +211,7 @@ export function buildCityReflections(staticBuildings: Group, harborBeacon?: Obje
   return {
     group,
     update(renderer: WebGLRenderer, camera: Camera, time: number, darkness: number, options: ReflectionOptions = {}) {
+      uniforms.basinRadius.value = options.basinRadius ?? 10000;
       if (options.enabled === false || renderer.getContext().isContextLost()) {
         group.visible = false;
         return;

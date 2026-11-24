@@ -1,6 +1,7 @@
 import { creatures, initialBattleProgress, makeMember, migrateBattleProgress, type BattleProgress, type CreatureId } from './creatures';
 import type { EncounterKind, FieldArea, FieldLocation } from './field';
 import { rooms } from './field-rooms';
+import { fortressMaps, fortressPier, isFortressRoom } from './field-fortress-state';
 import { courtNotes, surveyStops, type SurveyId } from './field-city-walks';
 
 export const areas = ['harbor', 'grove', 'summit'] as const;
@@ -13,6 +14,8 @@ export type AdventureSave = {
   greeted: boolean;
   sparWon: boolean;
   courtVisits: SurveyId[];
+  fortressOpened: boolean;
+  fortressStartedAt?: number;
   seen: CreatureId[];
   battle: BattleProgress;
 };
@@ -73,7 +76,7 @@ export function recordCourt(save: AdventureSave, court: SurveyId): AdventureSave
 
 export function loadAdventure(): AdventureSave {
   const battle = initialBattleProgress();
-  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], seen: battle.team.map(member => member.id), battle };
+  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, seen: battle.team.map(member => member.id), battle };
   try {
     const stored = localStorage.getItem(saveKey);
     if (stored === null) {
@@ -88,8 +91,17 @@ export function loadAdventure(): AdventureSave {
     const visited = Array.isArray(saved?.visited) ? saved.visited.filter(isArea) : [];
     const progress = migrateBattleProgress(saved?.battle) ?? battle;
     const seen = Array.isArray(saved?.seen) ? saved.seen.filter(isCreature) : [];
+    const fortressOpened = saved?.fortressOpened === true;
+    const started = saved?.fortressStartedAt;
+    const fortressStartedAt = !fortressOpened && typeof started === 'number' && Number.isSafeInteger(started) && started > 0
+      ? Math.min(Date.now(), started) : undefined;
+    let restored = validLocation ? location : entrance;
+    if (restored.fortressRoom !== undefined && (!fortressOpened || restored.area !== 'harbor' || restored.room ||
+        !isFortressRoom(restored.fortressRoom) || !fortressMaps[restored.fortressRoom].walkable[restored.y]?.[restored.x])) {
+      restored = { area: 'harbor', ...fortressPier };
+    }
     return {
-      location: validLocation ? location : entrance,
+      location: restored, fortressOpened, fortressStartedAt,
       visited: [...new Set<FieldArea>(['harbor', ...visited, validLocation ? location.area : 'harbor'])],
       greeted: saved?.greeted === true,
       sparWon: saved?.sparWon === true,

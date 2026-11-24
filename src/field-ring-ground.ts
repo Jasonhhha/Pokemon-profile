@@ -1,5 +1,5 @@
 import {
-  BufferGeometry, CatmullRomCurve3, Color, DataTexture, DoubleSide, Float32BufferAttribute, Group,
+  BufferGeometry, CatmullRomCurve3, CircleGeometry, Color, DataTexture, DoubleSide, Float32BufferAttribute, Group,
   LinearFilter, Mesh, MeshStandardMaterial, PlaneGeometry, RGBAFormat, ShaderMaterial,
   UniformsLib, UniformsUtils, Vector3, type Material,
 } from 'three';
@@ -1089,6 +1089,7 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
       surveyDiameter: { value: surveySpan * 2 },
       basinRim: { value: ringRadius(innerEdge) },
       basinReach: { value: ringRadius(9.25) },
+      fortressRadius: { value: ringRadius(harborHeight + 1) },
       deep: { value: new Color('#2b5363') }, lagoon: { value: new Color('#437570') }, shallows: { value: new Color('#577f7d') },
       openSea: { value: new Color('#3e7791') },
     },
@@ -1108,6 +1109,7 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
       uniform float surveyDiameter;
       uniform float basinRim;
       uniform float basinReach;
+      uniform float fortressRadius;
       uniform vec3 deep;
       uniform vec3 openSea;
       uniform vec3 lagoon;
@@ -1149,6 +1151,14 @@ function ocean(edges: Edge[], clock: { value: number }, night: { value: number }
         float patches = smoothstep(.45, 1.24, sin(dot(p, vec2(1.84, .71)) + sin(swell) * .84 - clock * .38) + swash * .31);
         float cap = crest * patches * resolvedRipple * (.26 + .74 * smoothstep(.19, .81, bank));
         float lighter = glint * .064 + fresnel * .116 + foam * .085 + cap * .023 * distanceQuiet * distanceQuiet;
+        float lift = max(0.0, -.58 - waterPoint.y);
+        float exposed = smoothstep(.16, 1.24, lift);
+        float hullDistance = radius - fortressRadius - .06 - .052 * lift;
+        float surge = .07 * sin(p.x * .81 - clock * 1.43) + .057 * cos(p.y * 1.14 + clock * .88);
+        float contact = 1.0 - smoothstep(.035, .21, abs(hullDistance - .11 - surge));
+        float wash = exp(-max(0.0, hullDistance) * 1.9) * (.5 + .5 * cos((hullDistance - surge) * 14.0 - clock * 1.76));
+        color *= 1.0 - exposed * exp(-max(0.0, hullDistance) * .96) * .24;
+        lighter += exposed * (contact * (.19 + .25 * fringe) + wash * .058);
         vec3 dusk = color * vec3(.27,.45,.60) + vec3(.013,.023,.037);
         color = mix(color, dusk, night);
         color = mix(color, mix(vec3(.45,.68,.65), vec3(.14,.29,.38), night), lighter);
@@ -1189,13 +1199,23 @@ export function buildRingGround() {
   courtDetails(paving);
   fountainMosaic(paint);
   parks(paving, trim, leaves);
+  const sea = ocean(edges, clock, night, vista);
+  const basin = new Mesh(new CircleGeometry(ringRadius(harborHeight + 1) - .02, 144), sea.material);
+  basin.name = 'Retained upper harbor';
+  basin.rotation.copy(sea.rotation);
+  basin.position.y = seaLevel;
+  basin.renderOrder = -1;
+  basin.visible = false;
+  sea.renderOrder = -2;
   group.add(top.mesh(stone, 'Annulus walk surface'), cliffs.mesh(stone, 'Carved seawalls and bridge arches', true),
     paving.mesh(stone, 'Radial plazas and limestone promenades'), roads.mesh(stone, 'Circular slate boulevard'),
     paint.mesh(stone, 'Ring crossings and guiding lines'), trim.mesh(stone, 'Curb caps and quay details', true),
-    boards.mesh(timberFinish(), 'Curved timber landing', true), leaves.mesh(wind(clock), 'Wind in the annular parks'), ocean(edges, clock, night, vista));
+    boards.mesh(timberFinish(), 'Curved timber landing', true), leaves.mesh(wind(clock), 'Wind in the annular parks'), sea, basin);
   return {
     group,
-    update(time: number, darkness: number, aerial = 0) {
+    update(time: number, darkness: number, aerial = 0, seaDrop = 0) {
+      sea.position.y = seaLevel - seaDrop;
+      basin.visible = seaDrop > .0001;
       clock.value = time / 1000;
       night.value = darkness;
       vista.value = aerial;

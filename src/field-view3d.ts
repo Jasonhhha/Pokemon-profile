@@ -12,6 +12,7 @@ import type { SurveyId } from './field-city-walks';
 import { buildRingArchitecture } from './field-ring-architecture';
 import { buildRingGates } from './field-ring-gates';
 import { buildRingGround } from './field-ring-ground';
+import { buildFortressExterior, fortressLift, fortressRadius, fortressShot } from './field-fortress-exterior';
 import { frameStreetSubject, harborAerialCamera, harborOverviewYaw, ringStreetLooksOutward, ringStreetRow } from './field-ring-coordinates';
 import { buildRingTerraces } from './field-ring-terraces';
 import { RING_PERIOD, ringAngle, ringCoordinates, ringPosition, ringRadius, ringXDelta } from './field-ring-space';
@@ -74,7 +75,7 @@ const atmospheres = {
 
 type SceneKey = keyof typeof atmospheres;
 type SceneModel = Omit<ReturnType<typeof buildFieldTerrain>, 'update'> & {
-  update: (time: number, night: number, pumpElapsed?: number) => void;
+  update: (time: number, night: number, pumpElapsed?: number, fortress?: FieldView['fortress']) => void;
   lamps?: CityLamp[];
   optics?: ReturnType<typeof buildCityLight>;
   crowd?: ReturnType<typeof buildCityCrowd>;
@@ -314,6 +315,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   let lastActivity = -Infinity;
   let orbitChangedAt = -Infinity;
   let previousOverview = false;
+  let previousFortressShot = false;
   let previousOrbitOffset = 0;
   let previousOrbitTilt = 0;
   let renderCost = 4;
@@ -468,9 +470,11 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         const transit = buildRingTransit();
         opaque.push(transit.structure, ...street.occluders);
         const ferry = buildCityFerry();
+        const fortressExterior = buildFortressExterior();
+        let fortressShadowStep = 0;
         const optics = buildCityLight(street.lamps, true);
         const crowd = buildCityCrowd(shadowMap);
-        ground.group.add(structures, street.group, transit.group, ferry.group, optics.group, crowd.group);
+        ground.group.add(structures, street.group, transit.group, ferry.group, optics.group, crowd.group, fortressExterior.group);
         for (const prop of props.harbor) {
           if (prop.kind !== 'beacon' && prop.kind !== 'boat') continue;
           const object = buildFieldProp(prop, area);
@@ -492,12 +496,18 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
           group: ground.group,
           lamps: street.lamps,
           optics, crowd, occluders, reflections,
-          dispose() { ferry.dispose(); gateways.dispose(); transit.dispose(); },
-          update(time, night, pumpElapsed) {
-            ground.update(time, night, aerialAmount);
+          dispose() { ferry.dispose(); gateways.dispose(); transit.dispose(); fortressExterior.dispose(); },
+          update(time, night, pumpElapsed, fortress) {
+            const seaDrop = (fortress?.lift ?? 0) * fortressLift;
+            ground.update(time, night, aerialAmount, seaDrop);
+            fortressExterior.update(fortress, time, night);
+            const shadowStep = seaDrop ? 1 + Math.round(Math.max(0, (fortress?.drain ?? 0) - .80) * 20) : 0;
+            if (shadowStep !== fortressShadowStep) renderer.shadowMap.needsUpdate = true;
+            fortressShadowStep = shadowStep;
             street.update(time, night, pumpElapsed);
             transit.update(time, night);
             ferry.update(time, night);
+            ferry.group.position.y = -seaDrop;
             optics.update(night, time);
             updateCityArchitecture(night);
             structures.userData.update?.(time, night);
@@ -613,6 +623,9 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const { room, area } = view.location;
     const polar = area === 'harbor' && !room;
     const panorama = polar && view.overview;
+    const fortress = polar && view.fortress?.cinematic ? fortressShot(view.fortress, width / height) : undefined;
+    if (Boolean(fortress) !== previousFortressShot) previousTime = 0;
+    previousFortressShot = Boolean(fortress);
     const lookout = room ? 0 : outlooks[area].reduce((strength, [pointX, pointY, radius]) => {
       const across = polar ? ringXDelta(pointX, x - .5) : x - .5 - pointX;
       return Math.max(strength, 1 - Math.hypot(across, z - .875 - pointY) / radius);
@@ -628,18 +641,18 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     const aspect = width / height;
     const tour = harborAerialCamera(aspect, mobile, view.orbitTilt);
     const outward = polar && ringStreetLooksOutward(view.location.x, view.location.y);
-    const focus = polar && !panorama ? view.surveyFocus : undefined;
-    const rustle = polar && !panorama && !focus ? view.rustle : undefined;
+    const focus = polar && !panorama && !fortress ? view.surveyFocus : undefined;
+    const rustle = polar && !panorama && !focus && !fortress ? view.rustle : undefined;
     const reveal = rustle && Math.abs(ringXDelta(x, rustle.x + .5)) + Math.abs(z - rustle.y - .5) < 7.8
       ? ringPosition(rustle.x + .5, rustle.y + .5) : undefined;
-    aerialAmount += ((panorama ? 1 : 0) - aerialAmount) * lens;
+    aerialAmount += ((panorama || fortress ? 1 : 0) - aerialAmount) * lens;
     if (!polar || aerialAmount < .012) aerialAmount = 0;
     const alley = polar ? Math.min(1, Math.max(0, (8.0 - z) / 3.7)) : 0;
     let yaw = panorama ? harborOverviewYaw + view.orbitOffset + (calm ? 0 : Math.sin(time / 8300) * .09)
       : polar ? ringAngle(x) + (outward ? Math.PI - .26 : .27) - .08 * depth : room ? .12 : .33 - .16 * depth;
     let pitch = panorama ? tour.pitch
       : polar ? streetPitch(z, outward) - .045 * depth : room ? .92 : .79 - .08 * depth;
-    const bias = !panorama && polar && !focus ? alleyCamera(view.location.x, view.location.y, mobile, Boolean(reveal)) : undefined;
+    const bias = !panorama && polar && !focus && !fortress ? alleyCamera(view.location.x, view.location.y, mobile, Boolean(reveal)) : undefined;
     if (bias) {
       yaw += bias.yaw;
       pitch += bias.pitch;
@@ -648,11 +661,15 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
       yaw = ringAngle(focus.position.x) + (focus.id === 'station' ? Math.PI - .28 : .29);
       pitch = focus.id === 'garden' ? .82 : .60;
     }
+    if (fortress) {
+      yaw = fortress.yaw;
+      pitch = fortress.pitch;
+    }
     const turn = Math.atan2(Math.sin(yaw - viewYaw), Math.cos(yaw - viewYaw));
     viewYaw += turn * lens;
-    const turning = polar && !panorama && !calm && lens < 1 ? Math.min(.45, Math.max(0, (Math.abs(turn) - 1.05) * .26)) : 0;
+    const turning = polar && !panorama && !fortress && !calm && lens < 1 ? Math.min(.45, Math.max(0, (Math.abs(turn) - 1.05) * .26)) : 0;
     viewPitch += (Math.min(1.45, pitch + turning) - viewPitch) * lens;
-    const center = panorama ? { x: Math.sin(viewYaw) * tour.advance, z: Math.cos(viewYaw) * tour.advance } : polar
+    const center = fortress ? fortress.center : panorama ? { x: Math.sin(viewYaw) * tour.advance, z: Math.cos(viewYaw) * tour.advance } : polar
       ? streetCenter(x, z, mobile, outward, bias?.inset, bias?.lateral)
       : room ? { x: x * .42 + 12.1 * .58, z: z * .26 + 8.85 * .74 }
       : { x: x - 1.03, z: z - (mobile ? 1.61 : 2.48) };
@@ -667,14 +684,14 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     aimX += (center.x - aimX) * pan;
     aimZ += (center.z - aimZ) * pan;
 
-    const goalSpan = focus ? (mobile ? 3.85 : 3.65) : panorama ? tour.span
+    const goalSpan = fortress ? fortress.span : focus ? (mobile ? 3.85 : 3.65) : panorama ? tour.span
       : polar ? (mobile ? 7.45 : 8.56) + 1.70 * depth + .62 * alley
       : room ? (mobile ? 10.7 : 12.0)
       : (mobile ? 10.45 : aspect > 2.6 ? 10.8 : 12.85) + depth * 2.92;
-    const elevation = focus ? (focus.id === 'station' || focus.id === 'market' ? .50 : .18) : panorama ? tour.elevation : polar ? .78 : 0;
+    const elevation = fortress ? fortress.center.y : focus ? (focus.id === 'station' || focus.id === 'market' ? .50 : .18) : panorama ? tour.elevation : polar ? .78 : 0;
     span += (goalSpan - span) * lens;
     viewElevation += (elevation - viewElevation) * lens;
-    const distance = focus ? 5.2 : panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
+    const distance = fortress ? fortress.distance : focus ? 5.2 : panorama ? tour.distance : bias?.distance ?? fieldCameraDistance;
     viewDistance += (distance - viewDistance) * lens;
     const radius = viewDistance;
     if (reveal) {
@@ -816,14 +833,15 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
         if (city) light.position.y -= .34;
       }
     });
-    model.update(reduced ? 0 : time, darkness, view.pumpElapsed);
-    model.crowd?.update(time, x, z, reduced, cssWidth < 545, view.overview);
+    model.update(reduced ? 0 : time, darkness, view.pumpElapsed, view.fortress);
+    const cityWideShot = view.overview || previousFortressShot;
+    model.crowd?.update(time, x, z, reduced, cssWidth < 545, cityWideShot);
     effects.update(time, view, heroPosition.x, heroPosition.z, progress, darkness, width / cssWidth, reduced);
-    const obscured = model.occluders && !view.overview &&
+    const obscured = model.occluders && !cityWideShot &&
       hiddenFrom(camera.position, heroPosition.x, heroPosition.z) ? 1 : 0;
     pinVisibility = reduced ? obscured : pinVisibility + (obscured - pinVisibility) * .27;
-    silhouette?.show(view.overview ? 0 : pinVisibility);
-    pin.visible = !silhouette && pinVisibility > .06;
+    silhouette?.show(cityWideShot ? 0 : pinVisibility);
+    pin.visible = !cityWideShot && !silhouette && pinVisibility > .06;
     pin.material.opacity = pinVisibility * .9;
     const guide = location.room ? undefined : view.map.npcs.find(npc => npc.event === 'guide');
     const visibleTarget = activeNpc ? pointAt(activeNpc.x + .5, activeNpc.y + .875) : heroPosition;
@@ -847,6 +865,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
     });
     model.reflections?.update(renderer, camera, time, darkness, {
       mobile: cssWidth < 550, reducedMotion: reduced, enabled: renderCost < 16 || !step,
+      basinRadius: view.fortress?.lift ? fortressRadius - .02 : undefined,
     });
     renderer.render(scene, camera);
     display.drawImage(surface, 0, 0);
@@ -963,7 +982,7 @@ export function createFieldView3d(canvas: HTMLCanvasElement, reducedMotion: Medi
   return {
     surface, draw, resize, projectPoint, pointInWorld, hitSurvey, hitActor, destroy,
     resetCamera: () => { previousTime = 0; needsFrame = true; },
-    hasStreetFrame: () => key === 'harbor' && !previousOverview && width > 0 && height > 0,
+    hasStreetFrame: () => key === 'harbor' && !previousOverview && !previousFortressShot && width > 0 && height > 0,
     getCamera: () => ({ x: aimX * TILE, y: aimZ * TILE, scale: height / (span * TILE), depth, width, height }),
   };
 }

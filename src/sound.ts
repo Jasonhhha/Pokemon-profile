@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'wild' | 'trial';
-export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile';
-export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape';
+export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'fortress' | 'wild' | 'trial';
+export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile' | 'wet';
+export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal';
 
 type Score = {
   bpm: number;
@@ -28,6 +28,11 @@ const scores: Record<SoundScene, Score> = {
     melody: [71, 0, 78, 0, 83, 81, 78, 0, 74, 0, 81, 0, 85, 83, 81, 0, 76, 78, 79, 0, 86, 0, 83, 81, 78, 0, 74, 0, 76, 74, 71, 0],
     bass: [47, 50, 52, 47], harmony: [[59, 62, 66], [57, 62, 66], [55, 59, 64], [54, 59, 66]],
   },
+  fortress: {
+    bpm: 58, voice: 'sine',
+    melody: [0, 0, 62, 0, 0, 0, 0, 57, 0, 0, 0, 0, 65, 0, 0, 0],
+    bass: [31, 26, 29, 33], harmony: [[43, 50], [38, 45], [41, 48], [45, 52]],
+  },
   interior: {
     bpm: 82, voice: 'sine',
     melody: [60, 0, 64, 67, 69, 0, 67, 0, 62, 0, 65, 69, 74, 0, 69, 0, 64, 0, 67, 71, 76, 74, 71, 0, 67, 0, 72, 76, 74, 0, 72, 0],
@@ -46,6 +51,7 @@ const scores: Record<SoundScene, Score> = {
 };
 
 const cues: Record<SoundCue, readonly number[]> = {
+  hoist: [26, 33], discharge: [], seal: [38, 45, 50],
   step: [40], interact: [74, 81], area: [57, 62, 67], encounter: [76, 83, 72, 78], win: [62, 66, 69, 74],
   hit: [86, 52], heal: [69, 76, 81], capture: [72, 76, 79, 84], miss: [60, 56], faint: [67, 62, 54], switch: [65, 74], escape: [76, 69, 64],
 };
@@ -71,6 +77,7 @@ const footsteps = {
   timber: { frequency: 360, high: 70, resonance: 1.21, length: .14, gain: .28, heel: 42 },
   grass: { frequency: 1890, high: 200, resonance: .88, length: .19, gain: .24, heel: 34 },
   earth: { frequency: 1020, high: 103, resonance: .92, length: .18, gain: .29, heel: 38 },
+  wet: { frequency: 1650, high: 235, resonance: .81, length: .22, gain: .35, heel: 43 },
   tile: { frequency: 960, high: 150, resonance: 1.65, length: .12, gain: .26, heel: 51 },
 };
 
@@ -222,6 +229,29 @@ export function useSound(scene: SoundScene) {
     const time = context.currentTime + .005;
     if (cue === 'step') {
       footfall(context, output, noise, surface, time, foot.current++);
+      return;
+    }
+    if (cue === 'hoist' || cue === 'discharge') {
+      const pour = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const swell = context.createGain();
+      const draining = cue === 'discharge';
+      const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? .45 : draining ? 4.7 : 3.9;
+      pour.buffer = noise;
+      pour.loop = true;
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(draining ? 390 : 90, time);
+      filter.frequency.exponentialRampToValueAtTime(draining ? 1350 : 185, time + duration * .4);
+      swell.gain.setValueAtTime(.001, time);
+      swell.gain.exponentialRampToValueAtTime(draining ? .22 : .12, time + duration * .27);
+      swell.gain.exponentialRampToValueAtTime(.001, time + duration);
+      pour.connect(filter).connect(swell).connect(output);
+      pour.start(time);
+      pour.stop(time + duration);
+      pour.onended = () => { pour.disconnect(); filter.disconnect(); swell.disconnect(); };
+    }
+    if (cue === 'seal') {
+      cues.seal.forEach((note, i) => voice(context, output, note, time + .22 * i, 1.3, .068, 'sine'));
       return;
     }
     cues[cue].forEach((note, i) => voice(context, output, note, time + i * .08, .18, .057, cue === 'hit' ? 'square' : 'triangle'));
