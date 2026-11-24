@@ -6,8 +6,11 @@ import { CreatureSprite } from './creature-art';
 import { creatures, givePotion, healTeam, maxHp, potionHp, type CreatureId } from './creatures';
 import { addSeen, areas, chooseEncounter, entrance, loadAdventure, recordCourt, saveKey } from './adventure';
 import { areaIcons, HpBar, Pokedex, RouteAtlas, TeamPanel } from './adventure-menu';
-import { fortressPier, fortressRooms, openFortress, sleepingFortress } from './field-fortress-state';
+import { fortressLiftStops, fortressPier, fortressRooms, openFortress, sleepingFortress, type RoarPhase } from './field-fortress-state';
 import { rooms } from './field-rooms';
+import { isMazeRoom, mazeFloors, type MazePoint } from './fortress-maze';
+import { MazeAtlas, MazeMinimap } from './maze-atlas';
+import { recordMazeStep } from './fortress-survey';
 import { cityDistrict } from './field-city-layout';
 import { courtNotes, surveyStops, type CityStop, type CityStopId, type SurveyId } from './field-city-walks';
 import { FieldDialogue } from './field-dialogue';
@@ -15,7 +18,7 @@ import { FieldEncounterTransition } from './field-encounter-transition';
 import { About, Contact, Panel, ProfileForm, Research, loadProfile, type Profile } from './portfolio';
 import { useSound } from './sound';
 
-type PanelId = 'about' | 'projects' | 'contact' | 'edit' | 'map' | 'pack' | 'dex';
+type PanelId = 'about' | 'projects' | 'contact' | 'edit' | 'map' | 'pack' | 'dex' | 'maze';
 type Encounter = BattleEncounter & { area: FieldArea; firstPractice?: boolean };
 type Dialogue = { speaker: string; lines: string[]; index: number; choice?: { label: string; accept: () => void } };
 
@@ -40,6 +43,9 @@ function loadNight() {
 export default function App() {
   const [save, setSave] = useState(loadAdventure);
   const [fortress, setFortress] = useState(save.fortressOpened ? openFortress : sleepingFortress);
+  const [liftMoving, setLiftMoving] = useState(false);
+  const [roarPhase, setRoarPhase] = useState<RoarPhase>('quiet');
+  const [listeningToCry, setListeningToCry] = useState(false);
   const [inspectingSeal, setInspectingSeal] = useState(false);
   const [canSave, setCanSave] = useState(true);
   const [profile, setProfile] = useState(loadProfile);
@@ -52,7 +58,7 @@ export default function App() {
   const [night, setNight] = useState(loadNight);
   const [running, setRunning] = useState(false);
   const [arrival, setArrival] = useState<{ key: string; name: string; english: string } | null>(null);
-  const [dexEntry, setDexEntry] = useState<CreatureId>();
+  const [dexEntry, setDexEntry] = useState<CreatureId | 'kyurem'>();
   const [atlasStop, setAtlasStop] = useState<CityStopId>();
   const [hint, setHint] = useState('');
   const [ready, setReady] = useState(false);
@@ -72,9 +78,16 @@ export default function App() {
   const area = encounter?.area ?? save.location.area;
   const room = !encounter && save.location.room ? rooms[save.location.room] : undefined;
   const floor = !encounter ? save.location.fortressRoom : undefined;
+  const maze = isMazeRoom(floor) ? floor : undefined;
+  const plan = maze ? mazeFloors[maze] : undefined;
+  const near = (point: MazePoint) => Math.abs(save.location.x - point.x) + Math.abs(save.location.y - point.y) <= 1;
+  const liftAvailable = (floor === 'sluice' || floor === 'catacomb') && save.shortcuts.includes('catacomb') && near(fortressLiftStops[floor]);
+  const shortcutOpen = Boolean(maze && save.shortcuts.includes(maze));
+  const mazeAction = plan && (near(plan.down) ? '沿阶梯下行' : !shortcutOpen && near(plan.switch) ? '操作' + plan.switchName : undefined);
+  const returnLabel = floor === 'seal' ? '返回陵廊' : floor === 'catacomb' ? '返回水渠' : floor === 'aqueduct' ? '返回水殿' : '返回栈桥';
   const interior = Boolean(floor || room);
   const atPier = !interior && area === 'harbor' && Math.abs(save.location.x - fortressPier.x) + Math.abs(save.location.y - fortressPier.y) <= 1;
-  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor ? 'fortress' : room ? 'interior' : area);
+  const sound = useSound(encounter ? (encounter.trial || encounter.trainer ? 'trial' : 'wild') : floor === 'seal' ? 'sanctum' : floor ? 'fortress' : room ? 'interior' : area, floor);
   const scene = floor ? fortressRooms[floor] : room ?? fieldAreas[area];
   const AreaIcon = floor ? Castle : room ? House : areaIcons[area];
   const overviewLabel = overview ? '返回街道' : fortress.phase === 'open' ? '环看海宫' : '俯瞰环城';
@@ -182,12 +195,22 @@ export default function App() {
       fortressOpened: current.current.fortressOpened,
       fortressStartedAt: current.current.fortressStartedAt,
       tideDialAwake: current.current.tideDialAwake,
+      shortcuts: current.current.shortcuts, onLiftTravel: setLiftMoving, onCryStop: sound.stopCry,
+      onRoarPhase: phase => {
+        setRoarPhase(phase);
+        if (phase === 'quiet') setListeningToCry(false);
+      },
+      onShortcut: room => setSave(previous => previous.shortcuts.includes(room) ? previous : { ...previous, shortcuts: [...previous.shortcuts, room] }),
       onDialAwake: () => setSave(previous => ({ ...previous, tideDialAwake: true })),
       onFortressSave: started => setSave(previous => {
         if (started === null) return { ...previous, fortressOpened: true, fortressStartedAt: undefined };
         return previous.fortressOpened ? previous : { ...previous, fortressStartedAt: started };
       }),
-      onFortressView: (view, inspecting) => { setFortress(view); setInspectingSeal(inspecting); },
+      onFortressView: (view, inspecting) => {
+        setFortress(view);
+        setInspectingSeal(inspecting);
+        if (inspecting) setSave(previous => previous.kyuremObserved ? previous : { ...previous, kyuremObserved: true });
+      },
       onReady: () => setReady(true),
       onOverview: setOverview,
       onLocation: location => {
@@ -198,7 +221,7 @@ export default function App() {
           setArrival({ key, name: destination.name, english: destination.english });
         }
         setSave(previous => ({
-          ...previous, location, visited: previous.visited.includes(location.area) ? previous.visited : [...previous.visited, location.area],
+          ...previous, location, mazeTrail: recordMazeStep(previous.mazeTrail, location), visited: previous.visited.includes(location.area) ? previous.visited : [...previous.visited, location.area],
         }));
       },
       onHint: setHint,
@@ -217,7 +240,7 @@ export default function App() {
       }
     });
     return () => { cancelAnimationFrame(frame); field.destroy(); controller.current = null; };
-  }, [encounterIn, inspectCourt, openFromField, sound.play]);
+  }, [encounterIn, inspectCourt, openFromField, sound.play, sound.stopCry]);
 
   useEffect(() => {
     locked.current = paused;
@@ -273,14 +296,31 @@ export default function App() {
   }, [expanded, focusField]);
 
   function openPanel(next: PanelId) {
-    if (fortress.cinematic) return;
+    if (fortress.cinematic || liftMoving) return;
     locked.current = true;
     controller.current?.setPaused(true);
     setPanel(next);
   }
 
+  function walkBackTo(point: MazePoint) {
+    if (!maze || !controller.current) return;
+    controller.current.setPaused(false);
+    if (controller.current.walkRecorded(point, current.current.mazeTrail[maze])) {
+      setPanel(null);
+      focusField();
+    } else controller.current.setPaused(true);
+  }
+
+  function hearKyurem() {
+    if (controller.current?.callKyurem()) {
+      setListeningToCry(true);
+      sound.audition();
+    }
+    focusField();
+  }
+
   function openDex(id?: CreatureId) {
-    setDexEntry(id);
+    setDexEntry(id ?? (floor === 'seal' && save.kyuremObserved ? 'kyurem' : undefined));
     openPanel('dex');
   }
 
@@ -323,7 +363,7 @@ export default function App() {
     if (key === 'm' || key === 'q' || key === 'j') {
       event.preventDefault();
       if (key === 'j') openDex();
-      else openPanel(key === 'm' ? 'map' : 'pack');
+      else openPanel(key === 'm' ? maze ? 'maze' : 'map' : 'pack');
     }
   }
 
@@ -411,6 +451,7 @@ export default function App() {
   ];
   const activeTask = tasks.find(task => !task.done)?.id;
   const panelTitles: Record<PanelId, { title: string; label: string }> = {
+    maze: { title: '迷宫行迹图', label: 'SURVEY MAP' },
     about: { title: profile.name, label: 'ABOUT ME' },
     projects: { title: '研究档案', label: 'RESEARCH ARCHIVE' },
     contact: { title: '联系我', label: 'SIGNAL STATION' },
@@ -451,43 +492,45 @@ export default function App() {
           <header className="game-bar">
             <div className="area-name"><span className="area-icon"><AreaIcon size={18} /></span><strong>{scene.name}</strong><span className="area-english pixel">{scene.english}</span></div>
             <div className="game-tools">
-              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused}><DoorOpen size={16} />{floor === 'seal' ? '返回水殿' : floor ? '返回栈桥' : '离开室内'}</button> :
+              {interior ? <button type="button" className="area-weather" onClick={leaveRoom} disabled={paused || liftMoving}><DoorOpen size={16} />{floor ? returnLabel : '离开室内'}</button> :
               <button type="button" className="area-weather" aria-label={night ? '切换到白天' : '切换到夜晚'} aria-pressed={night} title={night ? '切换到白天' : '切换到夜晚'} onClick={() => { setNight(!night); if (!paused) focusField(); }}>
                 {night ? <Moon size={16} /> : area === 'harbor' ? <Sun size={16} /> : <AreaIcon size={16} />}{night ? '夜间' : area === 'harbor' ? '晴朗' : area === 'grove' ? '林雾' : '高地风'}
               </button>}
               {area === 'harbor' && !interior && <button type="button" className="icon-button overview-button" aria-label={overviewLabel}
-                aria-pressed={overview} title={overviewLabel} disabled={!ready || paused || fortress.cinematic}
+                aria-pressed={overview} title={overviewLabel} disabled={!ready || paused || fortress.cinematic || liftMoving}
                 onClick={() => { controller.current?.setOverview(!overview); focusField(); }}>
                 <Orbit size={17} /><span>{overviewLabel}</span>
               </button>}
-              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}><Map size={17} /></button>
+              <button type="button" className="icon-button" aria-label="群岛航线" title="群岛航线" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('map')}><Map size={17} /></button>
               <button type="button" className="icon-button" aria-label={expanded ? '还原画面' : '放大画面'} title={expanded ? '还原画面' : '放大画面'} onClick={() => { setExpanded(!expanded); if (!paused) focusField(); }}>{expanded ? <Minimize size={16} /> : <Maximize size={16} />}</button>
             </div>
           </header>
 
           <div className={`game-viewport${encounter && !enteringBattle ? ' game-in-battle' : ''}`} data-area={area}
-            data-room={floor ?? save.location.room} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
+            data-room={floor ?? save.location.room} data-lift-moving={liftMoving || undefined} data-shortcut={maze ? shortcutOpen ? 'open' : 'closed' : undefined} data-roar-phase={floor === 'seal' ? roarPhase : undefined} data-fortress-phase={fortress.phase} data-fortress-cinematic={fortress.cinematic || undefined} data-tide-dial={floor && save.tideDialAwake ? 'awake' : undefined} data-observing-seal={inspectingSeal || undefined} data-overview={overview || undefined}>
             <div className="game-canvas" ref={canvas} role="application" data-night={night && !interior} tabIndex={paused ? -1 : 0} inert={paused} onKeyDown={onFieldShortcut}
-              aria-label="游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开航线，Q 打开队伍，J 打开图鉴。" />
+              aria-label={`游戏地图。方向键或 WASD 移动，Shift 跑步，E 键互动，M 打开${maze ? '本层行迹图' : '航线'}，Q 打开队伍，J 打开图鉴。`} />
             {!ready && <div className="loading" role="status"><Compass size={25} />正在绘制{scene.name}…</div>}
             {ready && !encounter && !dialogue && <div className="map-coordinate" aria-hidden="true"><Crosshair size={14} />
               {area === 'harbor' && !interior && <span className="map-district">{cityDistrict(save.location.x, save.location.y)}</span>}
-              <span className="pixel">{areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
+              <span className="pixel">{floor ? fortressRooms[floor].level : areaNumber} / {String(save.location.x).padStart(2, '0')}.{String(save.location.y).padStart(2, '0')}</span>
             </div>}
-            {ready && !paused && area === 'harbor' && !room && <div className="fortress-controls">
+            {ready && !paused && !liftMoving && !inspectingSeal && area === 'harbor' && !room && <div className="fortress-controls">
               {fortress.cinematic ? <div className="fortress-meter">
                 <Waves size={17} /><span role="status">{fortress.phase === 'rising' ? '堡体上浮' : fortress.phase === 'draining' ? '八向排水' : '水闸开启'}</span>
                 <progress aria-label="堡垒升降进度" value={fortress.phase === 'rising' ? fortress.lift * .48 : .48 + fortress.drain * .52} max={1} />
               </div> : <>
-                {inspectingSeal && <span className="seal-identification"><small>全国图鉴 #0382 · 水</small><strong>盖欧卡</strong></span>}
-                <button type="button" className="fortress-action" onClick={() => { controller.current?.approachFortress(); focusField(); }}>
+                {(!maze || mazeAction) && <button type="button" className="fortress-action" onClick={() => { controller.current?.approachFortress(); focusField(); }}>
                   {floor === 'seal' ? <Waves size={16} /> : <Castle size={16} />}
-                  {inspectingSeal ? '返回观测桥' : floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '进入堡垒' : '升起堡垒') : '前往西栈桥'}
-                </button>
+                  {mazeAction ?? (floor === 'seal' ? '靠近封印' : floor ? '前往下层' : atPier ? (fortress.phase === 'open' ? '进入堡垒' : '升起堡垒') : '前往西栈桥')}
+                </button>}
                 {atPier && fortress.phase === 'open' && <button type="button" className="fortress-replay" onClick={() => { controller.current?.replayFortress(); focusField(); }}>重看浮升</button>}
-                {floor === 'sluice' && !save.tideDialAwake && <button type="button" className="fortress-replay" onClick={() => { controller.current?.approachTideDial(); focusField(); }}>唤醒潮盘</button>}
+                {liftAvailable && <button type="button" className="fortress-replay" onClick={() => { controller.current?.rideFortressLift(); focusField(); }}>乘升降台</button>}
+                {floor === 'sluice' && !liftAvailable && !save.tideDialAwake && <button type="button" className="fortress-replay" onClick={() => { controller.current?.approachTideDial(); focusField(); }}>唤醒潮盘</button>}
               </>}
             </div>}
+            {maze && ready && !paused && !liftMoving && <MazeMinimap room={maze} position={save.location} walked={save.mazeTrail[maze]}
+              open={shortcutOpen} expand={() => openPanel('maze')} />}
             {arrival && !encounter && !dialogue && <div className="area-arrival" key={arrival.key} role="status"><span className="pixel">{arrival.english}</span><strong>{arrival.name}</strong></div>}
             {dialogue && <FieldDialogue key={dialogue.index} speaker={dialogue.speaker} line={dialogue.lines[dialogue.index]}
               action={dialogue.index + 1 < dialogue.lines.length ? '继续' : dialogue.choice?.label ?? '结束'}
@@ -498,20 +541,25 @@ export default function App() {
             </FieldEncounterTransition>}
           </div>
 
-          <div className="game-controls">
+          {inspectingSeal ? <div className="game-controls seal-console">
+            <div className="seal-specimen"><small>#0646 · 龙 / 冰</small><strong>酋雷姆</strong></div>
+            <span className="seal-caption" role="status">{roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : '能量罩稳定'}</span>
+            <button type="button" className="fortress-action" disabled={paused || listeningToCry} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
+            <button type="button" className="fortress-replay" disabled={paused} onClick={playField}>返回观测桥</button>
+          </div> : <div className="game-controls">
             <div className="control-keys" role="group" aria-label="键盘操作">
               <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><small>移动</small></span>
               <span><kbd>E</kbd><small>互动</small></span>
             </div>
             <div className="game-hint" aria-live="polite"><MapPin size={15} />{encounter ? '正在战斗' : hint || fieldAreas[area].description}</div>
-            <button className="interact-button" type="button" disabled={!ready || paused || fortress.cinematic} onClick={playField}><span className="pixel">E</span>互动</button>
-          </div>
+            <button className="interact-button" type="button" disabled={!ready || paused || fortress.cinematic || liftMoving} onClick={playField}><span className="pixel">E</span>互动</button>
+          </div>}
 
-          {!encounter && <div className="touch-controls" role="group" aria-label="触屏操作">
+          {!encounter && !inspectingSeal && <div className="touch-controls" role="group" aria-label="触屏操作">
             <div className="dpad">
               {(Object.keys(directions) as Direction[]).map(direction => {
                 const { name, icon: Icon } = directions[direction];
-                return <button type="button" key={direction} className={`dpad-${direction}`} aria-label={name} disabled={!ready || paused || fortress.cinematic}
+                return <button type="button" key={direction} className={`dpad-${direction}`} aria-label={name} disabled={!ready || paused || fortress.cinematic || liftMoving}
                   onPointerDown={event => {
                     if (event.button !== 0) return;
                     event.preventDefault();
@@ -529,15 +577,15 @@ export default function App() {
               <span className="dpad-core" />
             </div>
             <div className="touch-actions">
-              <button type="button" className="touch-run" aria-label="跑步" aria-pressed={running} disabled={!ready || paused || fortress.cinematic} onClick={toggleRunning}><Zap size={21} /></button>
-              <button type="button" className="touch-action" aria-label="与附近目标互动" disabled={!ready || paused || fortress.cinematic} onClick={playField}>A</button>
+              <button type="button" className="touch-run" aria-label="跑步" aria-pressed={running} disabled={!ready || paused || fortress.cinematic || liftMoving} onClick={toggleRunning}><Zap size={21} /></button>
+              <button type="button" className="touch-action" aria-label="与附近目标互动" disabled={!ready || paused || fortress.cinematic || liftMoving} onClick={playField}>A</button>
             </div>
           </div>}
           <div className="field-dock" role="group" aria-label="冒险菜单">
-            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}><Map size={16} /><span>航线</span><kbd aria-hidden="true">M</kbd></button>
-            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
-            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
-            <button type="button" className="field-dock-run" disabled={!ready || paused || fortress.cinematic} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
+            <button type="button" aria-keyshortcuts="M" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel(maze ? 'maze' : 'map')}><Map size={16} /><span>{maze ? '行迹图' : '航线'}</span><kbd aria-hidden="true">M</kbd></button>
+            <button type="button" aria-keyshortcuts="Q" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('pack')}><Backpack size={16} /><span>队伍与道具</span><kbd aria-hidden="true">Q</kbd></button>
+            <button type="button" aria-keyshortcuts="J" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openDex()}><BookMarked size={16} /><span>图鉴</span><kbd aria-hidden="true">J</kbd></button>
+            <button type="button" className="field-dock-run" disabled={!ready || paused || fortress.cinematic || liftMoving} aria-pressed={running} title="也可长按 Shift 跑步" onClick={toggleRunning}><Zap size={16} /><span>跑步</span><kbd aria-hidden="true">Shift</kbd></button>
           </div>
         </section>
 
@@ -550,14 +598,14 @@ export default function App() {
                 <div><strong>{task.label}</strong><small>{task.description}</small></div>
               </li>)}
             </ol>
-            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('map')}>
+            <button type="button" className="journal-map-link" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('map')}>
               <BookOpen size={14} /><span>街区手记</span><b>{save.courtVisits.length} / {surveyStops.length}</b><ArrowUpRight size={13} />
             </button>
           </section>
 
           <section className="side-card companion">
-            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
-            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue || fortress.cinematic)} onClick={() => openDex(lead.id)}>
+            <div className="side-card-header"><span className="side-mark"><Heart size={16} /></span><h2>同行宝可梦</h2><button type="button" className="icon-button" aria-label="打开背包" title="打开背包" disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openPanel('pack')}><Backpack size={18} /></button></div>
+            <button type="button" className="lead-portrait" data-portrait={lead.id} data-resting={paused} aria-label={`查看${leadInfo.name}的图鉴`} disabled={Boolean(encounter || dialogue || fortress.cinematic || liftMoving)} onClick={() => openDex(lead.id)}>
               <span className="lead-element">{leadInfo.element}</span><CreatureSprite id={lead.id} /><span className="lead-code pixel">{leadInfo.english}</span>
             </button>
             <div className="lead-status"><strong>{leadInfo.name}</strong><span className="pixel">LV. {lead.level}</span></div>
@@ -582,6 +630,7 @@ export default function App() {
     </main>
 
     {panel && <Panel title={panelTitles[panel].title} label={panelTitles[panel].label} close={closePanel}>
+      {panel === 'maze' && maze && <MazeAtlas room={maze} position={save.location} walked={save.mazeTrail[maze]} open={shortcutOpen} walk={walkBackTo} />}
       {panel === 'about' && <About profile={profile} edit={() => setPanel('edit')} />}
       {panel === 'projects' && <Research />}
       {panel === 'contact' && <Contact profile={profile} edit={() => setPanel('edit')} />}

@@ -6,7 +6,6 @@ import {
   Float32BufferAttribute,
   Group,
   Mesh,
-  MeshBasicMaterial,
   PlaneGeometry,
   Points,
   Path,
@@ -18,26 +17,19 @@ import {
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { FortressRoom, FortressInteriorFrame } from './field-fortress-state';
 
-const tau = Math.PI * 2;
 type Puddle = { x: number; z: number; w: number; d: number; angle: number };
 
 const waterVertex = `
   varying vec3 point;
-  uniform float clock;
-  uniform float whirl;
+
   void main(){
     vec4 p=modelMatrix*vec4(position,1.);
-    vec2 delta=p.xz-vec2(8.5,6.5);
-    float radius=length(delta);
-    float az=atan(delta.y,delta.x);
-    float crest=sin(az*5.+radius*3.1+clock*10.4);
-    p.y+=whirl*(-.38*exp(-radius*radius*.10)+.092*crest*smoothstep(2.3,4.8,radius)*(1.-smoothstep(5.41,5.84,radius)));
     point=p.xyz;
     gl_Position=projectionMatrix*viewMatrix*p;
   }`;
 
 const waterFragment = `
-  uniform float clock; uniform float whirl; uniform float response;
+  uniform float clock;
   varying vec3 point;
   float hash(vec2 p){return fract(sin(dot(p,vec2(73.17,31.79)))*41791.27);}
   float noise(vec2 p){
@@ -47,8 +39,7 @@ const waterFragment = `
   float band(float x,float width){return 1.-smoothstep(width,width+max(.028,fwidth(x)),abs(x));}
   void main(){
     vec2 uv=point.xz;
-    vec2 d=uv-vec2(8.5,6.5);
-    float r=length(d), a=atan(d.y,d.x), t=clock;
+    float t=clock;
     float s1=sin(uv.x*2.36+sin(uv.y*1.81+t*.78)+t*.84);
     float s2=sin(uv.y*3.17-uv.x*.62+sin(uv.x*.87-t*.94)-t*.80);
     float shallow=.5+.5*s1*s2;
@@ -67,21 +58,7 @@ const waterFragment = `
     float retaining=exp(-min(abs(uv.x-7.0),abs(uv.x-10.0))*1.7);
     float bridgeShade=exp(-min(abs(uv.y-6.50),abs(uv.y-12.5))*.95);
     water*=1.-.39*max(retaining,bridgeShade);
-    if(whirl>.5){
-      float outer=smoothstep(1.9,4.8,r);
-      float theta=a*5.+r*3.14+t*10.4+.22*sin(a*7.-r*1.73+t*1.31);
-      float arm=.5+.5*cos(theta);
-      float crest=smoothstep(.73,.96,arm)*outer;
-      float serration=sin(a*27.+r*17.4+t*10.2)*.37+sin(a*11.-r*15.1+t*8.1)*.18;
-      float foam=band(sin(theta+serration+(chop-.5)*.69),.21)*crest*(.23+.67*shallow);
-      float torn=smoothstep(.54,.80,chop)*smoothstep(.65,.97,arm)*outer;
-      float lines=band(sin(theta*2.0+r+.53*s1),.24)*crest;
-      water=mix(vec3(.003,.027,.054),vec3(.007,.148,.177),shallow*.54+crest*.46);
-      water+=vec3(.030,.133,.14)*lines+vec3(.17,.47,.43)*foam+vec3(.21,.44,.42)*torn+vec3(.08,.20,.19)*glimmer;
-      float seal=band(r-4.91,.024)+.71*band(r-5.01,.012);
-      water+=vec3(.035,.125,.086)*seal*(.40+response*1.28);
-      gl_FragColor=vec4(water,.18+outer*.67);
-    }else gl_FragColor=vec4(water,.38+.17*chop);
+    gl_FragColor=vec4(water,.38+.17*chop);
     #include <colorspace_fragment>
   }`;
 
@@ -104,123 +81,6 @@ const puddleFragment = `
     gl_FragColor=vec4(ink,.72-rim*.19);
     #include <colorspace_fragment>
   }`;
-
-function sealSurface() {
-  const points: number[] = [0, 0, 0],
-    indices: number[] = [];
-  const arcs = 96,
-    bands = 12;
-  for (let j = 1; j <= bands; j++)
-    for (let i = 0; i < arcs; i++) {
-      const a = (i * tau) / arcs,
-        r = (j / bands) * 6.0;
-      points.push(r * Math.cos(a), 0, r * Math.sin(a));
-      const vertex = 1 + (j - 1) * arcs + i,
-        next = 1 + (j - 1) * arcs + ((i + 1) % arcs);
-      if (j === 1) indices.push(0, next, vertex);
-      else indices.push(vertex - arcs, next, vertex, vertex - arcs, next - arcs, next);
-    }
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-  geometry.setIndex(indices);
-  return geometry;
-}
-
-// Five sheets of water curl inward. Foam concentrates at the breaking lip and breaks into droplets.
-function breakingCrests() {
-  const points: number[] = [],
-    colors: number[] = [],
-    alpha: number[] = [],
-    indices: number[] = [];
-  for (let arm = 0; arm < 5; arm++) {
-    const base = points.length / 3;
-    for (let i = 0; i <= 60; i++) {
-      const t = i / 60;
-      const envelope = Math.pow(Math.max(0, Math.sin(t * Math.PI)), 0.78);
-      const az = (tau * arm) / 5 + 0.95 * t + 0.1 * Math.sin(Math.PI * t);
-      const radius = 5.49 - 1.4 * t;
-      const height = (0.46 + 0.15 * Math.sin(t * 18 + arm)) * envelope;
-      for (let band = 0; band <= 4; band++) {
-        const f = band / 4;
-        const r = radius + (0.17 * Math.sin(f * Math.PI) - f * 0.18) * envelope;
-        points.push(Math.cos(az) * r, -0.87 + height * f, Math.sin(az) * r);
-        const white = Math.max(0, (f - 0.66) * 3);
-        colors.push(0.027 + 0.55 * white, 0.23 + 0.5 * white, 0.26 + 0.49 * white);
-        alpha.push((0.22 + 0.47 * white) * envelope * (0.82 + 0.18 * Math.cos(t * 53 + arm * 13)));
-        if (i && band) {
-          const q = base + i * 5 + band;
-          indices.push(q - 6, q - 5, q, q - 6, q, q - 1);
-        }
-      }
-    }
-  }
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-  geometry.setAttribute('tint', new Float32BufferAttribute(colors, 3));
-  geometry.setAttribute('coverage', new Float32BufferAttribute(alpha, 1));
-  geometry.setIndex(indices);
-  const material = new ShaderMaterial({
-    transparent: true,
-    side: DoubleSide,
-    depthWrite: false,
-    vertexShader: `attribute vec3 tint;attribute float coverage;varying vec4 foam;
-      void main(){foam=vec4(tint,coverage);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader: `varying vec4 foam;void main(){gl_FragColor=foam;
-      #include <colorspace_fragment>
-    }`,
-  });
-  const wave = new Mesh(geometry, material);
-  wave.renderOrder = 3;
-  wave.position.set(8.5, 0, 6.5);
-  return wave;
-}
-
-function sealRibbons() {
-  const positions: number[] = [];
-  const indices: number[] = [];
-  const colors: number[] = [];
-  for (let arm = 0; arm < 10; arm++) {
-    const base = positions.length / 3;
-    const thin = arm % 2 === 1;
-    for (let n = 0; n <= 88; n++) {
-      const t = n / 88;
-      const r = (thin ? 3.2 : 3.75) + t * (thin ? 2.55 : 2.17);
-      const angle =
-        (Math.floor(arm / 2) * tau) / 5 - r * 0.626 + (thin ? 0.17 : 0) + 0.022 * Math.sin(t * 26 + arm * 9);
-      const fade = Math.sin(t * Math.PI);
-      const half = (thin ? 0.014 : 0.056) * fade * (0.69 + 0.31 * Math.sin(t * 24.1 + arm));
-      const h = -0.67 + 0.122 * Math.sin(t * Math.PI * 2.1) + 0.045 * fade;
-      for (const side of [-1, 1]) {
-        positions.push(
-          Math.cos(angle) * (r + half * side),
-          h + half * side * 0.27,
-          Math.sin(angle) * (r + half * side),
-        );
-        const v = (0.38 + 0.59 * fade) * (thin ? 0.72 : 1);
-        colors.push(0.32 * v, 0.85 * v, 0.81 * v);
-      }
-      if (n) {
-        const i = base + n * 2;
-        indices.push(i - 2, i - 1, i, i, i - 1, i + 1);
-      }
-    }
-  }
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
-  geometry.setIndex(indices);
-  const material = new MeshBasicMaterial({
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.62,
-    depthWrite: false,
-    side: DoubleSide,
-  });
-  const mesh = new Mesh(geometry, material);
-  mesh.position.set(8.5, 0, 6.5);
-  mesh.renderOrder = 3;
-  return mesh;
-}
 
 function wetFootfalls(puddles: Puddle[]) {
   const count = 12;
@@ -355,60 +215,6 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
   const clock = { value: 0 };
   const steps = wetFootfalls(puddles);
   group.add(steps.mesh);
-  const seaMaterial = new ShaderMaterial({
-    uniforms: { clock, whirl: { value: Number(room === 'seal') }, response: { value: 0 } },
-    vertexShader: waterVertex,
-    fragmentShader: waterFragment,
-    transparent: true,
-    depthWrite: false,
-    side: DoubleSide,
-  });
-  const seaGeometry = room === 'seal' ? sealSurface() : cisternSurface().rotateX(-Math.PI / 2);
-  const water = new Mesh(seaGeometry, seaMaterial);
-  water.position.set(8.5, room === 'seal' ? -0.8 : -0.57, room === 'seal' ? 6.5 : 2.0);
-  water.renderOrder = 2;
-  group.add(water);
-  // One small planar capture reflects the real column grid and arches across the shallow upper cistern.
-  // The seal has its own cloudy, deep vortex and does not need this pass.
-  const mirrorGeometry = room === 'sluice' ? cisternSurface() : undefined;
-  const mirror = mirrorGeometry
-    ? new Reflector(mirrorGeometry, {
-        color: 0xa7b9a7,
-        clipBias: 0.002,
-        textureWidth: 448,
-        textureHeight: 288,
-        multisample: 0,
-      })
-    : undefined;
-  if (mirror) {
-    mirror.rotation.x = -Math.PI / 2;
-    mirror.position.set(8.5, -0.585, 2);
-    const material = mirror.material as ShaderMaterial;
-    material.onBeforeCompile = shader => {
-      shader.uniforms.waterTime = clock;
-      shader.fragmentShader =
-        'uniform float waterTime;\n' +
-        shader.fragmentShader.replace(
-          'vec4 base = texture2DProj( tDiffuse, vUv );',
-          `
-        vec2 q=vUv.xy/vUv.w;
-        q.x+=.0013*sin(q.y*158.+waterTime*1.12)+.00050*sin(q.y*478.-waterTime*.8);
-        q.y+=.00046*sin(q.x*120.+waterTime);
-        vec4 base=texture2D(tDiffuse,q);
-      `,
-        );
-    };
-    const capture = mirror.onBeforeRender.bind(mirror);
-    mirror.onBeforeRender = (...args) => {
-      water.visible = false;
-      try {
-        capture(...args);
-      } finally {
-        water.visible = true;
-      }
-    };
-    group.add(mirror);
-  }
   const puddleMaterial = new ShaderMaterial({
     uniforms: { clock },
     vertexShader: puddleVertex,
@@ -426,11 +232,69 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
     patch.renderOrder = 2;
     group.add(patch);
   }
-  const ribbons = room === 'seal' ? sealRibbons() : undefined;
-  if (ribbons) group.add(ribbons);
-  const crests = room === 'seal' ? breakingCrests() : undefined;
-  if (crests) group.add(crests);
-  const sprayCount = room === 'seal' ? 74 : 28;
+  if (room !== 'sluice')
+    return {
+      group,
+      update(time: number, _width: number, _height: number, frame: FortressInteriorFrame) {
+        steps.update(frame);
+        clock.value = time;
+      },
+      dispose() {
+        steps.dispose();
+        plane.dispose();
+        puddleMaterial.dispose();
+      },
+    };
+  const seaMaterial = new ShaderMaterial({
+    uniforms: { clock },
+    vertexShader: waterVertex,
+    fragmentShader: waterFragment,
+    transparent: true,
+    depthWrite: false,
+    side: DoubleSide,
+  });
+  const seaGeometry = cisternSurface().rotateX(-Math.PI / 2);
+  const water = new Mesh(seaGeometry, seaMaterial);
+  water.position.set(8.5, -0.57, 2);
+  water.renderOrder = 2;
+  group.add(water);
+  // One small planar capture reflects the real column grid and arches across the shallow upper cistern.
+  const mirrorGeometry = cisternSurface();
+  const mirror = new Reflector(mirrorGeometry, {
+    color: 0xa7b9a7,
+    clipBias: 0.002,
+    textureWidth: 448,
+    textureHeight: 288,
+    multisample: 0,
+  });
+  mirror.rotation.x = -Math.PI / 2;
+  mirror.position.set(8.5, -0.585, 2);
+  const material = mirror.material as ShaderMaterial;
+  material.onBeforeCompile = shader => {
+    shader.uniforms.waterTime = clock;
+    shader.fragmentShader =
+      'uniform float waterTime;\n' +
+      shader.fragmentShader.replace(
+        'vec4 base = texture2DProj( tDiffuse, vUv );',
+        `
+      vec2 q=vUv.xy/vUv.w;
+      q.x+=.0013*sin(q.y*158.+waterTime*1.12)+.00050*sin(q.y*478.-waterTime*.8);
+      q.y+=.00046*sin(q.x*120.+waterTime);
+      vec4 base=texture2D(tDiffuse,q);
+    `,
+      );
+  };
+  const capture = mirror.onBeforeRender.bind(mirror);
+  mirror.onBeforeRender = (...args) => {
+    water.visible = false;
+    try {
+      capture(...args);
+    } finally {
+      water.visible = true;
+    }
+  };
+  group.add(mirror);
+  const sprayCount = 28;
   const spray = new Float32Array(sprayCount * 3);
   const sprayGeometry = new BufferGeometry();
   const sprayPoints = new Float32BufferAttribute(spray, 3);
@@ -438,8 +302,8 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
   const drops = new ShaderMaterial({
     uniforms: {
       viewport: { value: new Vector2(1, 1) },
-      color: { value: new Color(room === 'seal' ? 0x92ece3 : 0xafd7d2) },
-      drop: { value: Number(room === 'sluice') },
+      color: { value: new Color(0xafd7d2) },
+      drop: { value: 1 },
     },
     transparent: true,
     depthWrite: false,
@@ -461,40 +325,22 @@ export function buildFortressWater(room: FortressRoom, puddles: Puddle[]) {
     update(time: number, width: number, height: number, frame: FortressInteriorFrame) {
       steps.update(frame);
       clock.value = time;
-      seaMaterial.uniforms.response.value = frame.resonance ?? 0;
       drops.uniforms.viewport.value.set(width, height);
-      if (ribbons) ribbons.rotation.y = time * 2.08;
-      if (crests) crests.rotation.y = time * 2.08;
       for (let i = 0; i < sprayCount; i++) {
-        const life = (time * (room === 'seal' ? 0.68 : 0.58) + ((i * 0.61803399) % 1)) % 1;
-        if (room === 'seal') {
-          const r = 4.2 + (i % 11) * 0.138 + 0.13 * life;
-          const angle = i * 2.39996 - r * 0.626 - time * 2.08 - life * 0.39;
-          sprayPoints.setXYZ(
-            i,
-            8.5 + Math.cos(angle) * r,
-            -0.71 + Math.sin(life * Math.PI) * (0.19 + (i % 6) * 0.042),
-            6.5 + Math.sin(angle) * r,
-          );
-        } else {
-          const x = (i % 2 ? 4.47 : 12.53) + 0.17 * Math.sin(i * 53);
-          sprayPoints.setXYZ(i, x, 3.27 - life * life * 3.78, 4.5 + (i % 12) * 0.9 + 0.07 * Math.sin(i * 47));
-        }
+        const life = (time * 0.58 + ((i * 0.61803399) % 1)) % 1;
+        const x = (i % 2 ? 4.47 : 12.53) + 0.17 * Math.sin(i * 53);
+        sprayPoints.setXYZ(i, x, 3.27 - life * life * 3.78, 4.5 + (i % 12) * 0.9 + 0.07 * Math.sin(i * 47));
       }
       sprayPoints.needsUpdate = true;
     },
     dispose() {
       steps.dispose();
-      mirror?.dispose();
-      mirrorGeometry?.dispose();
+      mirror.dispose();
+      mirrorGeometry.dispose();
       seaGeometry.dispose();
       seaMaterial.dispose();
       plane.dispose();
       puddleMaterial.dispose();
-      ribbons?.geometry.dispose();
-      ribbons?.material.dispose();
-      crests?.geometry.dispose();
-      crests?.material.dispose();
       sprayGeometry.dispose();
       drops.dispose();
     },

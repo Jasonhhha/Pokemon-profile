@@ -1,7 +1,9 @@
 import { creatures, initialBattleProgress, makeMember, migrateBattleProgress, type BattleProgress, type CreatureId } from './creatures';
 import type { EncounterKind, FieldArea, FieldLocation } from './field';
 import { rooms } from './field-rooms';
-import { fortressMaps, fortressPier, isFortressRoom } from './field-fortress-state';
+import { fortressMapAt, fortressPier, isFortressRoom } from './field-fortress-state';
+import { isMazeRoom, type MazeRoom } from './fortress-maze';
+import { newMazeTrail, recordMazeStep, restoreMazeTrail, type MazeTrail } from './fortress-survey';
 import { courtNotes, surveyStops, type SurveyId } from './field-city-walks';
 
 export const areas = ['harbor', 'grove', 'summit'] as const;
@@ -16,6 +18,9 @@ export type AdventureSave = {
   courtVisits: SurveyId[];
   fortressOpened: boolean;
   tideDialAwake: boolean;
+  kyuremObserved: boolean;
+  shortcuts: MazeRoom[];
+  mazeTrail: MazeTrail;
   fortressStartedAt?: number;
   seen: CreatureId[];
   battle: BattleProgress;
@@ -77,7 +82,7 @@ export function recordCourt(save: AdventureSave, court: SurveyId): AdventureSave
 
 export function loadAdventure(): AdventureSave {
   const battle = initialBattleProgress();
-  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, tideDialAwake: false, seen: battle.team.map(member => member.id), battle };
+  const initial: AdventureSave = { location: entrance, visited: ['harbor'], greeted: false, sparWon: false, courtVisits: [], fortressOpened: false, tideDialAwake: false, kyuremObserved: false, shortcuts: [], mazeTrail: newMazeTrail(), seen: battle.team.map(member => member.id), battle };
   try {
     const stored = localStorage.getItem(saveKey);
     if (stored === null) {
@@ -93,15 +98,18 @@ export function loadAdventure(): AdventureSave {
     const progress = migrateBattleProgress(saved?.battle) ?? battle;
     const seen = Array.isArray(saved?.seen) ? saved.seen.filter(isCreature) : [];
     const fortressOpened = saved?.fortressOpened === true;
+    const shortcuts = fortressOpened && Array.isArray(saved?.shortcuts) ? [...new Set(saved.shortcuts.filter(isMazeRoom))] : [];
     const started = saved?.fortressStartedAt;
     const fortressStartedAt = !fortressOpened && typeof started === 'number' && Number.isSafeInteger(started) && started > 0
       ? Math.min(Date.now(), started) : undefined;
     let restored = validLocation ? location : entrance;
     if (restored.fortressRoom !== undefined && (!fortressOpened || restored.area !== 'harbor' || restored.room ||
-        !isFortressRoom(restored.fortressRoom) || !fortressMaps[restored.fortressRoom].walkable[restored.y]?.[restored.x])) {
+        !isFortressRoom(restored.fortressRoom) || !fortressMapAt(restored.fortressRoom, shortcuts).walkable[restored.y]?.[restored.x])) {
       restored = { area: 'harbor', ...fortressPier };
     }
     return {
+      kyuremObserved: fortressOpened && saved?.kyuremObserved === true,
+      shortcuts, mazeTrail: recordMazeStep(restoreMazeTrail(saved?.mazeTrail, shortcuts), restored),
       location: restored, fortressOpened, fortressStartedAt, tideDialAwake: fortressOpened && saved?.tideDialAwake === true,
       visited: [...new Set<FieldArea>(['harbor', ...visited, validLocation ? location.area : 'harbor'])],
       greeted: saved?.greeted === true,

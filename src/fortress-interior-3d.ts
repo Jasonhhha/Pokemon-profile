@@ -1,39 +1,36 @@
 import {
   AdditiveBlending,
-  Bone,
   CanvasTexture,
   Color,
   DirectionalLight,
   FogExp2,
   Group,
   HemisphereLight,
-  Material,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   PCFShadowMap,
   PerspectiveCamera,
   Plane,
   PlaneGeometry,
   PointLight,
-  Quaternion,
   Raycaster,
   Scene,
-  SkinnedMesh,
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
   Texture,
-  TextureLoader,
   Vector2,
   Vector3,
   WebGLRenderer,
 } from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createTraveler } from './field-travelers';
 import { createFieldPokemon } from './field-pokemon';
 import { fortressMaps, type FortressRoom, type FortressInteriorFrame } from './field-fortress-state';
 import { buildFortressStonework } from './fortress-stonework';
+import { createKyuremActor } from './fortress-kyurem';
+import { createIcePrison } from './fortress-ice-prison';
+import { isMazeRoom, mazeFieldMap } from './fortress-maze';
+import { buildMazeRoom3D } from './fortress-maze-3d';
 import { buildFortressWater } from './fortress-water';
 
 function radialTexture(shadow: boolean) {
@@ -58,176 +55,18 @@ function radialTexture(shadow: boolean) {
   return texture;
 }
 
-function releaseModel(scene: Group) {
-  const geometries = new Set<Mesh['geometry']>();
-  const materials = new Set<Material>();
-  const textures = new Set<Texture>();
-  const rigs = new Set<SkinnedMesh['skeleton']>();
-  scene.traverse(child => {
-    if (!(child instanceof Mesh)) return;
-    geometries.add(child.geometry);
-    for (const material of Array.isArray(child.material) ? child.material : [child.material]) materials.add(material);
-    if (child instanceof SkinnedMesh) rigs.add(child.skeleton);
-  });
-  for (const material of materials) {
-    for (const value of Object.values(material)) if (value instanceof Texture) textures.add(value);
-    material.dispose();
-  }
-  for (const geometry of geometries) geometry.dispose();
-  for (const texture of textures) {
-    texture.dispose();
-    const bitmap = texture.source.data;
-    if (typeof ImageBitmap !== 'undefined' && bitmap instanceof ImageBitmap) bitmap.close();
-  }
-  for (const rig of rigs) rig.dispose();
-}
-
-function createKyogre() {
-  const root = new Group();
-  const creature = new Group();
-  root.add(creature);
-  const base = import.meta.env.BASE_URL + 'assets/';
-  const plateMaterial = new SpriteMaterial({ transparent: true, depthWrite: false });
-  const plate = new Sprite(plateMaterial);
-  plate.scale.set(8.9, 8.9, 1);
-  plate.position.set(8.5, -0.7, 6.5);
-  plate.visible = false;
-  root.add(plate);
-  let model: Group | undefined;
-  let disposed = false;
-  const plateTexture = new TextureLoader().load(base + 'kyogre.png', texture => {
-    if (disposed) return;
-    texture.colorSpace = SRGBColorSpace;
-    plateMaterial.map = texture;
-    plateMaterial.needsUpdate = true;
-    plate.visible = !model;
-  });
-  type Motion = { bone: Bone; rest: Quaternion; axis: Vector3; strength: number; offset: number; speed: number };
-  const motions: Motion[] = [];
-  const seaClock = { value: 0 };
-  const swing = new Quaternion();
-  new GLTFLoader().load(
-    base + 'kyogre.glb',
-    ({ scene }) => {
-      if (disposed) {
-        releaseModel(scene);
-        return;
-      }
-      scene.updateMatrixWorld(true);
-      scene.traverse(object => {
-        if (object instanceof Mesh) {
-          object.frustumCulled = false;
-          const skin = object.material;
-          if (skin instanceof MeshStandardMaterial) {
-            // These three white masks are exported as overlays for the original game's glow pass.
-            // At rest the markings are the red lines on the underlying diffuse textures.
-            if (/^Material_(49|50|51)$/.test(skin.name)) object.visible = false;
-            skin.roughness = 0.53;
-            skin.emissiveMap = skin.map;
-            skin.emissive.setHex(0xb4cfca);
-            skin.emissiveIntensity = 0.14;
-            skin.onBeforeCompile = shader => {
-              shader.uniforms.vaultClock = seaClock;
-              shader.vertexShader =
-                'varying vec3 seaPosition;\n' +
-                shader.vertexShader.replace(
-                  '#include <project_vertex>',
-                  '#include <project_vertex>\n seaPosition=(modelMatrix*vec4(transformed,1.)).xyz;',
-                );
-              shader.fragmentShader =
-                'varying vec3 seaPosition; uniform float vaultClock;\n' +
-                shader.fragmentShader.replace(
-                  '#include <color_fragment>',
-                  `
-              #include <color_fragment>
-              float depth=1.-smoothstep(-1.62,-.52,seaPosition.y);
-              float s=sin(seaPosition.x*3.27+sin(seaPosition.z*2.51+vaultClock*.80)+vaultClock*.6);
-              float r=sin(seaPosition.z*3.91-seaPosition.x*.72-vaultClock*.78);
-              float lace=1.-smoothstep(.045,.21,abs(s+r));
-              diffuseColor.rgb*=mix(vec3(1.),vec3(.72,.89,.93),depth);
-              diffuseColor.rgb+=vec3(.024,.059,.043)*lace*(.22+.78*depth);
-            `,
-                );
-            };
-            object.castShadow = object.visible;
-            object.receiveShadow = true;
-          }
-        }
-        if (!(object instanceof Bone)) return;
-        const name = object.name.replace(/_\d+$/, '');
-        let strength = 0,
-          offset = 0,
-          speed = 0.94;
-        const axis = new Vector3(0, 0, 1);
-        if (/^[LR](Arm|ForeArm)$/.test(name)) {
-          strength = (name.startsWith('L') ? 1 : -1) * (name.includes('Fore') ? 0.074 : 0.092);
-          offset = name.includes('Fore') ? -0.6 : 0;
-        } else if (/^Tail[123]$/.test(name)) {
-          axis.set(1, 0, 0);
-          const segment = Number(name.at(-1));
-          strength = 0.075 + segment * 0.018;
-          offset = -segment * 0.55;
-          speed = 1.02;
-        } else if (name === 'Jaw') {
-          axis.set(1, 0, 0);
-          strength = 0.025;
-          speed = 0.6;
-        }
-        if (strength) {
-          axis.applyQuaternion(object.getWorldQuaternion(new Quaternion()).invert());
-          motions.push({ bone: object, rest: object.quaternion.clone(), axis, strength, offset, speed });
-        }
-      });
-      creature.add(scene);
-      model = scene;
-      plate.visible = false;
-    },
-    undefined,
-    () => {
-      /* The local HOME portrait remains available if WebGL image decoding fails. */
-    },
-  );
-  creature.scale.setScalar(0.6);
-  return {
-    root,
-    update(t: number) {
-      seaClock.value = t;
-      creature.position.set(
-        8.5 + 0.065 * Math.sin(t * 0.43),
-        -1.16 + 0.085 * Math.sin(t * 0.8),
-        6.25 + 0.06 * Math.sin(t * 0.53),
-      );
-      creature.rotation.set(
-        0.055 + 0.025 * Math.sin(t * 0.61),
-        -0.62 + 0.042 * Math.sin(t * 0.33),
-        -0.025 + 0.025 * Math.sin(t * 0.61),
-      );
-      plate.position.y = -0.7 + 0.06 * Math.sin(t * 0.8);
-      for (const motion of motions) {
-        swing.setFromAxisAngle(motion.axis, Math.sin(t * motion.speed + motion.offset) * motion.strength);
-        motion.bone.quaternion.copy(motion.rest).multiply(swing);
-      }
-    },
-    dispose() {
-      disposed = true;
-      if (model) releaseModel(model);
-      plateTexture.dispose();
-      plateMaterial.dispose();
-    },
-  };
-}
-
 function buildRoom(room: FortressRoom, glow: Texture) {
+  if (isMazeRoom(room)) return buildMazeRoom3D(room, glow);
   const scene = new Scene();
   const seal = room === 'seal';
-  const ambient = seal ? 0x172725 : 0x152320;
+  const ambient = seal ? 0x172934 : 0x152320;
   scene.background = new Color(ambient);
   scene.fog = new FogExp2(ambient, seal ? 0.037 : 0.039);
   const stone = buildFortressStonework(room);
   const water = buildFortressWater(room, stone.puddles);
   scene.add(stone.group, water.group);
-  scene.add(new HemisphereLight(0xcbd7c9, 0x45534b, 0.84));
-  const key = new DirectionalLight(0xffdfa9, 1.51);
+  scene.add(new HemisphereLight(seal ? 0xcce6f0 : 0xcbd7c9, seal ? 0x657a88 : 0x45534b, seal ? 1.2 : 0.84));
+  const key = new DirectionalLight(seal ? 0xf1eddc : 0xffdfa9, seal ? 1.7 : 1.51);
   key.position.set(2.8, 12.8, 13.3);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
@@ -237,7 +76,7 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   key.shadow.camera.updateProjectionMatrix();
   key.target.position.set(9, 0, 5);
   scene.add(key, key.target);
-  const rim = new DirectionalLight(0x8aaea0, 0.84);
+  const rim = new DirectionalLight(seal ? 0xa8d6ee : 0x8aaea0, seal ? 1.19 : 0.84);
   rim.position.set(14, 8, -4);
   rim.target.position.set(7, 0, 11);
   scene.add(rim, rim.target);
@@ -258,7 +97,7 @@ function buildRoom(room: FortressRoom, glow: Texture) {
   point.position.set(7.8, 3.25, seal ? 6.7 : 7);
   scene.add(point);
   const near = new PointLight(0xffc681, 22, 12, 2);
-  near.position.set(seal ? 11.2 : 3, 2.8, seal ? 15 : 13.2);
+  near.position.set(seal ? 11.2 : 4.7, seal ? 2.8 : 3.45, seal ? 15 : 14.5);
   scene.add(near);
   const lampLight = new PointLight(0xffb66d, seal ? 92 : 25, 13, 2);
   lampLight.position.set(seal ? 8.9 : 4.8, seal ? 3.9 : 2.85, seal ? -2.65 : 12.3);
@@ -268,16 +107,26 @@ function buildRoom(room: FortressRoom, glow: Texture) {
     stairLamp.position.set(8.4, 0.75, -0.86);
     scene.add(stairLamp);
   }
-  const monster = seal ? createKyogre() : undefined;
+  const monster = seal ? createKyuremActor() : undefined;
+  const prison = seal ? createIcePrison() : undefined;
+  const muzzle = new Vector3(),
+    eyes = new Vector3();
+  if (prison) scene.add(prison.root);
   if (monster) scene.add(monster.root);
   return {
     scene,
+    surfaceAt(_x: number, _z: number) {
+      return 0;
+    },
     update(t: number, w: number, h: number, frame: FortressInteriorFrame) {
       const resonance = frame.resonance ?? 0;
-      stone.update(resonance, t, frame.x, frame.y);
+      stone.update(resonance, t, frame.x, frame.y, frame.liftUnlocked);
       point.intensity = (seal ? 39 : 19) + resonance * (seal ? 15 : 9);
       water.update(t, w, h, frame);
-      monster?.update(t);
+      if (monster && prison) {
+        monster.update(t, frame.roarAge ?? Infinity, frame.reduced, frame);
+        prison.update(t, frame, h, monster.muzzle(muzzle), monster.footprints, monster.eyes(eyes));
+      }
     },
     dispose() {
       key.shadow.dispose();
@@ -285,6 +134,7 @@ function buildRoom(room: FortressRoom, glow: Texture) {
       stone.dispose();
       glowMaterial.dispose();
       monster?.dispose();
+      prison?.dispose();
     },
   };
 }
@@ -315,6 +165,7 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
   let width = 0,
     height = 0;
   let active: FortressRoom | undefined;
+  let shortcutOpen = false;
   let lastFrame = -Infinity;
   let closeBlend = 0;
   let entryTime = -Infinity;
@@ -346,6 +197,7 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         entryZ = frame.y;
       }
       const isSeal = frame.room === 'seal';
+      shortcutOpen = frame.shortcutOpen;
       const requested = Number(isSeal && frame.inspecting);
       const elapsed = frame.now - lastFrame;
       if (entering || frame.reduced || elapsed < 0 || elapsed > 260) closeBlend = requested;
@@ -360,23 +212,45 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         entryTime = -Infinity;
       const progress = Math.min(1, Math.max(0, (frame.now - entryTime) / 1000));
       const entry = 1 - progress * progress * (3 - 2 * progress);
-      const focusX = isSeal ? 8.5 + (frame.x - 8.5) * 0.32 * (1 - closeBlend) : frame.x;
-      const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * 0.6 : frame.y - 3.89;
-      const focusZ = wideZ + (5.9 - wideZ) * closeBlend - entry * 0.58;
-      const fit = Math.max(1, (isSeal ? 1.49 : 1.2) / camera.aspect);
-      const eyeZ = isSeal ? 12.3 - 0.75 * closeBlend : 11.0;
-      const eyeY = isSeal ? 8.0 - 2.25 * closeBlend : 5.83;
-      camera.position.set(
-        focusX + (isSeal ? 1.15 - 3.25 * closeBlend : 0.48),
-        (eyeY + entry * 0.77) * fit,
-        focusZ + (eyeZ + entry * 1.34) * fit,
-      );
-      camera.lookAt(focusX, (isSeal ? 0.66 : 0.71) - 0.92 * closeBlend + entry * 0.47, focusZ);
+      if (isMazeRoom(frame.room)) {
+        const fit = Math.max(1, 1.1 / camera.aspect);
+        const margin = Math.min(5.8, 3.55 * camera.aspect);
+        const focusX = Math.max(margin, Math.min(23 - margin, frame.x));
+        const focusZ = Math.max(4.52, Math.min(18.85, frame.y - 1.9));
+        camera.position.set(focusX + 1.15 * fit, 0.2 + 7.85 * fit, focusZ + 8.5 * fit);
+        camera.lookAt(focusX, 0.2, focusZ);
+      } else {
+        const focusX = isSeal ? 8.5 + (frame.x - 8.5) * 0.32 * (1 - closeBlend) : frame.x;
+        const wideZ = isSeal ? 6.35 + (frame.y - 6.35) * 0.6 : frame.y - 3.89;
+        const focusZ = wideZ + (6.64 - wideZ) * closeBlend - entry * 0.58;
+        const fit = Math.max(1, (isSeal ? 1.49 : 1.2) / camera.aspect);
+        const eyeZ = isSeal ? 12.65 - 0.6 * closeBlend : 11.0;
+        const eyeY = isSeal ? 8.6 - 1.7 * closeBlend : 5.83;
+        let shakeX = 0,
+          shakeY = 0;
+        const since = (frame.roarAge ?? Infinity) - 0.78;
+        if (isSeal && !frame.reduced && since >= 0 && since < 0.74) {
+          const impulse = 0.074 * Math.sin((Math.min(1, since / 0.045) * Math.PI) / 2) * Math.exp(-since * 7.1);
+          shakeX = impulse * Math.sin(since * 42);
+          shakeY = impulse * 0.56 * Math.sin(since * 51);
+        }
+        camera.position.set(
+          focusX + (isSeal ? 1.12 + 0.12 * closeBlend : 0.48) + shakeX,
+          (eyeY + entry * 0.77) * fit + shakeY,
+          focusZ + (eyeZ + entry * 1.34) * fit,
+        );
+        camera.lookAt(
+          focusX + shakeX * 0.61,
+          (isSeal ? 1.11 + 0.46 * closeBlend : 0.71) + entry * 0.47 + shakeY * 0.61,
+          focusZ,
+        );
+      }
       camera.updateMatrixWorld();
       const time = frame.reduced ? 1.75 : frame.now / 1000;
       room.update(time, width, height, frame);
-      traveler.model.position.set(frame.x, 0, frame.y);
-      actorShadow.position.set(frame.x, 0.02, frame.y);
+      const support = room.surfaceAt(frame.x, frame.y);
+      traveler.model.position.set(frame.x, support, frame.y);
+      actorShadow.position.set(frame.x, support + 0.02, frame.y);
       traveler.pose({ time: frame.now, facing: frame.facing, phase: frame.gaitPhase, reduced: frame.reduced });
       companion.update(frame.companionImage, {
         x: frame.companionX ?? frame.x,
@@ -390,6 +264,7 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
         guided: true,
         id: frame.companionId,
       });
+      companion.root.position.y = room.surfaceAt(companion.root.position.x, companion.root.position.z);
       renderer.render(room.scene, camera);
     },
     projectPoint(worldX: number, worldY: number) {
@@ -401,8 +276,17 @@ export function createFortressInterior3D(canvas: HTMLCanvasElement) {
       mouse.set((px / width) * 2 - 1, 1 - (py / height) * 2);
       ray.setFromCamera(mouse, camera);
       if (!ray.ray.intersectPlane(floor, target)) return;
-      if (!fortressMaps[active].walkable[Math.floor(target.z)]?.[Math.floor(target.x)]) return;
-      return { x: target.x, y: target.z };
+      const map = isMazeRoom(active) ? mazeFieldMap(active, shortcutOpen) : fortressMaps[active];
+      const tileX = Math.floor(target.x),
+        tileY = Math.floor(target.z);
+      const walkable = map.walkable[tileY]?.[tileX];
+      const room = rooms.get(active);
+      if (room && 'landmarkAt' in room) {
+        const sign = room.landmarkAt(ray);
+        if (sign && (!walkable || Math.abs(Math.floor(sign.x) - tileX) + Math.abs(Math.floor(sign.y) - tileY) >= 2))
+          return sign;
+      }
+      if (walkable) return { x: target.x, y: target.z };
     },
     dispose() {
       if (disposed) return;

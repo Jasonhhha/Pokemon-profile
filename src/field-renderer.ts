@@ -15,6 +15,11 @@ export type FieldView = {
   fortress: FortressView;
   inspectingSeal: boolean;
   resonance: number;
+  shortcutOpen: boolean;
+  liftUnlocked: boolean;
+  liftPassage?: { down: boolean; fraction: number };
+  gateAge: number;
+  roarAge: number;
   overview: boolean;
   orbitOffset: number;
   orbitTilt: number;

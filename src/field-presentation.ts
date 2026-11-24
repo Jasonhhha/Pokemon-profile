@@ -14,9 +14,10 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
   let raster: typeof classic | NonNullable<typeof ring> = classic;
   let world: ReturnType<typeof createFieldView3d>;
   let pendingWorld: typeof world;
-  let loadingWorld = true;
+  let loadingWorld = false;
+  let requestedWorld = false;
   let ready = false;
-  const requestedAt = performance.now();
+  let requestedAt = 0;
   let size = { width: 0, height: 0 };
   let destroyed = false;
   const usableAxes: { x?: boolean; y?: boolean } = {};
@@ -60,23 +61,31 @@ export function createFieldPresentation(canvas: HTMLCanvasElement, reducedMotion
     raster.resetCamera();
   }
 
-  void import('./field-view3d').then(module => {
-    if (destroyed) return;
-    pendingWorld = module.createFieldView3d(canvas, reducedMotion);
-    pendingWorld?.surface.addEventListener('webglcontextlost', restoreClassic);
-  }).catch(error => {
-    if (import.meta.env.DEV) console.warn('WebGL field initialization could not finish', error);
-  }).finally(() => { loadingWorld = false; });
+  function requestWorld() {
+    if (requestedWorld) return;
+    requestedWorld = true;
+    loadingWorld = true;
+    requestedAt = performance.now();
+    void import('./field-view3d').then(module => {
+      if (destroyed) return;
+      pendingWorld = module.createFieldView3d(canvas, reducedMotion);
+      pendingWorld?.surface.addEventListener('webglcontextlost', restoreClassic);
+    }).catch(error => {
+      if (import.meta.env.DEV) console.warn('WebGL field initialization could not finish', error);
+    }).finally(() => { loadingWorld = false; });
+  }
 
   return {
     draw(time: number, view: FieldView) {
       if (size.width <= 0 || size.height <= 0) return;
       const active = world ?? pendingWorld;
+      if (view.fortress.cinematic && requestedWorld && !active && !loadingWorld) fortress.warmRaster();
       if (view.location.fortressRoom) {
-        fortress.draw(time, view, view.location.fortressRoom, reducedMotion.matches, size.width, size.height, Boolean(active));
-        markReady();
+        const rendered = fortress.draw(time, view, view.location.fortressRoom, reducedMotion.matches, size.width, size.height, Boolean(active) || !requestedWorld || loadingWorld);
+        if (rendered) markReady();
         return;
       }
+      requestWorld();
       if (fortress.active) {
         fortress.leave();
         canvas.dataset.renderer = active ? 'webgl' : 'canvas2d';

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fortressTiming } from './field-fortress-state';
+import { createKyuremVoice, preloadKyuremCry } from './kyurem-voice';
+import { fortressTiming, type FortressRoom } from './field-fortress-state';
 
-export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'fortress' | 'wild' | 'trial';
-export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile' | 'wet';
-export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal' | 'tideDial';
+export type SoundScene = 'harbor' | 'grove' | 'summit' | 'interior' | 'fortress' | 'sanctum' | 'wild' | 'trial';
+export type Footing = 'stone' | 'timber' | 'grass' | 'earth' | 'tile' | 'wet' | 'ice' | 'iron';
+export type SoundCue = 'step' | 'interact' | 'area' | 'encounter' | 'win' | 'hit' | 'heal' | 'capture' | 'miss' | 'faint' | 'switch' | 'escape' | 'hoist' | 'discharge' | 'seal' | 'tideDial' | 'kyuremCry' | 'wardImpact' | 'bridge' | 'iceGate';
 
 type Score = {
   bpm: number;
@@ -29,6 +30,10 @@ const scores: Record<SoundScene, Score> = {
     melody: [71, 0, 78, 0, 83, 81, 78, 0, 74, 0, 81, 0, 85, 83, 81, 0, 76, 78, 79, 0, 86, 0, 83, 81, 78, 0, 74, 0, 76, 74, 71, 0],
     bass: [47, 50, 52, 47], harmony: [[59, 62, 66], [57, 62, 66], [55, 59, 64], [54, 59, 66]],
   },
+  sanctum: {
+    bpm: 49, voice: 'sine', melody: [0, 0, 0, 0, 69, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0],
+    bass: [30, 34, 29, 32], harmony: [[42, 49], [46, 53], [41, 48], [44, 51]],
+  },
   fortress: {
     bpm: 58, voice: 'sine',
     melody: [0, 0, 62, 0, 0, 0, 0, 57, 0, 0, 0, 0, 65, 0, 0, 0],
@@ -52,7 +57,7 @@ const scores: Record<SoundScene, Score> = {
 };
 
 const cues: Record<SoundCue, readonly number[]> = {
-  hoist: [26, 33], discharge: [], seal: [38, 45, 50], tideDial: [50, 57, 62],
+  hoist: [26, 33], discharge: [], kyuremCry: [], wardImpact: [31, 50, 62], bridge: [34, 29], iceGate: [57, 45], seal: [38, 45, 50], tideDial: [50, 57, 62],
   step: [40], interact: [74, 81], area: [57, 62, 67], encounter: [76, 83, 72, 78], win: [62, 66, 69, 74],
   hit: [86, 52], heal: [69, 76, 81], capture: [72, 76, 79, 84], miss: [60, 56], faint: [67, 62, 54], switch: [65, 74], escape: [76, 69, 64],
 };
@@ -78,6 +83,8 @@ const footsteps = {
   timber: { frequency: 360, high: 70, resonance: 1.21, length: .14, gain: .28, heel: 42 },
   grass: { frequency: 1890, high: 200, resonance: .88, length: .19, gain: .24, heel: 34 },
   earth: { frequency: 1020, high: 103, resonance: .92, length: .18, gain: .29, heel: 38 },
+  ice: { frequency: 1840, high: 365, resonance: 1.8, length: .19, gain: .26, heel: 57 },
+  iron: { frequency: 1090, high: 170, resonance: 2.5, length: .17, gain: .22, heel: 53 },
   wet: { frequency: 1650, high: 235, resonance: .81, length: .22, gain: .35, heel: 43 },
   tile: { frequency: 960, high: 150, resonance: 1.65, length: .12, gain: .26, heel: 51 },
 };
@@ -192,36 +199,90 @@ function spillwaySound(context: AudioContext, output: AudioNode, noise: AudioBuf
   };
 }
 
-export function useSound(scene: SoundScene) {
+function chamberAcoustics(context: AudioContext, output: AudioNode, room: FortressRoom) {
+  const input = context.createGain();
+  input.connect(output);
+  const lengths = room === 'seal' ? [.11, .235] : room === 'catacomb' ? [.085, .157] : [.057, .122];
+  const echoes = lengths.map((length, index) => {
+    const delay = context.createDelay(.5);
+    delay.delayTime.value = length;
+    const damp = context.createBiquadFilter();
+    damp.type = 'lowpass'; damp.frequency.value = room === 'aqueduct' ? 1700 : 2700;
+    const gain = context.createGain(); gain.gain.value = index === 0 ? .13 : .063;
+    const pan = context.createStereoPanner(); pan.pan.value = index === 0 ? -.43 : .37;
+    input.connect(delay).connect(damp).connect(gain).connect(pan).connect(output);
+    return [delay, damp, gain, pan];
+  });
+  return { input, dispose() { input.disconnect(); for (const line of echoes) for (const node of line) node.disconnect(); } };
+}
+
+export function useSound(scene: SoundScene, room?: FortressRoom) {
   const [enabled, setEnabled] = useState(false);
-  const audio = useRef<{ context: AudioContext; output: DynamicsCompressorNode; noise: AudioBuffer } | null>(null);
+  const audio = useRef<{ context: AudioContext; output: DynamicsCompressorNode; noise: AudioBuffer; kyurem: ReturnType<typeof createKyuremVoice> } | null>(null);
   const foot = useRef(0);
   const stopFortressSound = useRef<(() => void) | undefined>(undefined);
   const muted = useRef(true);
 
-  const toggle = useCallback(() => {
+  const previewTimer = useRef<number | undefined>(undefined);
+  const chamber = useRef<ReturnType<typeof chamberAcoustics> | undefined>(undefined);
+
+  const getAudio = useCallback(() => {
     if (!window.AudioContext) return;
+    if (!audio.current) {
+      const context = new AudioContext();
+      const output = context.createDynamicsCompressor();
+      output.threshold.value = -18;
+      output.ratio.value = 3;
+      output.connect(context.destination);
+      audio.current = { context, output, noise: noiseSample(context, 2.7), kyurem: createKyuremVoice(context, output) };
+    }
+    return audio.current;
+  }, []);
+
+  const stopCry = useCallback(() => {
+    window.clearTimeout(previewTimer.current);
+    previewTimer.current = undefined;
+    audio.current?.kyurem.stop();
+    if (muted.current && audio.current?.context.state === 'running') void audio.current.context.suspend().catch(() => {});
+  }, []);
+
+  const audition = useCallback(() => {
+    const engine = getAudio();
+    if (!engine) return;
+    void engine.context.resume().catch(() => {});
+    void engine.kyurem.warm().catch(() => {});
+    if (!muted.current) return;
+    window.clearTimeout(previewTimer.current);
+    previewTimer.current = window.setTimeout(stopCry, 3100);
+  }, [getAudio, stopCry]);
+
+  const toggle = useCallback(() => {
+    const engine = getAudio();
+    if (!engine) return;
     muted.current = !muted.current;
     setEnabled(!muted.current);
     if (!muted.current) {
-      if (!audio.current) {
-        const context = new AudioContext();
-        const output = context.createDynamicsCompressor();
-        output.threshold.value = -18;
-        output.ratio.value = 3;
-        output.connect(context.destination);
-        audio.current = { context, output, noise: noiseSample(context, 2.7) };
-      }
-      void audio.current.context.resume().catch(() => {});
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = undefined;
+      void engine.context.resume().catch(() => {});
     } else {
       stopFortressSound.current?.();
-      void audio.current?.context.suspend().catch(() => {});
+      stopCry();
     }
-  }, []);
+  }, [getAudio, stopCry]);
+
+  useEffect(() => {
+    if (room === 'seal') void preloadKyuremCry().catch(() => {});
+    if (!enabled || !room || !audio.current) return;
+    const acoustics = chamberAcoustics(audio.current.context, audio.current.output, room);
+    chamber.current = acoustics;
+    return () => { acoustics.dispose(); chamber.current = undefined; };
+  }, [room, enabled]);
 
   useEffect(() => {
     if (!enabled || !audio.current) return;
     const { context, output, noise } = audio.current;
+    if (scene === 'sanctum') void audio.current.kyurem.warm().catch(() => {});
     const score = scores[scene];
     const bus = context.createGain();
     const pulse = 30 / score.bpm;
@@ -263,26 +324,46 @@ export function useSound(scene: SoundScene) {
 
   useEffect(() => {
     function visibility() {
-      if (muted.current || !audio.current) return;
+      if (!audio.current) return;
       const { context } = audio.current;
-      if (document.hidden) stopFortressSound.current?.();
+      if (document.hidden) { stopFortressSound.current?.(); stopCry(); }
+      if (muted.current) return;
       void (document.hidden ? context.suspend() : context.resume()).catch(() => {});
     }
     document.addEventListener('visibilitychange', visibility);
     return () => {
       document.removeEventListener('visibilitychange', visibility);
+      window.clearTimeout(previewTimer.current);
       void audio.current?.context.close().catch(() => {});
       audio.current = null;
     };
   }, []);
 
   const play = useCallback((cue: SoundCue, surface: Footing = 'stone') => {
-    if (muted.current || !audio.current || document.hidden) return;
+    const preview = previewTimer.current !== undefined && (cue === 'kyuremCry' || cue === 'wardImpact');
+    if ((muted.current && !preview) || !audio.current || document.hidden) return;
     const { context, output, noise } = audio.current;
     if (context.state !== 'running') return;
     const time = context.currentTime + .005;
+    if (cue === 'kyuremCry') {
+      void audio.current.kyurem.play();
+      return;
+    }
+    const roomOutput = chamber.current?.input ?? output;
+    if (cue === 'wardImpact') {
+      voice(context, roomOutput, 32, time, .50, .12, 'sine');
+      voice(context, output, 67, time + .045, .41, .038, 'triangle');
+      voice(context, output, 74, time + .19, .56, .02, 'sine');
+      return;
+    }
+    if (cue === 'bridge' || cue === 'iceGate') {
+      const surface = cue === 'bridge' ? 'timber' : 'iron';
+      for (let i = 0; i < 4; i++) {
+        footfall(context, roomOutput, noise, surface, time + .065 * i, i);
+      }
+    }
     if (cue === 'step') {
-      footfall(context, output, noise, surface, time, foot.current++);
+      footfall(context, roomOutput, noise, surface, time, foot.current++);
       return;
     }
     if (cue === 'hoist' || cue === 'discharge') {
@@ -299,5 +380,5 @@ export function useSound(scene: SoundScene) {
     cues[cue].forEach((note, i) => voice(context, output, note, time + i * .08, .18, .057, cue === 'hit' ? 'square' : 'triangle'));
   }, []);
 
-  return { enabled, toggle, play };
+  return { enabled, toggle, play, stopCry, audition };
 }

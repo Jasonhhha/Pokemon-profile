@@ -5,7 +5,9 @@ import type { FieldArea, FieldEvent, FieldLocation, RoomId } from './field-art';
 import { rooms } from './field-rooms';
 import { cityObstacles } from './field-city-layout';
 import { cityStops, surveyAt, surveyStops, type CityStop, type SurveyId } from './field-city-walks';
-import { fortressDial, fortressMaps, fortressPier, fortressSequence, openFortress, sleepingFortress, type FortressView } from './field-fortress-state';
+import { fortressDial, fortressLiftStops, fortressMapAt, fortressMaps, fortressOrder, fortressPier, fortressRooms, fortressSequence, kyuremTiming, openFortress, sleepingFortress, type FortressView, type RoarPhase } from './field-fortress-state';
+import { isMazeRoom, mazeFloors, type MazePoint, type MazeRoom } from './fortress-maze';
+import { knownWalkway } from './fortress-survey';
 import { ringRadius, ringStreetLooksOutward, ringStreetRow, ringXDelta, wrapRingX } from './field-ring-coordinates';
 import { tileAt } from './field-layout';
 import type { Footing } from './sound';
@@ -29,6 +31,11 @@ interface FieldOptions {
   fortressOpened: boolean;
   tideDialAwake: boolean;
   onDialAwake: () => void;
+  shortcuts: readonly MazeRoom[];
+  onShortcut: (room: MazeRoom) => void;
+  onLiftTravel: (active: boolean) => void;
+  onRoarPhase: (phase: RoarPhase) => void;
+  onCryStop: () => void;
   fortressStartedAt?: number;
   onFortressSave: (started: number | null) => void;
   onFortressView: (view: FortressView, inspecting: boolean) => void;
@@ -39,7 +46,7 @@ interface FieldOptions {
   onSurvey: (id: SurveyId) => void;
   onReady?: () => void;
   onOverview?: (active: boolean) => void;
-  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal' | 'tideDial', surface?: Footing) => void;
+  onSound?: (sound: 'step' | 'interact' | 'area' | 'encounter' | 'hoist' | 'discharge' | 'seal' | 'tideDial' | 'kyuremCry' | 'wardImpact' | 'bridge' | 'iceGate', surface?: Footing) => void;
 }
 
 export interface FieldControls {
@@ -57,6 +64,9 @@ export interface FieldControls {
   walkToStop: (stop: CityStop) => boolean;
   approachFortress: () => void;
   approachTideDial: () => void;
+  walkRecorded: (point: MazePoint, walked: readonly number[]) => boolean;
+  callKyurem: () => boolean;
+  rideFortressLift: () => void;
   replayFortress: () => void;
   leaveRoom: () => void;
   getLocation: () => FieldLocation;
@@ -94,7 +104,7 @@ const directionTo = (from: TilePoint, to: TilePoint, wrap = false): Direction =>
 const intersect = (point: TilePoint, map: FieldMap) => Number.isInteger(point.x) && Number.isInteger(point.y)
   && map.walkable[point.y]?.[point.x] === true;
 const walkable = (point: TilePoint, map: FieldMap) => intersect(point, map) && !map.npcs.some(npc => npc.solid && sameTile(npc, point));
-const mapAt = (location: FieldLocation) => location.fortressRoom ? fortressMaps[location.fortressRoom] : location.room ? rooms[location.room].map : maps[location.area];
+const locationMap = (location: FieldLocation, shortcuts: readonly MazeRoom[]) => location.fortressRoom ? fortressMapAt(location.fortressRoom, shortcuts) : location.room ? rooms[location.room].map : maps[location.area];
 
 function findPath(start: TilePoint, targets: TilePoint[], map: FieldMap, preferPavement = false): TilePoint[] | undefined {
   if (!targets.length) return;
@@ -140,10 +150,10 @@ export function planCityWalk(start: FieldLocation, stop: CityStop) {
   return findPath(start, stop.approaches, map, true);
 }
 
-function initialLocation(initial?: FieldLocation): FieldLocation {
+function initialLocation(initial: FieldLocation | undefined, shortcuts: readonly MazeRoom[]): FieldLocation {
   if (initial && Object.hasOwn(maps, initial.area)) {
     const validRoom = !initial.room || Object.hasOwn(rooms, initial.room) && rooms[initial.room].area === initial.area;
-    if (validRoom && walkable(initial, mapAt(initial))) return { ...initial };
+    if (validRoom && walkable(initial, locationMap(initial, shortcuts))) return { ...initial };
     if (initial.area === 'harbor' && !initial.room && cityObstacles.some(([x, y, w, h]) =>
       initial.x >= x && initial.x < x + w && initial.y >= y && initial.y < y + h)) {
       const map = maps.harbor;
@@ -173,7 +183,15 @@ export function createField(options: FieldOptions): FieldControls {
   const creatureArt = new Map<CreatureId, HTMLCanvasElement>();
   const pendingArt = new Set<CreatureId>();
   const pressed = new Map<string, Direction>();
-  let location = initialLocation(options.initial);
+  const shortcuts = [...options.shortcuts];
+  const mapAt = (where: FieldLocation) => locationMap(where, shortcuts);
+  let location = initialLocation(options.initial, shortcuts);
+  let liftRide: { down: boolean; started: number; duration: number; changed: boolean } | undefined;
+  let gateStarted = -Infinity;
+  let roarStarted = -Infinity;
+  let nextRoar = performance.now() + 3800;
+  let roarPhase: RoarPhase = 'quiet';
+  let lastCall = -Infinity;
   let started = options.fortressOpened ? undefined : options.fortressStartedAt;
   let fortress: FortressView = options.fortressOpened ? openFortress : sleepingFortress;
   let inspectingSeal = false;
@@ -271,26 +289,115 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function ascend() {
+    const floor = location.fortressRoom;
+    if (!floor) return;
+    const previous = fortressOrder[fortressOrder.indexOf(floor) - 1];
     facing = 'down';
-    const to: FieldLocation = location.fortressRoom === 'seal'
-      ? { area: 'harbor', fortressRoom: 'sluice', x: 8, y: 4 }
-      : { area: 'harbor', ...fortressPier };
-    switchArea(to, performance.now());
+    switchArea(previous ? { area: 'harbor', fortressRoom: previous, ...fortressRooms[previous].down }
+      : { area: 'harbor', ...fortressPier }, performance.now());
+  }
+
+  function descend() {
+    const floor = location.fortressRoom;
+    if (!floor) return;
+    const next = fortressOrder[fortressOrder.indexOf(floor) + 1];
+    if (!next) return;
+    facing = 'up';
+    switchArea({ area: 'harbor', fortressRoom: next, ...fortressMapAt(next, shortcuts).spawn }, performance.now());
+  }
+
+  function atLift() {
+    const floor = location.fortressRoom;
+    return (floor === 'sluice' || floor === 'catacomb') && distance(location, fortressLiftStops[floor]) <= 1;
+  }
+
+  function startLift() {
+    const floor = location.fortressRoom;
+    if (paused || liftRide || !atLift() || !shortcuts.includes('catacomb') || floor !== 'sluice' && floor !== 'catacomb') return;
+    const platform = fortressLiftStops[floor];
+    if (step || !sameTile(location, platform)) {
+      route([platform], startLift);
+      return;
+    }
+    clearInput();
+    stopRouting();
+    liftRide = { down: floor === 'sluice', started: performance.now(), duration: reducedMotion.matches ? 290 : 1460, changed: false };
+    options.onLiftTravel(true);
+    options.onSound?.('bridge');
+    refreshHint();
+  }
+
+  function updateLift(time: number) {
+    if (!liftRide) return;
+    const p = (time - liftRide.started) / liftRide.duration;
+    if (p >= .50 && !liftRide.changed) {
+      liftRide.changed = true;
+      const floor = liftRide.down ? 'catacomb' : 'sluice';
+      switchArea({ area: 'harbor', fortressRoom: floor, ...fortressLiftStops[floor] }, time);
+    }
+    if (p >= 1) {
+      liftRide = undefined;
+      options.onLiftTravel(false);
+      refreshHint();
+    }
+  }
+
+  function quietSeal(time: number) {
+    if (roarPhase !== 'quiet') options.onRoarPhase('quiet');
+    if (Number.isFinite(roarStarted)) options.onCryStop();
+    roarPhase = 'quiet';
+    roarStarted = -Infinity;
+    lastCall = -Infinity;
+    nextRoar = time + 3800;
+  }
+
+  function startRoar(time: number) {
+    roarPhase = 'breath';
+    roarStarted = time;
+    nextRoar = time + (inspectingSeal ? 14800 : 17400);
+    options.onRoarPhase('breath');
+  }
+
+  function updateRoar(time: number) {
+    if (location.fortressRoom !== 'seal' || paused || !onScreen || covered || document.hidden) return;
+    if (time >= nextRoar) startRoar(time);
+    if (!Number.isFinite(roarStarted)) return;
+    const age = (time - roarStarted) / 1000;
+    const phase = age < kyuremTiming.voice ? 'breath' : age < kyuremTiming.impact ? 'roar' : age < kyuremTiming.decay ? 'impact' : 'quiet';
+    if (phase === roarPhase) return;
+    // A slow frame can span the onset and the impact together.
+    if (roarPhase === 'breath' && age < 1.1) options.onSound?.('kyuremCry');
+    if (phase === 'impact' && age < 1.45) options.onSound?.('wardImpact');
+    roarPhase = phase;
+    options.onRoarPhase(phase);
+    if (phase === 'quiet') roarStarted = -Infinity;
   }
 
   function refreshHint() {
     if (fortress.cinematic) return hint(fortress.phase === 'rising' ? '升降机启动 · 堡体上浮' : fortress.phase === 'draining' ? '八向泄水 · 等待闸门开启' : '水位已降 · 闸门开启');
-    if (inspectingSeal) return hint('封印观测中 · 再次互动返回栈桥');
+    if (liftRide) return hint(liftRide.down ? '铜索放长 · 正在下行至陵廊' : '铜索收紧 · 正在上行至水殿');
+    if (atLift()) return hint(shortcuts.includes('catacomb') ? '互动 · 乘升降台穿过中层水渠' : '古升降台停靠 · 深处的轮锁尚未开启');
+    if (inspectingSeal) return hint('观测冰核能量罩 · 再次互动返回观测桥');
+    if (isMazeRoom(location.fortressRoom)) {
+      const room = location.fortressRoom, plan = mazeFloors[room];
+      if (distance(location, plan.switch) <= 1) return hint(shortcuts.includes(room) ? plan.gateName + '已开启' : '互动 · 操作' + plan.switchName);
+      if (distance(location, plan.down) <= 1) return hint('互动 · 沿下行阶梯进入' + fortressRooms[fortressOrder[fortressOrder.indexOf(room) + 1]].name);
+      if (distance(location, plan.up) <= 1) return hint(room === 'aqueduct' ? '从西岸桥头探入水渠 · 在此互动可返回水殿' : '循石棺间的冰脉寻找下层 · 在此互动可返回水渠');
+      if (distance(location, plan.gate) <= 1 && !shortcuts.includes(room)) return hint(plan.gateName + '关闭 · 机关在另一侧');
+      const landmark = plan.landmarks.find(point => distance(location, point) <= 2);
+      if (landmark) return hint(landmark.name + ' · 已记入本层行迹图');
+      return hint(room === 'aqueduct' ? '在水渠间寻找下行阶梯 · M 查看行迹' : '沿冰脉寻找封印殿入口 · M 查看行迹');
+    }
     if (location.fortressRoom === 'sluice') {
       if (distance(location, fortressDial) <= 1) return hint(dialAwake ? '青铜潮盘已对齐 · 水流沿着石槽汇入下层' : '互动 · 转动嵌在石道里的青铜潮盘');
-      if (distance(location, { x: 8, y: 3 }) <= 1) return hint('互动 · 沿阶梯下至封印池');
+      if (distance(location, { x: 8, y: 3 }) <= 1) return hint('互动 · 下行至回流水渠');
       if (distance(location, { x: 8, y: 17 }) <= 1) return hint('向北穿过柱廊 · 在此互动可返回西栈桥');
-      return hint('沿湿石通道向北，尽头的阶梯通往封印池');
+      return hint('沿湿石通道向北，尽头的阶梯通往回流水渠');
     }
     if (location.fortressRoom === 'seal') {
-      if (distance(location, { x: 8, y: 11 }) <= 1) return hint('互动 · 观察封印中的盖欧卡');
-      if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回水殿');
-      return hint('沿中央桥靠近封印 · 漩流外侧可通行');
+      if (distance(location, { x: 8, y: 11 }) <= 1) return hint('互动 · 观察能量罩中的酋雷姆');
+      if (distance(location, { x: 8, y: 18 }) <= 1) return hint('向北走上观测桥 · 在此互动可返回陵廊');
+      return hint('向北沿观测桥靠近封印 · 留意能量罩上的波纹');
     }
     if (overview) return hint('拖动环视 · 点击街道进入');
     if (walkingTo) return hint(`步行前往${walkingTo.name} · 手动移动可中断`);
@@ -351,6 +458,8 @@ export function createField(options: FieldOptions): FieldControls {
     interactQueued = false;
     step = undefined;
     trail = undefined;
+    quietSeal(time);
+    gateStarted = -Infinity;
     location = { ...to };
     renderer.resetCamera();
     grassSteps = 0;
@@ -459,7 +568,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function interact() {
-    if (paused || fortress.cinematic) return;
+    if (paused || liftRide || fortress.cinematic) return;
     if (step) {
       interactQueued = true;
       return;
@@ -487,21 +596,36 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function interactNearby() {
-    if (location.fortressRoom) {
-      const gallery = location.fortressRoom === 'sluice';
-      if (gallery && distance(location, fortressDial) <= 1) {
+    const floor = location.fortressRoom;
+    if (floor) {
+      const stairs = fortressRooms[floor];
+      if (atLift() && shortcuts.includes('catacomb')) { startLift(); return true; }
+      if (isMazeRoom(floor) && distance(location, mazeFloors[floor].switch) <= 1) {
+        if (!shortcuts.includes(floor)) {
+          shortcuts.push(floor);
+          gateStarted = performance.now();
+          options.onShortcut(floor);
+          options.onSound?.(floor === 'aqueduct' ? 'bridge' : 'iceGate');
+        }
+        stopRouting();
+        clearInput();
+        refreshHint();
+      } else if (floor === 'sluice' && distance(location, fortressDial) <= 1) {
         soundTideDial();
-      } else if (gallery && distance(location, { x: 8, y: 3 }) <= 1) {
-        switchArea({ area: 'harbor', fortressRoom: 'seal', ...fortressMaps.seal.spawn }, performance.now());
-      } else if (!gallery && (inspectingSeal || distance(location, { x: 8, y: 11 }) <= 1)) {
+      } else if (floor === 'seal' && (inspectingSeal || distance(location, stairs.down) <= 1)) {
         inspectingSeal = !inspectingSeal;
         facing = 'up';
         stopRouting();
         clearInput();
-        options.onSound?.(inspectingSeal ? 'seal' : 'interact');
+        if (inspectingSeal) {
+          options.onSound?.('seal');
+          startRoar(performance.now());
+        } else quietSeal(performance.now());
         options.onFortressView(fortress, inspectingSeal);
         refreshHint();
-      } else if (distance(location, { x: 8, y: gallery ? 17 : 18 }) <= 1) {
+      } else if (distance(location, stairs.down) <= 1) {
+        descend();
+      } else if (distance(location, stairs.up) <= 1) {
         ascend();
       } else return false;
       return true;
@@ -533,7 +657,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function move(direction: Direction) {
-    if (paused || fortress.cinematic || inspectingSeal) return;
+    if (paused || liftRide || fortress.cinematic || inspectingSeal) return;
     setOverview(false);
     stopRouting();
     if (step || performance.now() - fadedAt < (reducedMotion.matches ? 0 : fieldFadeDuration)) queued = direction;
@@ -582,7 +706,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function walkToStop(stop: CityStop, inspect = false) {
-    if (paused || fortress.cinematic) return false;
+    if (paused || liftRide || fortress.cinematic) return false;
     const next = planCityWalk({ ...location, ...step?.to }, stop);
     return next !== undefined && startRoute(next, () => {
       walkingTo = undefined;
@@ -608,6 +732,21 @@ export function createField(options: FieldOptions): FieldControls {
       }
     }
     const point = renderer.pointInWorld(screenX, screenY);
+    if (point && (location.fortressRoom === 'sluice' || location.fortressRoom === 'catacomb')) {
+      const stop = fortressLiftStops[location.fortressRoom];
+      if (Math.floor(point.x / TILE) === stop.x && Math.floor(point.y / TILE) === stop.y && shortcuts.includes('catacomb')) {
+        route([stop], startLift);
+        return;
+      }
+    }
+    if (point && isMazeRoom(location.fortressRoom)) {
+      const tile = { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) };
+      const plan = mazeFloors[location.fortressRoom];
+      if ([plan.switch, plan.up, plan.down].some(landmark => sameTile(tile, landmark))) {
+        route([tile], interact);
+        return;
+      }
+    }
     if (point && location.fortressRoom === 'sluice' && Math.floor(point.x / TILE) === fortressDial.x && Math.floor(point.y / TILE) === fortressDial.y) {
       approachTideDial();
       return;
@@ -616,7 +755,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function pointerDown(event: PointerEvent) {
-    if (event.button !== 0 || !event.isPrimary || paused || fortress.cinematic || inspectingSeal || !reducedMotion.matches && performance.now() - fadedAt < fieldFadeDuration) return;
+    if (event.button !== 0 || !event.isPrimary || paused || liftRide || fortress.cinematic || inspectingSeal || !reducedMotion.matches && performance.now() - fadedAt < fieldFadeDuration) return;
     parent.focus({ preventScroll: true });
     if (!overview) return tapField(event);
     orbitGesture = { id: event.pointerId, startX: event.clientX, startY: event.clientY, offset: orbitOffset, tilt: orbitTilt, moved: false };
@@ -650,7 +789,7 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function keyDown(event: KeyboardEvent) {
-    if (paused || fortress.cinematic || event.ctrlKey || event.metaKey || event.altKey || event.target !== parent) return;
+    if (paused || liftRide || fortress.cinematic || event.ctrlKey || event.metaKey || event.altKey || event.target !== parent) return;
     shiftPressed = event.shiftKey;
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const direction = keys[key];
@@ -673,8 +812,10 @@ export function createField(options: FieldOptions): FieldControls {
   }
 
   function visibilityChanged() {
-    if (document.hidden) clearInput();
-    else renderer.resetCamera();
+    if (document.hidden) {
+      clearInput();
+      if (location.fortressRoom === 'seal') quietSeal(performance.now());
+    } else renderer.resetCamera();
   }
 
   function resize() {
@@ -696,6 +837,10 @@ export function createField(options: FieldOptions): FieldControls {
     const map = mapAt(location);
     renderer.draw(time, {
       location, map, overview, orbitOffset, orbitTilt, facing, step, trail, rustle, path, activeNpc, surveyFocus, fortress, inspectingSeal,
+      liftUnlocked: shortcuts.includes('catacomb'),
+      liftPassage: liftRide ? { down: liftRide.down, fraction: Math.min(1, Math.max(0, (time - liftRide.started) / liftRide.duration)) } : undefined,
+      shortcutOpen: isMazeRoom(location.fortressRoom) && shortcuts.includes(location.fortressRoom),
+      gateAge: (time - gateStarted) / 1000, roarAge: (time - roarStarted) / 1000,
       resonance: dialAwake ? reducedMotion.matches ? 1 : Math.min(1, Math.max(0, (time - dialStarted) / 2700)) : 0,
       pumpElapsed: time - pumpStarted < 3600 ? (reducedMotion.matches ? 1 : Math.max(0, time - pumpStarted) / 1000) : undefined,
       activeNpcFacing: activeNpc && !sameTile(activeNpc, location) ? directionTo(activeNpc, location, map.wrapX) : undefined,
@@ -706,7 +851,13 @@ export function createField(options: FieldOptions): FieldControls {
   function landStep(time: number) {
     if (!step || time - step.startedAt < step.duration * .43 || lastFootfall === step.startedAt) return;
     lastFootfall = step.startedAt;
-    if (location.fortressRoom) { options.onSound?.('step', 'wet'); return; }
+    if (isMazeRoom(location.fortressRoom)) {
+      const room = location.fortressRoom, tile = mazeFloors[room].tiles[step.to.y][step.to.x];
+      const surface: Footing = tile === 'bridge' ? 'timber' : tile === 'grate' || tile === 'gate' ? 'iron' : tile === 'ice' ? 'ice' : room === 'aqueduct' ? 'wet' : 'stone';
+      options.onSound?.('step', surface);
+      return;
+    }
+    if (location.fortressRoom) { options.onSound?.('step', location.fortressRoom === 'seal' ? 'ice' : 'wet'); return; }
     if (location.room) {
       options.onSound?.('step', location.room === 'home' ? 'timber' : 'tile');
       return;
@@ -720,11 +871,13 @@ export function createField(options: FieldOptions): FieldControls {
   function tick(time: number) {
     if (wasDestroyed) return;
     updateFortress();
+    updateRoar(time);
+    updateLift(time);
     if (rustle && time >= rustle.expires) {
       rustle = undefined;
       refreshHint();
     }
-    if (!paused && !fortress.cinematic && !inspectingSeal) {
+    if (!paused && !liftRide && !fortress.cinematic && !inspectingSeal) {
       landStep(time);
       if (step && time - step.startedAt >= step.duration) finishStep(time);
       if (!step && time - fadedAt >= (reducedMotion.matches ? 0 : fieldFadeDuration)) {
@@ -745,6 +898,7 @@ export function createField(options: FieldOptions): FieldControls {
   resizeObserver.observe(parent);
   const intersection = new IntersectionObserver(([entry]) => {
     onScreen = entry.isIntersecting;
+    if (!onScreen && location.fortressRoom === 'seal') quietSeal(performance.now());
     if (onScreen) renderer.resetCamera();
   }, { rootMargin: '70px' });
   intersection.observe(parent);
@@ -762,6 +916,7 @@ export function createField(options: FieldOptions): FieldControls {
   const controls: FieldControls = {
     move: direction => move(streetDirection(direction)), hold, interact,
     setPaused(value) {
+      if (value && !paused && location.fortressRoom === 'seal') quietSeal(performance.now());
       paused = value;
       if (!value && surveyFocus) {
         surveyFocus = undefined;
@@ -785,11 +940,31 @@ export function createField(options: FieldOptions): FieldControls {
       covered = value;
     },
     walkToStop,
+    rideFortressLift: startLift,
     approachTideDial,
+    walkRecorded(point, walked) {
+      const floor = location.fortressRoom;
+      if (paused || !isMazeRoom(floor)) return false;
+      const source = step?.to ?? location;
+      const known = knownWalkway(floor, source, point, walked, shortcuts.includes(floor));
+      if (!known) return false;
+      const path = findPath(source, [point], known);
+      return path !== undefined && startRoute(path);
+    },
+    callKyurem() {
+      if (paused || location.fortressRoom !== 'seal' || !inspectingSeal) return false;
+      const time = performance.now();
+      if (time - lastCall < kyuremTiming.decay * 1000) return false;
+      lastCall = time;
+      options.onCryStop();
+      startRoar(time);
+      return true;
+    },
     approachFortress() {
-      if (paused || fortress.cinematic || location.area !== 'harbor' || location.room) return;
+      if (paused || liftRide || fortress.cinematic || location.area !== 'harbor' || location.room) return;
       if (location.fortressRoom) {
-        const point = { x: 8, y: location.fortressRoom === 'sluice' ? 3 : 11 };
+        if (isMazeRoom(location.fortressRoom)) { interact(); return; }
+        const point = fortressRooms[location.fortressRoom].down;
         if (inspectingSeal || distance(location, point) <= 1) interact();
         else route([point], interact);
       } else if (atWinch()) interact();
@@ -799,12 +974,18 @@ export function createField(options: FieldOptions): FieldControls {
       if (atWinch() && !paused && !fortress.cinematic && fortress.phase === 'open') launchFortress();
     },
     travel(area) {
-      if (paused || fortress.cinematic || (!location.room && !location.fortressRoom && area === location.area && sameTile(location, maps[area].spawn))) return;
+      if (paused || liftRide || fortress.cinematic || (!location.room && !location.fortressRoom && area === location.area && sameTile(location, maps[area].spawn))) return;
       clearInput();
       switchArea({ area, ...maps[area].spawn }, performance.now());
     },
     leaveRoom() {
-      if (!paused && location.fortressRoom) return ascend();
+      if (liftRide) return;
+      if (!paused && location.fortressRoom) {
+        const floor = location.fortressRoom;
+        if (!isMazeRoom(floor) || distance(location, fortressRooms[floor].up) <= 1 && !step) return ascend();
+        route([fortressRooms[floor].up], ascend);
+        return;
+      }
       if (paused || !location.room) return;
       const gate = rooms[location.room].map.exits[0];
       clearInput();

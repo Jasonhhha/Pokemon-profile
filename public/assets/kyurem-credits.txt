@@ -1,0 +1,17 @@
+Kyurem — National Pokédex #0646, standard form (Dragon / Ice)
+https://www.pokemon.com/us/pokedex/0646
+
+Rigged 3D asset distributed by Pokémon 3D API (regular/646.glb).
+https://github.com/Pokemon-3D-api/assets/blob/429de1288cea0d43f5b4f56305d2276e94239d65/models/opt/regular/646.glb
+The source repository credits Nintendo, Creatures Inc. and GAME FREAK inc. for the models.
+https://github.com/Pokemon-3D-api/assets/blob/429de1288cea0d43f5b4f56305d2276e94239d65/README.md#%EF%B8%8F-license--credits
+The local GLB retains the source geometry, rig and embedded textures. Draco geometry was decoded for browser playback. The scene adds a relative lower-jaw morph on existing vertices, bone animation, materials and lighting.
+The 24 roar poses and 12 breathing poses in kyurem-roar.webp were rendered locally from this same rig for the Canvas2D version.
+
+The Pokémon HOME render and Black/White sprite are mirrored by PokéAPI/sprites.
+https://github.com/PokeAPI/sprites/blob/c0542f7c51215d9672439012838c99f520596cbd/sprites/pokemon/other/home/646.png
+https://github.com/PokeAPI/sprites/blob/c0542f7c51215d9672439012838c99f520596cbd/sprites/pokemon/versions/generation-v/black-white/646.png
+
+The original legacy Kyurem cry is mirrored by PokéAPI/cries.
+https://github.com/PokeAPI/cries/blob/b3a9044bb839b5e3152aaa536c7b463a0fcf0140/cries/pokemon/legacy/646.ogg
+Pokémon characters, artwork and recordings belong to their respective rights holders.

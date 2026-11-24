@@ -1,0 +1,40 @@
+.maze-minimap { position:absolute; right:12px; top:12px; width:88px; padding:3px; border:1px solid #ab9a74; border-radius:4px; color:#f7e5bb; background:#14242aeb; box-shadow:0 3px 8px #0a151e66; cursor:pointer; }
+.maze-minimap .maze-drawing { opacity:.93; }
+.maze-minimap span { display:flex; justify-content:space-between; align-items:center; padding:2px 4px 0; font:600 10px/1.1 monospace; }
+.maze-drawing { width:100%; display:block; aspect-ratio:1; }
+.maze-atlas { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(140px,1fr); gap:20px; align-items:start; }
+.maze-sheet { padding:5px; border:1px solid #897850; border-radius:3px; background:#293334; }
+.maze-sheet .maze-drawing { cursor:crosshair; }
+.maze-notes { display:grid; gap:9px; }
+.maze-notes p,.maze-notes h3,.maze-key { margin:0; }
+.maze-notes p { font-size:13px; line-height:1.6; }
+.maze-floor-name { display:flex; align-items:center; gap:7px; }
+.maze-floor-name span { background:#2a4347; border:1px solid #708d82; color:#fae6bb; font:600 13px/1.5 monospace; padding:1px 5px; border-radius:3px; }
+.maze-key { list-style:none; padding:0; display:grid; gap:5px; font-size:12px; }
+.maze-key b { color:#9fe2d1; display:inline-block; min-width:33px; }
+.maze-gate-state { font-weight:650; }
+.maze-place { display:flex; align-items:center; gap:6px; font-size:12px; }
+.maze-return { justify-self:start; }
+@media(max-width:580px) {
+  .maze-minimap { width:62px; right:6px; top:6px; }
+  .maze-atlas { grid-template-columns:1fr; gap:10px; }
+  .maze-sheet { max-width:270px; width:100%; justify-self:center; }
+  .maze-key { display:flex; flex-wrap:wrap; gap:4px 12px; }
+  .maze-key b { min-width:0; margin-right:3px; }
+}
+.seal-caption { color:#cde9ef; font-size:11px; }
+@media(max-width:440px) {
+  .game-viewport[data-observing-seal=true] .map-coordinate { top:6px; bottom:auto; }
+}
+.seal-console { justify-content:flex-start; gap:10px; }
+.seal-specimen { display:grid; gap:1px; min-width:max-content; }
+.seal-specimen small { font:600 10px/1.2 monospace; color:#a9cad0; }
+.seal-specimen strong { color:#f0f8f9; font-size:17px; line-height:1.2; }
+.seal-console .seal-caption { flex:1; color:#c0dfe6; }
+.seal-console button { min-height:36px; }
+@media(max-width:580px) {
+  .seal-console { display:grid; grid-template-columns:1fr auto auto; gap:2px 5px; }
+  .seal-specimen { grid-column:1; grid-row:1; }
+  .seal-console .seal-caption { grid-column:1; grid-row:2; line-height:1.22; }
+  .seal-console button { grid-row:1 / 3; padding-inline:7px; min-height:40px; }
+}

@@ -117,6 +117,12 @@ export function buildFortressStonework(room: FortressRoom) {
   const dark = new MeshStandardMaterial({ color: 0x26393f, roughness: 0.88 });
   const glass = new MeshBasicMaterial({ color: 0xffd89b });
   const sealLight = new MeshBasicMaterial({ color: 0x719686 });
+  const liftJade = new MeshStandardMaterial({
+    color: 0x425950,
+    emissive: 0x77c1a7,
+    emissiveIntensity: 0.035,
+    roughness: 0.29,
+  });
   const serpentine = new MeshStandardMaterial({ color: 0x728078, map: grainMap, roughness: 0.62, metalness: 0.09 });
   const weathered = new MeshStandardMaterial({ color: 0xaa9a79, map: grainMap, roughness: 0.7 });
   const seaGlass = new MeshBasicMaterial({ color: 0x738f8d });
@@ -250,6 +256,51 @@ export function buildFortressStonework(room: FortressRoom) {
       cyl(bronze, x, 0.52, z, 0.08, 0.052);
     }
     box(bronze, x, 0.52, (z1 + z2) / 2, 0.068, 0.057, z2 - z1 + 0.08);
+  }
+  function hoistLanding() {
+    const x = 3.5,
+      z = 12.5;
+    // The side walkway is split around the shaft. The car's grate sits flush with the bridge on its east side.
+    for (const side of [-1, 1]) {
+      box(wet, x + side * 0.485, -0.49, z, 0.095, 0.96, 1.06, 0.78);
+      box(wet, x, -0.49, z + side * 0.484, 0.96, 0.96, 0.095, 0.78);
+      box(bronze, x + side * 0.464, 0.015, z, 0.07, 0.067, 1.02, 0.82);
+      box(bronze, x, 0.015, z + side * 0.467, 0.92, 0.067, 0.063, 0.82);
+    }
+    box(dark, x, -0.28, z, 0.87, 0.09, 0.89, 0.48);
+    for (let k = -4; k <= 4; k++) {
+      box(iron, x + k * 0.087, 0.018, z, 0.043, 0.048, 0.87, 0.77 + (k % 2) * 0.071);
+      if (k % 2 === 0) box(patina, x, -0.027, z + k * 0.096, 0.87, 0.051, 0.035, 0.73);
+    }
+    for (const dx of [-0.405, 0.405])
+      for (const dz of [-0.405, 0.405]) put(geom.nut, bronze, [x + dx, 0.057, z + dz], [0.036, 0.022, 0.036]);
+    cyl(bronze, x, 0.053, z, 0.152, 0.039);
+    cyl(liftJade, x, 0.078, z, 0.107, 0.03);
+    put(geom.torus, patina, [x, 0.096, z], [0.108, 0.108, 0.13], [-Math.PI / 2, 0, 0]);
+    for (const dz of [-0.32, 0.32]) {
+      const rz = z + dz;
+      box(wet, x - 0.65, -0.21, rz, 0.31, 0.59, 0.32, 0.81);
+      box(iron, x - 0.63, 1.15, rz, 0.145, 2.82, 0.114);
+      box(bronze, x - 0.558, 1.19, rz, 0.036, 2.76, 0.086, 0.8);
+      box(iron, x - 0.58, 0.32, rz, 0.22, 0.11, 0.18);
+      cyl(patina, x - 0.61, 2.57, rz, 0.226, 0.13, [Math.PI / 2, 0, 0]);
+      put(geom.torus, bronze, [x - 0.61, 2.57, rz + 0.072], [0.2, 0.2, 0.49]);
+      cyl(bronze, x - 0.61, 2.57, rz + 0.113, 0.057, 0.047, [Math.PI / 2, 0, 0]);
+      cyl(liftJade, x - 0.61, 2.57, rz + 0.141, 0.038, 0.012, [Math.PI / 2, 0, 0]);
+      box(liftJade, x - 0.54, 1.27, rz + 0.01, 0.038, 0.21, 0.06);
+      box(patina, x - 0.439, 1.33, rz, 0.035, 2.51, 0.034);
+      for (let link = 0; link < 14; link++)
+        put(
+          geom.torus,
+          iron,
+          [x - 0.439, 0.123 + link * 0.164, rz],
+          [0.051, 0.094, 0.2],
+          [0, ((link % 2) * Math.PI) / 2, 0],
+        );
+      box(bronze, x - 0.437, 0.1, rz, 0.11, 0.091, 0.12);
+    }
+    box(bronze, x - 0.635, 2.69, z, 0.15, 0.11, 0.87, 0.8);
+    box(patina, x - 0.64, 2.36, z, 0.14, 0.064, 0.79, 0.75);
   }
   // Drum, echinus and abacus sit on a stepped plinth. Rings of flutes give the capitals a water-lily profile.
   function palaceColumn(x: number, z: number, top: number, base: number, radius: number, alternate = false) {
@@ -510,7 +561,11 @@ export function buildFortressStonework(room: FortressRoom) {
       box(pale, x, 1.38, -9.45, 1.16, 0.12, 1.34);
     }
     for (const side of [-1, 1]) {
-      flagstones(8.5 + side * 5, 10.5, 1, 11);
+      if (side < 0) {
+        flagstones(3.5, 8.5, 1, 7);
+        flagstones(3.5, 14.5, 1, 3);
+        hoistLanding();
+      } else flagstones(13.5, 10.5, 1, 11);
       for (const z of [6.5, 12.5]) {
         const crossing = 8.5 + side * 3;
         flagstones(crossing, z, 3, 1);
@@ -568,7 +623,7 @@ export function buildFortressStonework(room: FortressRoom) {
       [6.42, 6.45, 0.52, 0.26, 0.2],
       [8.92, 4.72, 0.53, 0.46, 0.4],
       [13.46, 8.6, 0.31, 0.71, 0.08],
-      [3.47, 12.4, 0.32, 0.46, 0.15],
+      [3.47, 13.4, 0.32, 0.46, 0.15],
     ])
       puddles.push({ x, z, w, d, angle: a });
   } else {
@@ -656,10 +711,11 @@ export function buildFortressStonework(room: FortressRoom) {
           0.75 + grain(i + level * 23) * 0.2,
         );
       }
-    const sealBand = new TorusGeometry(4.44, 0.032, 8, 112);
+    const sealBand = new TorusGeometry(4.74, 0.032, 8, 112);
     sealBand.rotateX(-Math.PI / 2);
     const suspended = new Mesh(sealBand, patina);
-    suspended.position.set(cx, -0.29, cz);
+    suspended.position.set(cx, -0.48, cz);
+    suspended.scale.z = 4.55 / 4.74;
     group.add(suspended);
     customGeometry.push(sealBand);
     for (let i = 0; i < 48; i++) {
@@ -667,7 +723,7 @@ export function buildFortressStonework(room: FortressRoom) {
       put(
         geom.cube,
         i % 4 ? bronze : sealLight,
-        [cx + Math.sin(a) * 4.44, -0.275, cz + Math.cos(a) * 4.44],
+        [cx + Math.sin(a) * 4.74, -0.46, cz + Math.cos(a) * 4.55],
         [i % 4 ? 0.05 : 0.09, 0.033, i % 4 ? 0.08 : 0.16],
         [0, a, 0],
       );
@@ -682,24 +738,12 @@ export function buildFortressStonework(room: FortressRoom) {
       put(geom.bell, pale, [x, 1.07, z], [0.37, 0.34, 0.37], [0, a, 0]);
       box(wet, x, 1.44, z, 0.77, 0.099, 0.75);
       cyl(patina, x, 1.56, z, 0.22, 0.18);
-      put(geom.torus, bronze, [x, 1.83, z], [0.238, 0.238, 0.33], [0, a * 0.65, 0]);
-      cyl(sealLight, x, 1.59, z, 0.226, 0.056);
       for (let j = 0; j < 3; j++) box(bronze, x, 0.47 + j * 0.15, z + 0.325, 0.07, 0.044, 0.024);
-      const tailX = cx + Math.sin(a) * 4.44,
-        tailZ = cz + Math.cos(a) * 4.44;
-      cyl(bronze, tailX, -0.28, tailZ, 0.14, 0.09);
-      cyl(iron, tailX, -0.223, tailZ, 0.062, 0.028);
-      beam(bronze, [x, 0.97, z], [tailX, -0.29, tailZ], 0.046, 0.046);
-      for (let j = 0; j < 8; j++) {
-        const t = j / 7;
-        put(
-          geom.torus,
-          iron,
-          [x + (tailX - x) * t, 1.05 - 1.3 * t - 0.13 * Math.sin(Math.PI * t), z + (tailZ - z) * t],
-          [0.1, 0.13, 0.1],
-          [(t * Math.PI) / 2, a + ((j % 2) * Math.PI) / 2, 0.5],
-        );
-      }
+      const tailX = cx + Math.sin(a) * 4.74,
+        tailZ = cz + Math.cos(a) * 4.55;
+      cyl(bronze, tailX, -0.48, tailZ, 0.14, 0.09);
+      cyl(iron, tailX, -0.423, tailZ, 0.062, 0.028);
+      beam(bronze, [x, 0.97, z], [tailX, -0.48, tailZ], 0.046, 0.046);
     }
     flagstones(8.5, 17, 9, 4);
     flagstones(8.5, 13, 3, 4);
@@ -806,7 +850,9 @@ export function buildFortressStonework(room: FortressRoom) {
     group,
     lamps,
     puddles,
-    update(resonance: number, time: number, x: number, z: number) {
+    update(resonance: number, time: number, x: number, z: number, liftUnlocked: boolean) {
+      liftJade.color.setHex(liftUnlocked ? 0x98cbb2 : 0x425950);
+      liftJade.emissiveIntensity = liftUnlocked ? 0.62 : 0.035;
       walker.value.set(x, 0.91, z);
       dial.update(resonance, time);
       sealLight.color.setRGB(0.11 + 0.18 * resonance, 0.22 + 0.26 * resonance, 0.18 + 0.22 * resonance);
@@ -824,6 +870,7 @@ export function buildFortressStonework(room: FortressRoom) {
         dark,
         glass,
         sealLight,
+        liftJade,
         seaGlass,
         shaftMaterial,
         serpentine,

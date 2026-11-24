@@ -159,28 +159,41 @@ function TypeBadges({ id }: { id: CreatureId }) {
   return <span className="type-badges">{creatures[id].types.map(type => <span className="type-badge" data-type={type} key={type}>{typeLabels[type]}</span>)}</span>;
 }
 
-export function Pokedex({ save, entry }: { save: AdventureSave; entry?: CreatureId }) {
-  const [active, setActive] = useState(entry ?? save.battle.lead);
+export function Pokedex({ save, entry }: { save: AdventureSave; entry?: CreatureId | 'kyurem' }) {
+  const [selected, setActive] = useState(entry ?? save.battle.lead);
+  const isKyurem = selected === 'kyurem';
+  const active = isKyurem ? save.battle.lead : selected;
   const caught = new Set(save.battle.team.map(member => member.id));
   const known = save.seen.includes(active);
   const pokemon = creatures[active];
   const found = areas.filter(area => speciesIn(area).includes(active));
   return <div className="dex">
-    <div className="dex-tally"><span><BookOpen size={16} />已发现 <b>{save.seen.length}/{speciesIds.length}</b></span><span><Check size={16} />已入队 <b>{caught.size}/{speciesIds.length}</b></span></div>
+    <div className="dex-tally"><span><BookOpen size={16} />已发现 <b>{save.seen.length + Number(save.kyuremObserved)}/{speciesIds.length + 1}</b></span><span><Check size={16} />已入队 <b>{caught.size}/{speciesIds.length}</b></span></div>
     <div className="dex-body">
       <div className="dex-list" role="group" aria-label="图鉴条目">
         {speciesIds.map(id => {
           const species = creatures[id];
           const spotted = save.seen.includes(id);
           const number = String(species.number).padStart(3, '0');
-          return <button type="button" className="dex-entry" key={id} aria-pressed={id === active} onClick={() => setActive(id)}>
+          return <button type="button" className="dex-entry" key={id} aria-pressed={id === selected} onClick={() => setActive(id)}>
             <span className="pixel">#{number}</span>
             <strong>{spotted ? species.name : '未发现'}</strong>
             {caught.has(id) && <span className="dex-caught" aria-label="已入队"><Check size={12} /></span>}
           </button>;
         })}
+        <button type="button" className="dex-entry" aria-pressed={isKyurem} onClick={() => setActive('kyurem')}>
+          <span className="pixel">#646</span><strong>{save.kyuremObserved ? '酋雷姆' : '未发现'}</strong>
+        </button>
       </div>
-      <article className="dex-detail" aria-live="polite">
+      {isKyurem ? <article className="dex-detail" aria-live="polite">
+        <div className="dex-portrait"><span className="pixel">#646</span>{save.kyuremObserved ? <img className="creature-sprite" src={import.meta.env.BASE_URL + 'assets/kyurem-bw.png'} alt="酋雷姆" /> : <Compass size={45} strokeWidth={1}/>}</div>
+        {save.kyuremObserved ? <>
+          <div className="dex-species"><h3>酋雷姆</h3><span className="pixel">KYUREM</span></div>
+          <p>龙 / 冰 · 身高 3.0 米 · 体重 325.0 千克</p>
+          <p>冰核封印殿的观测桥上，可以看见它低下头，再张颌咆哮。冲击传到罩壁，锚柱上的积霜随之落下。</p>
+          <a className="dex-reference" href="https://zukan.pokemon.co.jp/detail/0646" target="_blank" rel="noreferrer">查看官方图鉴</a>
+        </> : <div className="dex-unseen"><h3>未发现</h3><p>深入海宫，在观测桥上记录这只宝可梦。</p></div>}
+      </article> : <article className="dex-detail" aria-live="polite">
         <div className="dex-portrait" style={{ '--species-tint': known ? pokemon.color : '#527078' } as CSSProperties}>
           <span className="pixel">#{String(pokemon.number).padStart(3, '0')}</span>
           {known ? <CreatureSprite id={active} /> : <Compass size={45} strokeWidth={1} />}
@@ -192,7 +205,7 @@ export function Pokedex({ save, entry }: { save: AdventureSave; entry?: Creature
           <p className="habitat"><strong>群岛栖息地</strong>{found.length ? found.map(area => fieldAreas[area].name).join(' / ') : '初始同行伙伴'}</p>
           <a className="dex-reference" href={`https://www.pokemon.com/us/pokedex/${active}`} target="_blank" rel="noreferrer">查看官方图鉴</a>
         </> : <div className="dex-unseen"><h3>未发现</h3><p>遇见这只宝可梦后会记录它的名称与属性。</p></div>}
-      </article>
+      </article>}
     </div>
   </div>;
 }
