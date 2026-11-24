@@ -344,7 +344,7 @@ export function createField(options: FieldOptions): FieldControls {
 
   function quietSeal(time: number) {
     if (roarPhase !== 'quiet') options.onRoarPhase('quiet');
-    if (Number.isFinite(roarStarted)) options.onCryStop();
+    if (location.fortressRoom === 'seal' || Number.isFinite(roarStarted)) options.onCryStop();
     roarPhase = 'quiet';
     roarStarted = -Infinity;
     lastCall = -Infinity;
@@ -952,7 +952,7 @@ export function createField(options: FieldOptions): FieldControls {
       return path !== undefined && startRoute(path);
     },
     callKyurem() {
-      if (paused || location.fortressRoom !== 'seal' || !inspectingSeal) return false;
+      if (paused || covered || document.hidden || location.fortressRoom !== 'seal' || !inspectingSeal) return false;
       const time = performance.now();
       if (time - lastCall < kyuremTiming.decay * 1000) return false;
       lastCall = time;

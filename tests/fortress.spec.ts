@@ -183,3 +183,36 @@ test('an underground GPU context loss keeps the same floor and the touchscreen f
   await expect(button(page,'听它吼叫')).toBeEnabled();
   await expect.poll(()=>page.evaluate(()=>performance.getEntriesByType('resource').some(r=>r.name.endsWith('/kyurem-roar.webp')))).toBe(true);
 });
+
+test('a slow cry starts in sync on retry and leaving the bridge cancels a pending audition', async ({page}) => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/kyurem-cry.ogg', async route => { await held; await route.continue(); });
+  await page.addInitScript(() => {
+    localStorage.setItem('tidebound-save-v1', JSON.stringify({fortressOpened:true,location:{area:'harbor',fortressRoom:'seal',x:8,y:11}}));
+    let count = 0;
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      if (this.buffer && Math.abs(this.buffer.duration - 1.3635) < .012) ++count;
+      return start.apply(this, args);
+    };
+    Object.defineProperty(window, 'cryCount', {get: () => count});
+  });
+  try {
+    await page.goto('/');
+    const listen = button(page,'听它吼叫');
+    await button(page,'靠近封印').click();
+    await listen.click();
+    await expect(page.locator('.seal-caption')).toHaveText('正在载入叫声……');
+    await expect(view(page)).toHaveAttribute('data-roar-phase','quiet');
+    await button(page,'返回观测桥').click();
+    release();
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByType('resource').some(r => r.name.endsWith('/kyurem-cry.ogg')))).toBe(true);
+    expect(await page.evaluate(() => Reflect.get(window, 'cryCount'))).toBe(0);
+    await button(page,'靠近封印').click();
+    await listen.click();
+    await expect(view(page)).toHaveAttribute('data-roar-phase','impact');
+    await expect.poll(() => page.evaluate(() => Reflect.get(window, 'cryCount'))).toBeGreaterThan(0);
+    await expect(button(page,'开启声音')).toBeVisible();
+  } finally { release(); }
+});

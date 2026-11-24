@@ -45,7 +45,8 @@ export default function App() {
   const [fortress, setFortress] = useState(save.fortressOpened ? openFortress : sleepingFortress);
   const [liftMoving, setLiftMoving] = useState(false);
   const [roarPhase, setRoarPhase] = useState<RoarPhase>('quiet');
-  const [listeningToCry, setListeningToCry] = useState(false);
+  const [cryPlayback, setCryPlayback] = useState<'idle' | 'loading' | 'playing' | 'unavailable'>('idle');
+  const cryAttempt = useRef(0);
   const [inspectingSeal, setInspectingSeal] = useState(false);
   const [canSave, setCanSave] = useState(true);
   const [profile, setProfile] = useState(loadProfile);
@@ -195,10 +196,11 @@ export default function App() {
       fortressOpened: current.current.fortressOpened,
       fortressStartedAt: current.current.fortressStartedAt,
       tideDialAwake: current.current.tideDialAwake,
-      shortcuts: current.current.shortcuts, onLiftTravel: setLiftMoving, onCryStop: sound.stopCry,
+      shortcuts: current.current.shortcuts, onLiftTravel: setLiftMoving,
+      onCryStop: () => { ++cryAttempt.current; sound.stopCry(); setCryPlayback('idle'); },
       onRoarPhase: phase => {
         setRoarPhase(phase);
-        if (phase === 'quiet') setListeningToCry(false);
+        if (phase === 'quiet') setCryPlayback(state => state === 'playing' ? 'idle' : state);
       },
       onShortcut: room => setSave(previous => previous.shortcuts.includes(room) ? previous : { ...previous, shortcuts: [...previous.shortcuts, room] }),
       onDialAwake: () => setSave(previous => ({ ...previous, tideDialAwake: true })),
@@ -311,12 +313,17 @@ export default function App() {
     } else controller.current.setPaused(true);
   }
 
-  function hearKyurem() {
-    if (controller.current?.callKyurem()) {
-      setListeningToCry(true);
-      sound.audition();
-    }
+  async function hearKyurem() {
+    const attempt = ++cryAttempt.current;
+    setCryPlayback('loading');
     focusField();
+    const prepared = await sound.prepareCry();
+    if (attempt !== cryAttempt.current) return;
+    if (prepared === 'cancelled') { setCryPlayback('idle'); return; }
+    if (prepared === 'unavailable') { setCryPlayback('unavailable'); return; }
+    if (!controller.current?.callKyurem()) { setCryPlayback('idle'); return; }
+    sound.audition();
+    setCryPlayback('playing');
   }
 
   function openDex(id?: CreatureId) {
@@ -543,8 +550,8 @@ export default function App() {
 
           {inspectingSeal ? <div className="game-controls seal-console">
             <div className="seal-specimen"><small>#0646 · 龙 / 冰</small><strong>酋雷姆</strong></div>
-            <span className="seal-caption" role="status">{roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : '能量罩稳定'}</span>
-            <button type="button" className="fortress-action" disabled={paused || listeningToCry} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
+            <span className="seal-caption" role="status">{cryPlayback === 'loading' ? '正在载入叫声……' : cryPlayback === 'unavailable' ? '叫声未载入，可再试一次' : roarPhase === 'breath' ? '它压低了头……' : roarPhase === 'roar' ? '酋雷姆发出吼声' : roarPhase === 'impact' ? '冲击沿能量罩扩散' : '能量罩稳定'}</span>
+            <button type="button" className="fortress-action" disabled={paused || cryPlayback === 'loading' || cryPlayback === 'playing'} onClick={hearKyurem}><Volume2 size={15}/>听它吼叫</button>
             <button type="button" className="fortress-replay" disabled={paused} onClick={playField}>返回观测桥</button>
           </div> : <div className="game-controls">
             <div className="control-keys" role="group" aria-label="键盘操作">

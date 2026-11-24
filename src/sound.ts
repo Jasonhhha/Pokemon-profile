@@ -224,6 +224,7 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
   const muted = useRef(true);
 
   const previewTimer = useRef<number | undefined>(undefined);
+  const previewRequest = useRef(0);
   const chamber = useRef<ReturnType<typeof chamberAcoustics> | undefined>(undefined);
 
   const getAudio = useCallback(() => {
@@ -240,17 +241,31 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
   }, []);
 
   const stopCry = useCallback(() => {
+    ++previewRequest.current;
     window.clearTimeout(previewTimer.current);
     previewTimer.current = undefined;
     audio.current?.kyurem.stop();
     if (muted.current && audio.current?.context.state === 'running') void audio.current.context.suspend().catch(() => {});
   }, []);
 
+  const prepareCry = useCallback(async () => {
+    const request = ++previewRequest.current;
+    const engine = getAudio();
+    if (!engine) return 'unavailable';
+    try {
+      await Promise.all([engine.context.resume(), engine.kyurem.warm()]);
+    } catch {
+      if (request !== previewRequest.current) return 'cancelled';
+      stopCry();
+      return 'unavailable';
+    }
+    return request === previewRequest.current ? 'ready' : 'cancelled';
+  }, [getAudio, stopCry]);
+
   const audition = useCallback(() => {
     const engine = getAudio();
     if (!engine) return;
     void engine.context.resume().catch(() => {});
-    void engine.kyurem.warm().catch(() => {});
     if (!muted.current) return;
     window.clearTimeout(previewTimer.current);
     previewTimer.current = window.setTimeout(stopCry, 3100);
@@ -380,5 +395,5 @@ export function useSound(scene: SoundScene, room?: FortressRoom) {
     cues[cue].forEach((note, i) => voice(context, output, note, time + i * .08, .18, .057, cue === 'hit' ? 'square' : 'triangle'));
   }, []);
 
-  return { enabled, toggle, play, stopCry, audition };
+  return { enabled, toggle, play, stopCry, prepareCry, audition };
 }

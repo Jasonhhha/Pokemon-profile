@@ -1,9 +1,13 @@
 let recording: Promise<ArrayBuffer> | undefined;
 export function preloadKyuremCry() {
-  return recording ??= fetch(import.meta.env.BASE_URL + 'assets/kyurem-cry.ogg').then(response => {
+  if (recording) return recording;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  return recording = fetch(import.meta.env.BASE_URL + 'assets/kyurem-cry.ogg', { signal: controller.signal }).then(response => {
     if (!response.ok) throw Error('Failed to load Kyurem cry');
     return response.arrayBuffer();
-  }).catch(error => { recording = undefined; throw error; });
+  }).catch(error => { recording = undefined; throw error; })
+    .finally(() => window.clearTimeout(timeout));
 }
 
 // Each call uses the original short cry. Two quieter, filtered reflections place it in the stone chamber.
